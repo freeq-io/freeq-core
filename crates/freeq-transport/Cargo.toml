@@ -1,0 +1,23 @@
+[package]
+name        = "freeq-transport"
+description = "QUIC session management and connection pool for FreeQ"
+
+version.workspace     = true
+edition.workspace     = true
+authors.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+
+[dependencies]
+freeq-crypto = { path = "../freeq-crypto" }
+
+quinn       = { workspace = true }
+rustls      = { workspace = true }
+tokio       = { workspace = true }
+tokio-util  = { workspace = true }
+futures     = { workspace = true }
+bytes       = { workspace = true }
+tracing     = { workspace = true }
+thiserror   = { workspace = true }
+anyhow      = { workspace = true }

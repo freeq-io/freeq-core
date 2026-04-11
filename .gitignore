@@ -1,0 +1,10 @@
+/target/
+/Cargo.lock
+**/*.rs.bk
+.DS_Store
+*.pem
+*.key
+*.crt
+identity.key
+freeq.toml
+.env

@@ -1,0 +1,28 @@
+[package]
+name        = "freeqd"
+description = "FreeQ daemon — the post-quantum overlay network daemon"
+
+version.workspace     = true
+edition.workspace     = true
+authors.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+
+[[bin]]
+name = "freeqd"
+path = "src/main.rs"
+
+[dependencies]
+freeq-crypto    = { path = "../crates/freeq-crypto" }
+freeq-transport = { path = "../crates/freeq-transport" }
+freeq-tunnel    = { path = "../crates/freeq-tunnel" }
+freeq-auth      = { path = "../crates/freeq-auth" }
+freeq-config    = { path = "../crates/freeq-config" }
+freeq-api       = { path = "../crates/freeq-api" }
+
+tokio              = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow             = { workspace = true }
+clap               = { workspace = true }

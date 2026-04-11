@@ -1,0 +1,93 @@
+[workspace]
+members = [
+    "crates/freeq-crypto",
+    "crates/freeq-transport",
+    "crates/freeq-tunnel",
+    "crates/freeq-auth",
+    "crates/freeq-config",
+    "crates/freeq-api",
+    "daemon",
+    "cli",
+]
+resolver = "2"
+
+[workspace.package]
+version      = "0.1.0"
+edition      = "2021"
+authors      = ["FreeQ, Inc."]
+license      = "AGPL-3.0-only"
+repository   = "https://github.com/freeq-io/freeq-core"
+homepage     = "https://freeq.io"
+rust-version = "1.75"
+
+[workspace.dependencies]
+# ── Post-Quantum Cryptography (NIST FIPS 203/204/205) ────────────────────────
+ml-kem             = "0.3"
+ml-dsa             = "0.1"
+slh-dsa            = "0.3"
+
+# ── Classical Cryptography ────────────────────────────────────────────────────
+x25519-dalek       = { version = "2.0", features = ["reusable_secrets", "static_secrets"] }
+hkdf               = "0.12"
+sha2               = "0.10"
+aes-gcm            = { version = "0.10", features = ["aes"] }
+chacha20poly1305   = "0.10"
+rand               = "0.8"
+rand_core          = "0.6"
+
+# ── Transport ─────────────────────────────────────────────────────────────────
+quinn              = "0.11"
+rustls             = { version = "0.23", default-features = false }
+
+# ── Async Runtime ─────────────────────────────────────────────────────────────
+tokio              = { version = "1", features = ["full"] }
+tokio-util         = "0.7"
+futures            = "0.3"
+
+# ── Serialization / Config ────────────────────────────────────────────────────
+serde              = { version = "1", features = ["derive"] }
+serde_json         = "1"
+toml               = "0.8"
+
+# ── HTTP / REST API ───────────────────────────────────────────────────────────
+axum               = "0.7"
+tower              = "0.4"
+tower-http         = { version = "0.5", features = ["trace", "auth"] }
+hyper              = { version = "1", features = ["full"] }
+
+# ── CLI ───────────────────────────────────────────────────────────────────────
+clap               = { version = "4", features = ["derive", "color", "env"] }
+
+# ── Observability ─────────────────────────────────────────────────────────────
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# ── Error Handling ────────────────────────────────────────────────────────────
+anyhow             = "1"
+thiserror          = "1"
+
+# ── Security ──────────────────────────────────────────────────────────────────
+zeroize            = { version = "1", features = ["derive"] }
+secrecy            = "0.8"
+constant_time_eq   = "0.3"
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+bytes              = "1"
+uuid               = { version = "1", features = ["v4"] }
+chrono             = { version = "0.4", features = ["serde"] }
+hex                = "0.4"
+ipnetwork          = { version = "0.20", features = ["serde"] }
+
+[profile.release]
+opt-level     = 3
+lto           = "thin"
+codegen-units = 1
+strip         = "symbols"
+panic         = "abort"
+
+[profile.dev]
+opt-level = 1         # faster crypto even in dev
+
+[profile.bench]
+inherits  = "release"
+debug     = true

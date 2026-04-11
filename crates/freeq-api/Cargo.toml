@@ -1,0 +1,28 @@
+[package]
+name        = "freeq-api"
+description = "Local REST API bridge — consumed by the FreeQ Cloud agent (Apache 2.0)"
+# NOTE: This crate is Apache 2.0, not AGPL, as it must be open for the
+# Cloud agent to link against without AGPL copyleft propagation.
+license     = "Apache-2.0"
+
+version.workspace     = true
+edition.workspace     = true
+authors.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+
+[dependencies]
+freeq-config = { path = "../freeq-config" }
+freeq-auth   = { path = "../freeq-auth" }
+
+axum        = { workspace = true }
+tower       = { workspace = true }
+tower-http  = { workspace = true }
+tokio       = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+tracing     = { workspace = true }
+thiserror   = { workspace = true }
+anyhow      = { workspace = true }
+uuid        = { workspace = true }
+chrono      = { workspace = true }

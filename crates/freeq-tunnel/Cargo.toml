@@ -1,0 +1,35 @@
+[package]
+name        = "freeq-tunnel"
+description = "TUN/TAP interface, packet routing, and I/O for FreeQ"
+
+version.workspace     = true
+edition.workspace     = true
+authors.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+
+[dependencies]
+freeq-crypto    = { path = "../freeq-crypto" }
+freeq-transport = { path = "../freeq-transport" }
+freeq-auth      = { path = "../freeq-auth" }
+freeq-config    = { path = "../freeq-config" }
+
+tokio       = { workspace = true }
+tokio-util  = { workspace = true }
+bytes       = { workspace = true }
+tracing     = { workspace = true }
+thiserror   = { workspace = true }
+anyhow      = { workspace = true }
+ipnetwork   = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# io_uring zero-copy I/O (v0.2)
+# tokio-uring = "0.4"  # enable in v0.2
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# macOS utun interface (no additional deps needed)
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# WinTUN driver integration (v0.3)
+# wintun = "0.4"
