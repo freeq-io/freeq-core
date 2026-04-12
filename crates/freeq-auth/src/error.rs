@@ -15,7 +15,12 @@ pub enum AuthError {
 
     /// Handshake authentication step failed.
     #[error("handshake failed at step {step}: {reason}")]
-    HandshakeFailed { step: u8, reason: String },
+    HandshakeFailed {
+        /// The 1-indexed handshake step (1–8) at which the failure occurred.
+        step: u8,
+        /// Human-readable description of the failure.
+        reason: String,
+    },
 
     /// Underlying crypto error.
     #[error("crypto error: {0}")]

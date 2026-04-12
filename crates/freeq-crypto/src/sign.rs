@@ -21,7 +21,10 @@ pub struct IdentityPublicKey {
 }
 
 /// A raw ML-DSA-65 signature.
-pub struct Signature(Vec<u8>);
+pub struct Signature(
+    /// The raw signature bytes.
+    pub Vec<u8>,
+);
 
 impl IdentityKeypair {
     /// Generate a fresh identity keypair.

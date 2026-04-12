@@ -6,7 +6,7 @@ FreeQ has **not yet received an independent cryptographic audit**. We are fundra
 
 ## Reporting Vulnerabilities
 
-Email **security@freeq.io** with a PGP-encrypted report. Our public key is published at `freeq.io/security-pgp.asc`.
+Email **security@getfreeq.io** with a PGP-encrypted report. Our public key is published at `getfreeq.io/security-pgp.asc`.
 
 We observe a **90-day disclosure window**. We will:
 1. Acknowledge receipt within 48 hours

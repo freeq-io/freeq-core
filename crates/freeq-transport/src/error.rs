@@ -11,7 +11,12 @@ pub enum TransportError {
 
     /// Connection to a peer failed.
     #[error("connection to {peer} failed: {reason}")]
-    Connect { peer: String, reason: String },
+    Connect {
+        /// The peer address or name that could not be reached.
+        peer: String,
+        /// Human-readable description of the failure.
+        reason: String,
+    },
 
     /// An established connection was lost unexpectedly.
     #[error("connection lost: {0}")]

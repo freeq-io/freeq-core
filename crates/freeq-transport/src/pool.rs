@@ -1,6 +1,5 @@
 //! Connection pool — reuse live QUIC connections to known peers.
 
-use std::collections::HashMap;
 use crate::{connection::PeerConnection, Result};
 
 /// Manages live connections to all known peers.

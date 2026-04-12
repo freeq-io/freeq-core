@@ -1,7 +1,6 @@
 //! Packet router — maps destination IP addresses to FreeQ peer IDs.
 
-use std::{collections::HashMap, net::IpAddr};
-use crate::Result;
+use std::net::IpAddr;
 
 /// The routing table: maps each allowed IP range to a peer identity.
 pub struct Router {

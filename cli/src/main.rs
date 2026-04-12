@@ -112,18 +112,18 @@ async fn main() -> Result<()> {
             // TODO(v0.1): GET {api}/v1/status and pretty-print
             println!("freeq status — not yet implemented");
         }
-        Commands::Init { config, name } => {
+        Commands::Init { config: _, name: _ } => {
             // TODO(v0.1): generate identity keypair, write config
             println!("freeq init — not yet implemented");
         }
-        Commands::Peer { action } => {
+        Commands::Peer { action: _ } => {
             // TODO(v0.1): dispatch to peer API handlers
             println!("freeq peer — not yet implemented");
         }
-        Commands::Key { action } => {
+        Commands::Key { action: _ } => {
             println!("freeq key — not yet implemented");
         }
-        Commands::Algorithm { action } => {
+        Commands::Algorithm { action: _ } => {
             println!("freeq algorithm — not yet implemented");
         }
     }

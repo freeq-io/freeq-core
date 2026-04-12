@@ -4,7 +4,7 @@
 //! ever sent to an unauthenticated sender*. The node is invisible at the
 //! network level until a peer presents a valid ML-DSA-65 signature.
 
-use crate::{registry::PeerRegistry, AuthError, Result};
+use crate::{registry::PeerRegistry, Result};
 
 /// Decides whether an inbound packet should be processed or dropped.
 ///

@@ -30,4 +30,4 @@ Look for issues tagged `good first issue` on GitHub. The docs, config parsing, a
 
 ## Security-Sensitive Changes
 
-Do not open public PRs for security vulnerabilities. Email security@freeq.io first. See [SECURITY.md](SECURITY.md).
+Do not open public PRs for security vulnerabilities. Email security@getfreeq.io first. See [SECURITY.md](SECURITY.md).

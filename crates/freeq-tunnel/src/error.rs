@@ -11,7 +11,10 @@ pub enum TunnelError {
 
     /// Packet routing failure (no matching peer for destination IP).
     #[error("no route to {dest}")]
-    NoRoute { dest: std::net::IpAddr },
+    NoRoute {
+        /// The destination IP address that could not be routed.
+        dest: std::net::IpAddr,
+    },
 
     /// Underlying I/O error.
     #[error("I/O error: {0}")]
