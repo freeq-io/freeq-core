@@ -1,11 +1,12 @@
 //! GET /v1/tunnels handler.
 
-use crate::{models::TunnelStats, ApiError, Result};
-use axum::Json;
+use crate::{models::TunnelStats, Result};
+use axum::{extract::State, Json};
 
 /// List all active tunnels with per-tunnel traffic statistics.
-pub async fn list_tunnels() -> Result<Json<Vec<TunnelStats>>> {
-    Err(ApiError::NotImplemented(
-        "tunnel listing is not implemented yet".into(),
-    ))
+pub async fn list_tunnels(
+    State(state): State<crate::state::SharedApiState>,
+) -> Result<Json<Vec<TunnelStats>>> {
+    let state = state.read().await;
+    Ok(Json(state.tunnel_stats()))
 }

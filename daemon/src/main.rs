@@ -82,16 +82,8 @@ async fn main() -> Result<()> {
 }
 
 fn collect_startup_blockers(config: &freeq_config::Config) -> Vec<String> {
-    let mut blockers = Vec::new();
-
-    if config.node.api_enabled {
-        blockers.push(format!(
-            "REST API startup is deferred until daemon state is available on {}",
-            config.node.api_addr
-        ));
-    }
-
-    blockers
+    let _ = config;
+    Vec::new()
 }
 
 fn init_identity(
@@ -143,6 +135,8 @@ struct RuntimeHandles {
     tun_name: String,
     listen_addr: std::net::SocketAddr,
     active_peers: Vec<String>,
+    _api_addr: Option<std::net::SocketAddr>,
+    _api_state: freeq_api::state::SharedApiState,
     _tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
@@ -159,6 +153,7 @@ async fn start_runtime(
     let endpoint = freeq_transport::endpoint::Endpoint::bind(listen_addr).await?;
     let tun = Arc::new(freeq_tunnel::iface::TunInterface::open(None, tun_network).await?);
     let tun_name = tun.name().to_string();
+    let api_state = build_api_state(&config).shared();
 
     let mut registry = freeq_auth::registry::PeerRegistry::new();
     let mut router = freeq_tunnel::router::Router::new();
@@ -179,6 +174,17 @@ async fn start_runtime(
     let identity = Arc::new(identity);
     let mut tasks = Vec::new();
     let mut active_peers = Vec::new();
+    let api_addr = if config.node.api_enabled {
+        Some(
+            config
+                .node
+                .api_addr
+                .parse()
+                .context("node.api_addr must be a socket address")?,
+        )
+    } else {
+        None
+    };
 
     for peer in &config.peer {
         let Some(endpoint_value) = &peer.endpoint else {
@@ -202,44 +208,96 @@ async fn start_runtime(
             let mut engine = engine.lock().await;
             engine.add_peer(peer.name.clone(), connection, &session_keys);
         }
+        {
+            let mut state = api_state.write().await;
+            state.mark_peer_connected(&peer.name);
+        }
 
         active_peers.push(peer.name.clone());
         tasks.push(spawn_peer_to_tun_loop(
             peer.name.clone(),
             engine.clone(),
             tun.clone(),
+            api_state.clone(),
         ));
     }
 
-    tasks.push(spawn_tun_to_peer_loop(engine.clone(), tun.clone()));
+    tasks.push(spawn_tun_to_peer_loop(
+        engine.clone(),
+        tun.clone(),
+        api_state.clone(),
+    ));
     tasks.push(spawn_accept_loop(
         endpoint.clone(),
         identity,
         registry,
         engine,
         tun,
+        api_state.clone(),
     ));
+
+    if let Some(api_addr) = api_addr {
+        let server = freeq_api::ApiServer::new(api_addr, api_state.clone());
+        tasks.push(tokio::spawn(async move {
+            if let Err(err) = server.serve().await {
+                tracing::warn!(%err, "API server exited with error");
+            }
+        }));
+    }
 
     Ok(RuntimeHandles {
         endpoint,
         tun_name,
         listen_addr,
         active_peers,
+        _api_addr: api_addr,
+        _api_state: api_state,
         _tasks: tasks,
     })
+}
+
+fn build_api_state(config: &freeq_config::Config) -> freeq_api::state::ApiState {
+    let peers = config
+        .peer
+        .iter()
+        .map(|peer| freeq_api::models::PeerSummary {
+            name: peer.name.clone(),
+            endpoint: peer.endpoint.clone(),
+            allowed_ips: peer.allowed_ips.clone(),
+            connected: false,
+            last_handshake: None,
+        })
+        .collect();
+
+    freeq_api::state::ApiState::new(
+        config.node.name.clone(),
+        env!("CARGO_PKG_VERSION").into(),
+        config.node.algorithm.clone(),
+        config.node.sign.clone(),
+        format!("{:?}", freeq_crypto::agility::detect_bulk_algorithm()).to_lowercase(),
+        peers,
+    )
 }
 
 fn spawn_tun_to_peer_loop(
     engine: Arc<tokio::sync::Mutex<freeq_tunnel::forward::TunnelEngine>>,
     tun: Arc<freeq_tunnel::iface::TunInterface>,
+    api_state: freeq_api::state::SharedApiState,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             match tun.read_packet().await {
                 Ok(packet) => {
+                    let packet_len = packet.len() as u64;
                     let engine = engine.lock().await;
-                    if let Err(err) = engine.forward_packet(packet).await {
-                        tracing::warn!(%err, "failed to forward packet from TUN");
+                    match engine.forward_packet(packet).await {
+                        Ok(peer_name) => {
+                            let mut state = api_state.write().await;
+                            state.add_bytes_sent(&peer_name, packet_len);
+                        }
+                        Err(err) => {
+                            tracing::warn!(%err, "failed to forward packet from TUN");
+                        }
                     }
                 }
                 Err(err) => {
@@ -255,6 +313,7 @@ fn spawn_peer_to_tun_loop(
     peer_name: String,
     engine: Arc<tokio::sync::Mutex<freeq_tunnel::forward::TunnelEngine>>,
     tun: Arc<freeq_tunnel::iface::TunInterface>,
+    api_state: freeq_api::state::SharedApiState,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
@@ -265,13 +324,20 @@ fn spawn_peer_to_tun_loop(
 
             match packet {
                 Ok(packet) => {
+                    let packet_len = packet.len() as u64;
                     if let Err(err) = tun.write_packet(packet).await {
                         tracing::warn!(peer = %peer_name, %err, "failed to write peer packet to TUN");
+                        let mut state = api_state.write().await;
+                        state.mark_peer_disconnected(&peer_name);
                         break;
                     }
+                    let mut state = api_state.write().await;
+                    state.add_bytes_received(&peer_name, packet_len);
                 }
                 Err(err) => {
                     tracing::warn!(peer = %peer_name, %err, "failed to receive peer packet");
+                    let mut state = api_state.write().await;
+                    state.mark_peer_disconnected(&peer_name);
                     break;
                 }
             }
@@ -285,6 +351,7 @@ fn spawn_accept_loop(
     registry: Arc<freeq_auth::registry::PeerRegistry>,
     engine: Arc<tokio::sync::Mutex<freeq_tunnel::forward::TunnelEngine>>,
     tun: Arc<freeq_tunnel::iface::TunInterface>,
+    api_state: freeq_api::state::SharedApiState,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
@@ -302,11 +369,16 @@ fn spawn_accept_loop(
                         let mut engine = engine.lock().await;
                         engine.add_peer(peer_name.clone(), connection, &session_keys);
                     }
+                    {
+                        let mut state = api_state.write().await;
+                        state.mark_peer_connected(&peer_name);
+                    }
 
                     std::mem::drop(spawn_peer_to_tun_loop(
                         peer_name,
                         engine.clone(),
                         tun.clone(),
+                        api_state.clone(),
                     ));
                 }
                 Err(err) => {
@@ -416,7 +488,9 @@ async fn resolve_peer_endpoint(value: &str) -> Result<std::net::SocketAddr> {
 
 #[cfg(test)]
 mod tests {
-    use super::{collect_startup_blockers, init_identity, parse_transport_fingerprint};
+    use super::{
+        build_api_state, collect_startup_blockers, init_identity, parse_transport_fingerprint,
+    };
 
     fn sample_config() -> freeq_config::Config {
         toml::from_str(
@@ -447,8 +521,7 @@ mod tests {
     fn startup_blockers_cover_stubbed_subsystems() {
         let blockers = collect_startup_blockers(&sample_config());
 
-        assert_eq!(blockers.len(), 1);
-        assert!(blockers.iter().any(|b| b.contains("REST API startup")));
+        assert!(blockers.is_empty());
     }
 
     #[test]
@@ -478,5 +551,17 @@ mod tests {
         assert_eq!(fingerprint.len(), 32);
         assert_eq!(fingerprint[0], 0x00);
         assert_eq!(fingerprint[31], 0xff);
+    }
+
+    #[test]
+    fn api_state_builds_from_config() {
+        let state = build_api_state(&sample_config());
+        let status = state.status_response();
+        let peers = state.peer_summaries();
+
+        assert_eq!(status.name, "nyc-01");
+        assert_eq!(status.peer_count, 1);
+        assert_eq!(peers[0].name, "lon-01");
+        assert!(!peers[0].connected);
     }
 }

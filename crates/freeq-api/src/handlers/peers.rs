@@ -4,13 +4,17 @@ use crate::{
     models::{AddPeerRequest, PeerSummary},
     ApiError, Result,
 };
-use axum::{extract::Path, Json};
+use axum::{
+    extract::{Path, State},
+    Json,
+};
 
 /// List all configured peers and their connection status.
-pub async fn list_peers() -> Result<Json<Vec<PeerSummary>>> {
-    Err(ApiError::NotImplemented(
-        "peer listing is not implemented yet".into(),
-    ))
+pub async fn list_peers(
+    State(state): State<crate::state::SharedApiState>,
+) -> Result<Json<Vec<PeerSummary>>> {
+    let state = state.read().await;
+    Ok(Json(state.peer_summaries()))
 }
 
 /// Add a new peer to the registry.
