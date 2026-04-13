@@ -24,7 +24,7 @@ rust-version = "1.75"
 # ── Post-Quantum Cryptography (NIST FIPS 203/204/205) ────────────────────────
 # NOTE: RustCrypto PQC crates are pre-1.0; RC versions must be pinned explicitly.
 # Run `cargo check` and update any RC pins cargo suggests.
-ml-kem             = { version = "0.3.0-rc.2" }
+ml-kem             = { version = "0.3.0-rc.2", features = ["getrandom"] }
 ml-dsa             = { version = "0.1.0-rc.8" }
 slh-dsa            = { version = "0.2.0-rc.4" }
 
