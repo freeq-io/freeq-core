@@ -13,6 +13,10 @@ pub enum TunnelError {
     #[error("no active tunnel session for peer {0}")]
     UnknownPeer(String),
 
+    /// A newer session superseded the current loop's view of this peer.
+    #[error("stale tunnel session for peer {0}")]
+    StaleSession(String),
+
     /// Packet routing failure (no matching peer for destination IP).
     #[error("no route to {dest}")]
     NoRoute {

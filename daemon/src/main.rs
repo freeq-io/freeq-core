@@ -299,12 +299,13 @@ fn spawn_tun_to_peer_loop(
 
 async fn run_peer_to_tun_loop(
     peer_name: String,
+    session_generation: u64,
     engine: Arc<freeq_tunnel::forward::TunnelEngine>,
     tun: Arc<freeq_tunnel::iface::TunInterface>,
     api_state: freeq_api::state::SharedApiState,
 ) {
     loop {
-        let packet = engine.receive_packet(&peer_name).await;
+        let packet = engine.receive_packet(&peer_name, session_generation).await;
 
         match packet {
             Ok(packet) => {
@@ -313,16 +314,20 @@ async fn run_peer_to_tun_loop(
                     tracing::warn!(peer = %peer_name, %err, "failed to write peer packet to TUN");
                     api_state.record_tun_write_error();
                     api_state.mark_peer_disconnected(&peer_name);
-                    engine.remove_session(&peer_name);
+                    engine.remove_session_if_current(&peer_name, session_generation);
                     break;
                 }
                 api_state.add_bytes_received(&peer_name, packet_len);
+            }
+            Err(freeq_tunnel::TunnelError::StaleSession(_)) => {
+                tracing::debug!(peer = %peer_name, generation = session_generation, "stale peer receive loop exiting");
+                break;
             }
             Err(err) => {
                 tracing::warn!(peer = %peer_name, %err, "failed to receive peer packet");
                 api_state.record_peer_receive_error();
                 api_state.mark_peer_disconnected(&peer_name);
-                engine.remove_session(&peer_name);
+                engine.remove_session_if_current(&peer_name, session_generation);
                 break;
             }
         }
@@ -350,11 +355,18 @@ fn reconnect_delay(attempt: u32) -> Duration {
 
 fn spawn_peer_to_tun_loop(
     peer_name: String,
+    session_generation: u64,
     engine: Arc<freeq_tunnel::forward::TunnelEngine>,
     tun: Arc<freeq_tunnel::iface::TunInterface>,
     api_state: freeq_api::state::SharedApiState,
 ) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(run_peer_to_tun_loop(peer_name, engine, tun, api_state))
+    tokio::spawn(run_peer_to_tun_loop(
+        peer_name,
+        session_generation,
+        engine,
+        tun,
+        api_state,
+    ))
 }
 
 fn spawn_outbound_peer_supervisor(
@@ -414,7 +426,7 @@ fn spawn_outbound_peer_supervisor(
                     }
                 };
 
-            engine.add_peer(peer.name.clone(), connection, &session_keys);
+            let session_generation = engine.add_peer(peer.name.clone(), connection, &session_keys);
             api_state.record_handshake_success(
                 &peer.name,
                 Some(handshake_started.elapsed().as_secs_f64() * 1000.0),
@@ -423,6 +435,7 @@ fn spawn_outbound_peer_supervisor(
 
             run_peer_to_tun_loop(
                 peer.name.clone(),
+                session_generation,
                 engine.clone(),
                 tun.clone(),
                 api_state.clone(),
@@ -460,7 +473,8 @@ fn spawn_accept_loop(
 
             match run_responder_handshake(&identity, &registry, connection.as_ref()).await {
                 Ok((peer_name, session_keys)) => {
-                    engine.add_peer(peer_name.clone(), connection, &session_keys);
+                    let session_generation =
+                        engine.add_peer(peer_name.clone(), connection, &session_keys);
                     api_state.record_handshake_success(
                         &peer_name,
                         Some(handshake_started.elapsed().as_secs_f64() * 1000.0),
@@ -468,6 +482,7 @@ fn spawn_accept_loop(
 
                     std::mem::drop(spawn_peer_to_tun_loop(
                         peer_name,
+                        session_generation,
                         engine.clone(),
                         tun.clone(),
                         api_state.clone(),

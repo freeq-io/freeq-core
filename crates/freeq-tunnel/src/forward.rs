@@ -14,9 +14,11 @@ pub struct TunnelEngine {
     algorithm: freeq_crypto::agility::BulkAlgorithm,
     router: RwLock<crate::router::Router>,
     peers: RwLock<HashMap<String, Arc<PeerSession>>>,
+    next_generation: AtomicU64,
 }
 
 struct PeerSession {
+    generation: u64,
     connection: Arc<freeq_transport::connection::PeerConnection>,
     outbound_key: [u8; 32],
     inbound_key: [u8; 32],
@@ -33,6 +35,7 @@ impl TunnelEngine {
             algorithm,
             router: RwLock::new(router),
             peers: RwLock::new(HashMap::new()),
+            next_generation: AtomicU64::new(1),
         }
     }
 
@@ -42,19 +45,22 @@ impl TunnelEngine {
         peer_id: String,
         connection: Arc<freeq_transport::connection::PeerConnection>,
         session_keys: &freeq_auth::handshake::SessionKeys,
-    ) {
+    ) -> u64 {
+        let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
         self.peers
             .write()
             .expect("peer registry lock poisoned")
             .insert(
                 peer_id,
                 Arc::new(PeerSession {
+                    generation,
                     connection,
                     outbound_key: session_keys.outbound,
                     inbound_key: session_keys.inbound,
                     outbound_nonce: AtomicU64::new(0),
                 }),
             );
+        generation
     }
 
     /// Remove an active peer session.
@@ -63,6 +69,18 @@ impl TunnelEngine {
             .write()
             .expect("peer registry lock poisoned")
             .remove(peer_id);
+    }
+
+    /// Remove a session only if it still matches the expected generation.
+    pub fn remove_session_if_current(&self, peer_id: &str, generation: u64) {
+        let mut peers = self.peers.write().expect("peer registry lock poisoned");
+        let should_remove = peers
+            .get(peer_id)
+            .map(|peer| peer.generation == generation)
+            .unwrap_or(false);
+        if should_remove {
+            peers.remove(peer_id);
+        }
     }
 
     /// Remove an active peer session and all routes for that peer.
@@ -107,7 +125,7 @@ impl TunnelEngine {
         frame.extend_from_slice(&nonce);
         frame.extend_from_slice(&ciphertext);
         if let Err(err) = peer.connection.send(Bytes::from(frame)).await {
-            self.remove_session(&peer_id);
+            self.remove_session_if_current(&peer_id, peer.generation);
             return Err(err.into());
         }
 
@@ -115,7 +133,7 @@ impl TunnelEngine {
     }
 
     /// Receive and decrypt the next packet from `peer_id`.
-    pub async fn receive_packet(&self, peer_id: &str) -> Result<Bytes> {
+    pub async fn receive_packet(&self, peer_id: &str, expected_generation: u64) -> Result<Bytes> {
         let peer = self
             .peers
             .read()
@@ -123,7 +141,13 @@ impl TunnelEngine {
             .get(peer_id)
             .cloned()
             .ok_or_else(|| TunnelError::UnknownPeer(peer_id.to_string()))?;
+        if peer.generation != expected_generation {
+            return Err(TunnelError::StaleSession(peer_id.to_string()));
+        }
         let frame = peer.connection.recv().await?;
+        if !self.is_current_generation(peer_id, expected_generation) {
+            return Err(TunnelError::StaleSession(peer_id.to_string()));
+        }
 
         if frame.len() <= freeq_crypto::bulk::NONCE_LEN {
             return Err(TunnelError::InvalidPacket(
@@ -142,6 +166,15 @@ impl TunnelEngine {
             &frame[freeq_crypto::bulk::NONCE_LEN..],
         )?;
         Ok(Bytes::from(plaintext))
+    }
+
+    fn is_current_generation(&self, peer_id: &str, expected_generation: u64) -> bool {
+        self.peers
+            .read()
+            .expect("peer registry lock poisoned")
+            .get(peer_id)
+            .map(|peer| peer.generation == expected_generation)
+            .unwrap_or(false)
     }
 }
 
@@ -248,7 +281,8 @@ mod tests {
             freeq_crypto::agility::BulkAlgorithm::ChaCha20Poly1305,
             client_router,
         );
-        client_engine.add_peer("peer-a".into(), client_conn.clone(), &sample_session_keys());
+        let _client_generation =
+            client_engine.add_peer("peer-a".into(), client_conn.clone(), &sample_session_keys());
 
         let server_engine = TunnelEngine::new(
             freeq_crypto::agility::BulkAlgorithm::ChaCha20Poly1305,
@@ -258,7 +292,8 @@ mod tests {
             outbound: [0x22; 32],
             inbound: [0x11; 32],
         };
-        server_engine.add_peer("peer-a".into(), server_conn.clone(), &reverse_keys);
+        let server_generation =
+            server_engine.add_peer("peer-a".into(), server_conn.clone(), &reverse_keys);
 
         let payload = sample_ipv4_packet(Ipv4Addr::new(10, 0, 0, 42));
         let routed_peer = client_engine
@@ -266,7 +301,7 @@ mod tests {
             .await
             .expect("forward");
         let received = server_engine
-            .receive_packet("peer-a")
+            .receive_packet("peer-a", server_generation)
             .await
             .expect("receive");
 
@@ -289,5 +324,58 @@ mod tests {
             .expect_err("missing route should fail");
 
         assert!(matches!(err, crate::TunnelError::NoRoute { .. }));
+    }
+
+    #[tokio::test]
+    async fn receive_packet_rejects_stale_session_generation() {
+        let server = freeq_transport::endpoint::Endpoint::bind(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+        ))
+        .await
+        .expect("bind server");
+        let server_addr = server.local_addr().expect("server addr");
+        let server_fingerprint = server.certificate_fingerprint();
+        let client = freeq_transport::endpoint::Endpoint::bind(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+        ))
+        .await
+        .expect("bind client");
+
+        let server_conn_task = {
+            let server = server.clone();
+            tokio::spawn(async move { Arc::new(server.accept().await.expect("accept")) })
+        };
+        let client_conn = Arc::new(
+            client
+                .connect(&server_fingerprint, server_addr)
+                .await
+                .expect("connect"),
+        );
+        let server_conn = server_conn_task.await.expect("server task");
+
+        let engine = TunnelEngine::new(
+            freeq_crypto::agility::BulkAlgorithm::ChaCha20Poly1305,
+            crate::router::Router::new(),
+        );
+        let first_generation =
+            engine.add_peer("peer-a".into(), server_conn.clone(), &sample_session_keys());
+        let second_generation =
+            engine.add_peer("peer-a".into(), client_conn.clone(), &sample_session_keys());
+
+        let err = engine
+            .receive_packet("peer-a", first_generation)
+            .await
+            .expect_err("stale session should fail");
+
+        assert!(matches!(
+            err,
+            crate::TunnelError::StaleSession(ref peer) if peer == "peer-a"
+        ));
+        assert!(second_generation > first_generation);
+
+        client.close().await;
+        server.close().await;
     }
 }
