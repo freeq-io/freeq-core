@@ -1,6 +1,6 @@
 //! Shared runtime state exposed through the local REST API.
 
-use crate::models::{PeerSummary, StatusResponse, TunnelStats};
+use crate::models::{AlgorithmResponse, PeerSummary, StatusResponse, TunnelStats};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -149,6 +149,15 @@ impl ApiState {
         }
     }
 
+    /// Build the current `/v1/algorithm` response.
+    pub fn algorithm_response(&self) -> AlgorithmResponse {
+        AlgorithmResponse {
+            kem_algorithm: self.kem_algorithm.clone(),
+            sign_algorithm: self.sign_algorithm.clone(),
+            bulk_algorithm: self.bulk_algorithm.clone(),
+        }
+    }
+
     /// Build the current `/v1/peers` response.
     pub fn peer_summaries(&self) -> Vec<PeerSummary> {
         let mut peers: Vec<_> = self
@@ -268,12 +277,16 @@ mod tests {
         state.add_bytes_received("lon-01", 256);
 
         let status = state.status_response();
+        let algorithms = state.algorithm_response();
         let peers = state.peer_summaries();
         let tunnels = state.tunnel_stats();
         let metrics = state.metrics_exposition();
 
         assert_eq!(status.peer_count, 1);
         assert_eq!(status.tunnel_count, 1);
+        assert_eq!(algorithms.kem_algorithm, "ml-kem-768");
+        assert_eq!(algorithms.sign_algorithm, "ml-dsa-65");
+        assert_eq!(algorithms.bulk_algorithm, "chacha20-poly1305");
         assert!(peers[0].connected);
         assert!(peers[0].last_handshake.is_some());
         assert_eq!(tunnels[0].bytes_sent, 128);

@@ -23,7 +23,8 @@ pub fn build_router(state: crate::state::SharedApiState) -> Router {
         .route("/v1/metrics", get(crate::handlers::metrics::get_metrics))
         .route(
             "/v1/algorithm",
-            post(crate::handlers::algorithm::switch_algorithm),
+            get(crate::handlers::algorithm::get_algorithm)
+                .post(crate::handlers::algorithm::switch_algorithm),
         )
         .with_state(state)
 }
@@ -157,5 +158,25 @@ mod tests {
         let body = read_body(response).await;
         assert!(body.contains("freeq_connected_peers 1"));
         assert!(body.contains("freeq_tunnel_bytes_sent_total{peer=\"lon-01\"} 128"));
+    }
+
+    #[tokio::test]
+    async fn algorithm_route_returns_active_algorithm_set() {
+        let app = build_router(test_state());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/algorithm")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = read_body(response).await;
+        assert!(body.contains("\"kem_algorithm\":\"ml-kem-768\""));
+        assert!(body.contains("\"sign_algorithm\":\"ml-dsa-65\""));
+        assert!(body.contains("\"bulk_algorithm\":\"chacha20-poly1305\""));
     }
 }

@@ -62,6 +62,17 @@ pub struct AlgorithmSwitchRequest {
     pub sign: Option<String>,
 }
 
+/// Response from `GET /v1/algorithm`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AlgorithmResponse {
+    /// Active KEM algorithm.
+    pub kem_algorithm: String,
+    /// Active signature algorithm.
+    pub sign_algorithm: String,
+    /// Active bulk encryption algorithm.
+    pub bulk_algorithm: String,
+}
+
 /// Tunnel statistics from `GET /v1/tunnels`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TunnelStats {

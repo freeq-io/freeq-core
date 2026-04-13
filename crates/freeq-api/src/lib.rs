@@ -17,6 +17,7 @@
 //! | POST   | /v1/peers/{name}/rotate | Rotate keys for a peer             |
 //! | GET    | /v1/tunnels           | List active tunnels + stats          |
 //! | GET    | /v1/metrics           | Prometheus-compatible metrics        |
+//! | GET    | /v1/algorithm         | Read active KEM/sign/bulk algorithms |
 //! | POST   | /v1/algorithm         | Hot-swap the KEM/sign algorithm      |
 
 #![forbid(unsafe_code)]
