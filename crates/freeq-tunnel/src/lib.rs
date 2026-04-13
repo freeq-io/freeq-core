@@ -15,6 +15,7 @@
 #![deny(missing_docs, clippy::unwrap_used)]
 
 pub mod error;
+pub mod forward;
 pub mod iface;
 pub mod router;
 

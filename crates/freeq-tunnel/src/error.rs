@@ -9,6 +9,10 @@ pub enum TunnelError {
     #[error("TUN interface error: {0}")]
     Interface(String),
 
+    /// No active tunnel session exists for the referenced peer.
+    #[error("no active tunnel session for peer {0}")]
+    UnknownPeer(String),
+
     /// Packet routing failure (no matching peer for destination IP).
     #[error("no route to {dest}")]
     NoRoute {
@@ -23,4 +27,12 @@ pub enum TunnelError {
     /// Crypto error while encrypting or decrypting a packet.
     #[error("crypto error: {0}")]
     Crypto(#[from] freeq_crypto::CryptoError),
+
+    /// Transport error while sending or receiving tunneled packets.
+    #[error("transport error: {0}")]
+    Transport(#[from] freeq_transport::TransportError),
+
+    /// Packet framing error in the encrypted tunnel payload.
+    #[error("invalid tunnel packet: {0}")]
+    InvalidPacket(String),
 }
