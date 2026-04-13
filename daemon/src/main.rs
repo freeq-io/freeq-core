@@ -305,7 +305,13 @@ async fn run_peer_to_tun_loop(
     api_state: freeq_api::state::SharedApiState,
 ) {
     loop {
-        let packet = engine.receive_packet(&peer_name, session_generation).await;
+        let packet = engine
+            .receive_packet_timeout(
+                &peer_name,
+                session_generation,
+                freeq_transport::connection::QUIC_RECV_POLL_TIMEOUT,
+            )
+            .await;
 
         match packet {
             Ok(packet) => {
@@ -318,6 +324,9 @@ async fn run_peer_to_tun_loop(
                     break;
                 }
                 api_state.add_bytes_received(&peer_name, packet_len);
+            }
+            Err(freeq_tunnel::TunnelError::Transport(freeq_transport::TransportError::Timeout)) => {
+                continue;
             }
             Err(freeq_tunnel::TunnelError::StaleSession(_)) => {
                 tracing::debug!(peer = %peer_name, generation = session_generation, "stale peer receive loop exiting");

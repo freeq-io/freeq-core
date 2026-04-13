@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 const NONCE_COUNTER_LEN: usize = 8;
 
@@ -134,6 +135,21 @@ impl TunnelEngine {
 
     /// Receive and decrypt the next packet from `peer_id`.
     pub async fn receive_packet(&self, peer_id: &str, expected_generation: u64) -> Result<Bytes> {
+        self.receive_packet_timeout(
+            peer_id,
+            expected_generation,
+            freeq_transport::connection::QUIC_IDLE_TIMEOUT,
+        )
+        .await
+    }
+
+    /// Receive and decrypt the next packet from `peer_id` with an explicit timeout.
+    pub async fn receive_packet_timeout(
+        &self,
+        peer_id: &str,
+        expected_generation: u64,
+        timeout: Duration,
+    ) -> Result<Bytes> {
         let peer = self
             .peers
             .read()
@@ -144,7 +160,7 @@ impl TunnelEngine {
         if peer.generation != expected_generation {
             return Err(TunnelError::StaleSession(peer_id.to_string()));
         }
-        let frame = peer.connection.recv().await?;
+        let frame = peer.connection.recv_timeout(timeout).await?;
         if !self.is_current_generation(peer_id, expected_generation) {
             return Err(TunnelError::StaleSession(peer_id.to_string()));
         }

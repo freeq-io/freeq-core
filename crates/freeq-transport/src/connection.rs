@@ -4,9 +4,11 @@ use crate::{Result, TransportError};
 use std::time::Duration;
 
 /// Default timeouts used for transport send/receive operations.
-pub const QUIC_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
-/// Keepalive interval to keep NAT mappings warm.
-pub const QUIC_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+pub const QUIC_IDLE_TIMEOUT: Duration = Duration::from_secs(6);
+/// Keepalive interval to keep NAT mappings warm and detect dead links quickly.
+pub const QUIC_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(2);
+/// Short receive poll interval used by higher layers to notice dead peers promptly.
+pub const QUIC_RECV_POLL_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// A live QUIC connection to a single remote FreeQ peer.
 #[derive(Clone, Debug)]
