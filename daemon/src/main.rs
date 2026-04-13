@@ -331,12 +331,14 @@ async fn run_peer_to_tun_loop(
                         freeq_tunnel::TunnelError::StaleSession(_) => break,
                         other => {
                             tracing::warn!(peer = %peer_name, %other, "failed to send peer heartbeat");
+                            api_state.record_heartbeat_failure(&peer_name);
                             api_state.mark_peer_disconnected(&peer_name);
                             engine.remove_session_if_current(&peer_name, session_generation);
                             break;
                         }
                     }
                 }
+                api_state.record_heartbeat_sent(&peer_name);
                 continue;
             }
             Err(freeq_tunnel::TunnelError::StaleSession(_)) => {

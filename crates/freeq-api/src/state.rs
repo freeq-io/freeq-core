@@ -35,6 +35,8 @@ struct PeerRuntime {
     handshake_failures: AtomicU64,
     reconnect_attempts: AtomicU64,
     reconnect_backoff_millis: AtomicU64,
+    heartbeat_sent: AtomicU64,
+    heartbeat_failures: AtomicU64,
     last_handshake_duration_micros: AtomicU64,
     bytes_sent: AtomicU64,
     bytes_received: AtomicU64,
@@ -83,6 +85,8 @@ impl ApiState {
                         handshake_failures: AtomicU64::new(0),
                         reconnect_attempts: AtomicU64::new(0),
                         reconnect_backoff_millis: AtomicU64::new(0),
+                        heartbeat_sent: AtomicU64::new(0),
+                        heartbeat_failures: AtomicU64::new(0),
                         last_handshake_duration_micros: AtomicU64::new(NONE_U64),
                         bytes_sent: AtomicU64::new(0),
                         bytes_received: AtomicU64::new(0),
@@ -231,6 +235,20 @@ impl ApiState {
                 backoff.as_millis().min(u128::from(u64::MAX)) as u64,
                 Ordering::Relaxed,
             );
+        }
+    }
+
+    /// Record a successful heartbeat send for a peer.
+    pub fn record_heartbeat_sent(&self, peer_name: &str) {
+        if let Some(peer) = self.peers.get(peer_name) {
+            peer.heartbeat_sent.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Record a heartbeat send failure for a peer.
+    pub fn record_heartbeat_failure(&self, peer_name: &str) {
+        if let Some(peer) = self.peers.get(peer_name) {
+            peer.heartbeat_failures.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -417,6 +435,12 @@ impl ApiState {
             "# HELP freeq_peer_reconnect_backoff_ms Current reconnect backoff delay by peer."
                 .to_string(),
             "# TYPE freeq_peer_reconnect_backoff_ms gauge".to_string(),
+            "# HELP freeq_peer_heartbeats_sent_total Heartbeats sent by peer session."
+                .to_string(),
+            "# TYPE freeq_peer_heartbeats_sent_total counter".to_string(),
+            "# HELP freeq_peer_heartbeat_failures_total Heartbeat send failures by peer session."
+                .to_string(),
+            "# TYPE freeq_peer_heartbeat_failures_total counter".to_string(),
             "# HELP freeq_peer_last_handshake_duration_ms Last successful handshake duration by peer."
                 .to_string(),
             "# TYPE freeq_peer_last_handshake_duration_ms gauge".to_string(),
@@ -453,6 +477,16 @@ impl ApiState {
                 "freeq_peer_reconnect_backoff_ms{{peer=\"{}\"}} {}",
                 peer_name,
                 peer.reconnect_backoff_millis.load(Ordering::Relaxed)
+            ));
+            lines.push(format!(
+                "freeq_peer_heartbeats_sent_total{{peer=\"{}\"}} {}",
+                peer_name,
+                peer.heartbeat_sent.load(Ordering::Relaxed)
+            ));
+            lines.push(format!(
+                "freeq_peer_heartbeat_failures_total{{peer=\"{}\"}} {}",
+                peer_name,
+                peer.heartbeat_failures.load(Ordering::Relaxed)
             ));
             if let Some(duration_ms) = load_optional_ms(&peer.last_handshake_duration_micros) {
                 lines.push(format!(
@@ -549,6 +583,8 @@ mod tests {
         state.record_packet_forward_failure();
         state.record_peer_receive_error();
         state.record_reconnect_scheduled("lon-01", std::time::Duration::from_millis(750));
+        state.record_heartbeat_sent("lon-01");
+        state.record_heartbeat_failure("lon-01");
         state.record_handshake_success("lon-01", Some(12.5));
 
         let status = state.status_response();
@@ -580,6 +616,8 @@ mod tests {
         assert!(metrics.contains("freeq_peer_handshake_failures_total{peer=\"lon-01\"} 1"));
         assert!(metrics.contains("freeq_peer_reconnect_attempts_total{peer=\"lon-01\"} 0"));
         assert!(metrics.contains("freeq_peer_reconnect_backoff_ms{peer=\"lon-01\"} 0"));
+        assert!(metrics.contains("freeq_peer_heartbeats_sent_total{peer=\"lon-01\"} 1"));
+        assert!(metrics.contains("freeq_peer_heartbeat_failures_total{peer=\"lon-01\"} 1"));
         assert!(metrics.contains("freeq_peer_last_handshake_duration_ms{peer=\"lon-01\"} 12.500"));
     }
 }
