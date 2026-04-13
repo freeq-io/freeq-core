@@ -283,6 +283,12 @@ struct RuntimeHandles {
     _tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
+#[derive(Clone)]
+struct ManagedPeer {
+    config: freeq_config::PeerConfig,
+    transport_fingerprint: Option<freeq_transport::endpoint::CertificateFingerprint>,
+}
+
 async fn start_runtime(
     config: freeq_config::Config,
     identity: freeq_crypto::sign::IdentityKeypair,
@@ -306,21 +312,29 @@ async fn start_runtime(
 
     let mut registry = freeq_auth::registry::PeerRegistry::new();
     let mut router = freeq_tunnel::router::Router::new();
+    let mut managed_peers = Vec::new();
     for peer in &config.peer {
         registry.add_peer(peer_entry_from_config(peer)?)?;
         for prefix in &peer.allowed_ips {
             router.insert(prefix.parse()?, peer.name.clone());
         }
+        managed_peers.push(ManagedPeer {
+            config: peer.clone(),
+            transport_fingerprint: match peer.transport_cert_fingerprint.as_deref() {
+                Some(value) => Some(parse_transport_fingerprint(value)?),
+                None => None,
+            },
+        });
     }
 
     let engine = Arc::new(freeq_tunnel::forward::TunnelEngine::new(
         freeq_crypto::agility::detect_bulk_algorithm(),
         router,
     ));
-    let registry = Arc::new(registry);
+    let registry = Arc::new(std::sync::RwLock::new(registry));
     let identity = Arc::new(identity);
     let mut tasks = Vec::new();
-    let mut active_peers = Vec::new();
+    let active_peers = config.peer.iter().map(|peer| peer.name.clone()).collect();
     let api_addr = if config.node.api_enabled {
         Some(
             config
@@ -332,28 +346,19 @@ async fn start_runtime(
     } else {
         None
     };
+    let (control_tx, control_rx) = tokio::sync::mpsc::channel(64);
+    api_state.attach_control_plane(control_tx);
 
-    for peer in &config.peer {
-        let Some(_endpoint_value) = &peer.endpoint else {
-            continue;
-        };
-
-        let transport_fingerprint =
-            parse_transport_fingerprint(peer.transport_cert_fingerprint.as_deref().ok_or_else(
-                || anyhow::anyhow!("missing transport fingerprint for {}", peer.name),
-            )?)?;
-
-        active_peers.push(peer.name.clone());
-        tasks.push(spawn_outbound_peer_supervisor(
-            peer.clone(),
-            transport_fingerprint,
-            endpoint.clone(),
-            identity.clone(),
-            engine.clone(),
-            tun.clone(),
-            api_state.clone(),
-        ));
-    }
+    tasks.push(spawn_peer_control_loop(
+        managed_peers,
+        control_rx,
+        endpoint.clone(),
+        identity.clone(),
+        registry.clone(),
+        engine.clone(),
+        tun.clone(),
+        api_state.clone(),
+    ));
 
     tasks.push(spawn_tun_to_peer_loop(
         engine.clone(),
@@ -536,6 +541,119 @@ fn spawn_peer_to_tun_loop(
     ))
 }
 
+fn spawn_peer_control_loop(
+    initial_peers: Vec<ManagedPeer>,
+    mut control_rx: tokio::sync::mpsc::Receiver<freeq_api::state::ControlCommand>,
+    endpoint: freeq_transport::endpoint::Endpoint,
+    identity: Arc<freeq_crypto::sign::IdentityKeypair>,
+    registry: Arc<std::sync::RwLock<freeq_auth::registry::PeerRegistry>>,
+    engine: Arc<freeq_tunnel::forward::TunnelEngine>,
+    tun: Arc<freeq_tunnel::iface::TunInterface>,
+    api_state: freeq_api::state::SharedApiState,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut outbound_supervisors: std::collections::HashMap<
+            String,
+            tokio::task::JoinHandle<()>,
+        > = std::collections::HashMap::new();
+
+        for peer in initial_peers {
+            if let Some(handle) = spawn_outbound_supervisor_for_peer(
+                &peer, &endpoint, &identity, &engine, &tun, &api_state,
+            ) {
+                outbound_supervisors.insert(peer.config.name.clone(), handle);
+            }
+        }
+
+        while let Some(command) = control_rx.recv().await {
+            match command {
+                freeq_api::state::ControlCommand::AddPeer { request, response } => {
+                    let result = (|| -> Result<freeq_api::models::PeerSummary> {
+                        let managed_peer = managed_peer_from_add_request(&request)?;
+                        if api_state.has_peer(&request.name) {
+                            anyhow::bail!("peer '{}' already exists", request.name);
+                        }
+                        {
+                            let mut registry =
+                                registry.write().expect("peer registry lock poisoned");
+                            if registry.contains_peer(&request.name) {
+                                anyhow::bail!("peer '{}' already exists", request.name);
+                            }
+                            registry.add_peer(peer_entry_from_request(&request)?)?;
+                        }
+                        let summary = peer_summary_from_request(&request);
+                        api_state
+                            .add_peer(summary.clone())
+                            .map_err(anyhow::Error::msg)?;
+                        for prefix in &summary.allowed_ips {
+                            engine.add_route(prefix.parse()?, summary.name.clone());
+                        }
+                        if let Some(previous) = outbound_supervisors.remove(&summary.name) {
+                            previous.abort();
+                        }
+                        if let Some(handle) = spawn_outbound_supervisor_for_peer(
+                            &managed_peer,
+                            &endpoint,
+                            &identity,
+                            &engine,
+                            &tun,
+                            &api_state,
+                        ) {
+                            outbound_supervisors.insert(summary.name.clone(), handle);
+                        }
+                        Ok(summary)
+                    })()
+                    .map_err(|err| err.to_string());
+                    let _ = response.send(result);
+                }
+                freeq_api::state::ControlCommand::RemovePeer { name, response } => {
+                    let result = (|| -> Result<()> {
+                        if let Some(previous) = outbound_supervisors.remove(&name) {
+                            previous.abort();
+                        }
+                        api_state.remove_peer(&name).map_err(anyhow::Error::msg)?;
+                        engine.remove_peer(&name);
+                        let removed = registry
+                            .write()
+                            .expect("peer registry lock poisoned")
+                            .remove_peer(&name);
+                        if !removed {
+                            anyhow::bail!("peer '{name}' does not exist");
+                        }
+                        Ok(())
+                    })()
+                    .map_err(|err| err.to_string());
+                    let _ = response.send(result);
+                }
+            }
+        }
+    })
+}
+
+fn spawn_outbound_supervisor_for_peer(
+    peer: &ManagedPeer,
+    endpoint: &freeq_transport::endpoint::Endpoint,
+    identity: &Arc<freeq_crypto::sign::IdentityKeypair>,
+    engine: &Arc<freeq_tunnel::forward::TunnelEngine>,
+    tun: &Arc<freeq_tunnel::iface::TunInterface>,
+    api_state: &freeq_api::state::SharedApiState,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let transport_fingerprint = peer.transport_fingerprint?;
+    if peer.config.endpoint.is_none() {
+        return None;
+    }
+
+    Some(spawn_outbound_peer_supervisor(
+        peer.config.clone(),
+        transport_fingerprint,
+        endpoint.clone(),
+        identity.clone(),
+        engine.clone(),
+        tun.clone(),
+        api_state.clone(),
+    ))
+}
+
 fn spawn_outbound_peer_supervisor(
     peer: freeq_config::PeerConfig,
     transport_fingerprint: freeq_transport::endpoint::CertificateFingerprint,
@@ -621,7 +739,7 @@ fn spawn_outbound_peer_supervisor(
 fn spawn_accept_loop(
     endpoint: freeq_transport::endpoint::Endpoint,
     identity: Arc<freeq_crypto::sign::IdentityKeypair>,
-    registry: Arc<freeq_auth::registry::PeerRegistry>,
+    registry: Arc<std::sync::RwLock<freeq_auth::registry::PeerRegistry>>,
     engine: Arc<freeq_tunnel::forward::TunnelEngine>,
     tun: Arc<freeq_tunnel::iface::TunInterface>,
     api_state: freeq_api::state::SharedApiState,
@@ -702,17 +820,18 @@ async fn run_initiator_handshake(
 
 async fn run_responder_handshake(
     identity: &freeq_crypto::sign::IdentityKeypair,
-    registry: &freeq_auth::registry::PeerRegistry,
+    registry: &std::sync::RwLock<freeq_auth::registry::PeerRegistry>,
     connection: &freeq_transport::connection::PeerConnection,
 ) -> Result<(String, freeq_auth::handshake::SessionKeys)> {
     let init_msg = connection.recv().await?;
     let (peer_name, state, response) = {
         let mut rng = rand::thread_rng();
         let (responder_kem_secret, _) = freeq_crypto::kem::HybridSecretKey::generate(&mut rng)?;
+        let registry = registry.read().expect("peer registry lock poisoned");
         freeq_auth::handshake::ResponderHandshake::process_init_with_peer_name(
             identity,
             responder_kem_secret,
-            registry,
+            &registry,
             &init_msg,
         )?
     };
@@ -735,6 +854,55 @@ fn peer_entry_from_config(
             .map(|prefix| prefix.parse())
             .collect::<std::result::Result<Vec<ipnetwork::IpNetwork>, _>>()?,
     })
+}
+
+fn managed_peer_from_add_request(req: &freeq_api::models::AddPeerRequest) -> Result<ManagedPeer> {
+    Ok(ManagedPeer {
+        config: freeq_config::PeerConfig {
+            name: req.name.clone(),
+            public_key: req.public_key.trim().to_string(),
+            kem_key: req.kem_key.trim().to_string(),
+            endpoint: req.endpoint.clone(),
+            transport_cert_fingerprint: req
+                .transport_cert_fingerprint
+                .as_ref()
+                .map(|value| value.trim().to_string()),
+            allowed_ips: req.allowed_ips.clone(),
+            key_rotation_secs: 3600,
+        },
+        transport_fingerprint: match req.transport_cert_fingerprint.as_deref() {
+            Some(value) => Some(parse_transport_fingerprint(value)?),
+            None => None,
+        },
+    })
+}
+
+fn peer_entry_from_request(
+    req: &freeq_api::models::AddPeerRequest,
+) -> Result<freeq_auth::registry::PeerEntry> {
+    Ok(freeq_auth::registry::PeerEntry {
+        name: req.name.clone(),
+        identity_pubkey: decode_base64(&req.public_key)?,
+        kem_pubkey: decode_base64(&req.kem_key)?,
+        endpoint: req.endpoint.clone(),
+        allowed_ips: req
+            .allowed_ips
+            .iter()
+            .map(|prefix| prefix.parse())
+            .collect::<std::result::Result<Vec<ipnetwork::IpNetwork>, _>>()?,
+    })
+}
+
+fn peer_summary_from_request(
+    req: &freeq_api::models::AddPeerRequest,
+) -> freeq_api::models::PeerSummary {
+    freeq_api::models::PeerSummary {
+        name: req.name.clone(),
+        endpoint: req.endpoint.clone(),
+        allowed_ips: req.allowed_ips.clone(),
+        connected: false,
+        last_handshake: None,
+    }
 }
 
 fn decode_base64(value: &str) -> Result<Vec<u8>> {

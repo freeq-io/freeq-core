@@ -14,6 +14,7 @@ rust-version.workspace = true
 [dependencies]
 freeq-config = { path = "../freeq-config" }
 freeq-auth   = { path = "../freeq-auth" }
+freeq-crypto = { path = "../freeq-crypto" }
 
 axum        = { workspace = true }
 tower       = { workspace = true, features = ["util"] }
@@ -26,3 +27,6 @@ thiserror   = { workspace = true }
 anyhow      = { workspace = true }
 uuid        = { workspace = true }
 chrono      = { workspace = true }
+base64      = { workspace = true }
+ipnetwork   = { workspace = true }
+rand        = { workspace = true }

@@ -19,7 +19,7 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use freeq_api::models::AddPeerRequest;
+use freeq_api::models::{AddPeerRequest, PeerSummary, StatusResponse};
 use serde::Deserialize;
 use std::io::Read;
 
@@ -80,6 +80,8 @@ enum PeerAction {
         #[arg(long)]
         endpoint: Option<String>,
         #[arg(long)]
+        transport_cert_fingerprint: Option<String>,
+        #[arg(long)]
         allowed_ips: Vec<String>,
         #[arg(
             long,
@@ -120,8 +122,17 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Status => {
-            // TODO(v0.1): GET {api}/v1/status and pretty-print
-            println!("freeq status — not yet implemented");
+            let status: StatusResponse = api_get(&cli.api, "/v1/status").await?;
+            println!(
+                "{} uptime={}s peers={} tunnels={} kem={} sign={} bulk={}",
+                status.name,
+                status.uptime_secs,
+                status.peer_count,
+                status.tunnel_count,
+                status.kem_algorithm,
+                status.sign_algorithm,
+                status.bulk_algorithm
+            );
         }
         Commands::Init { config: _, name: _ } => {
             // TODO(v0.1): generate identity keypair, write config
@@ -131,6 +142,7 @@ async fn main() -> Result<()> {
             PeerAction::Add {
                 name,
                 endpoint,
+                transport_cert_fingerprint,
                 allowed_ips,
                 stdin,
             } => {
@@ -144,15 +156,32 @@ async fn main() -> Result<()> {
                     public_key: keys.public_key,
                     kem_key: keys.kem_key,
                     endpoint,
+                    transport_cert_fingerprint,
                     allowed_ips,
                 };
+                let peer: PeerSummary = api_post(&cli.api, "/v1/peers", &_request).await?;
                 println!(
-                    "freeq peer add for '{name}' is prepared securely, but peer creation is not implemented yet"
+                    "added peer '{}' endpoint={} routes={}",
+                    peer.name,
+                    peer.endpoint.as_deref().unwrap_or("passive"),
+                    peer.allowed_ips.join(",")
                 );
             }
-            _ => {
-                // TODO(v0.1): dispatch remaining peer API handlers
-                println!("freeq peer — not yet implemented");
+            PeerAction::List => {
+                let peers: Vec<PeerSummary> = api_get(&cli.api, "/v1/peers").await?;
+                for peer in peers {
+                    println!(
+                        "{} connected={} endpoint={} allowed_ips={}",
+                        peer.name,
+                        peer.connected,
+                        peer.endpoint.as_deref().unwrap_or("passive"),
+                        peer.allowed_ips.join(",")
+                    );
+                }
+            }
+            PeerAction::Remove { name } => {
+                api_delete(&cli.api, &format!("/v1/peers/{name}")).await?;
+                println!("removed peer '{name}'");
             }
         },
         Commands::Key { action: _ } => {
@@ -164,6 +193,67 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn api_get<T>(api_base: &str, path: &str) -> Result<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("{}{}", api_base.trim_end_matches('/'), path))
+        .send()
+        .await
+        .context("failed to contact local freeqd API")?;
+    parse_api_response(response).await
+}
+
+async fn api_post<T, B>(api_base: &str, path: &str, body: &B) -> Result<T>
+where
+    T: serde::de::DeserializeOwned,
+    B: serde::Serialize + ?Sized,
+{
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("{}{}", api_base.trim_end_matches('/'), path))
+        .json(body)
+        .send()
+        .await
+        .context("failed to contact local freeqd API")?;
+    parse_api_response(response).await
+}
+
+async fn api_delete(api_base: &str, path: &str) -> Result<()> {
+    let client = reqwest::Client::new();
+    let response = client
+        .delete(format!("{}{}", api_base.trim_end_matches('/'), path))
+        .send()
+        .await
+        .context("failed to contact local freeqd API")?;
+
+    if response.status().is_success() {
+        return Ok(());
+    }
+
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    anyhow::bail!("API request failed with status {}: {}", status, body.trim());
+}
+
+async fn parse_api_response<T>(response: reqwest::Response) -> Result<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("API request failed with status {}: {}", status, body.trim());
+    }
+
+    response
+        .json()
+        .await
+        .context("failed to decode local freeqd API response")
 }
 
 #[derive(Debug, PartialEq, Eq)]

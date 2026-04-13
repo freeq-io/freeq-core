@@ -4,8 +4,9 @@ use crate::models::{AlgorithmResponse, PeerSummary, StatusResponse, TunnelStats}
 use chrono::{TimeZone, Utc};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
+use tokio::sync::{mpsc, oneshot};
 
 const NONE_I64: i64 = -1;
 const NONE_U64: u64 = u64::MAX;
@@ -13,6 +14,30 @@ const MICROS_PER_MILLISECOND: f64 = 1_000.0;
 
 /// Shared API state used by the daemon and request handlers.
 pub type SharedApiState = Arc<ApiState>;
+
+/// Sender used by API handlers to forward mutating control-plane requests into the daemon.
+pub type ControlCommandSender = mpsc::Sender<ControlCommand>;
+
+/// Result type returned from daemon control-plane mutations.
+pub type ControlResult<T> = std::result::Result<T, String>;
+
+/// A mutating control-plane command sent from the API layer to the daemon runtime.
+pub enum ControlCommand {
+    /// Add a new peer to the live daemon state.
+    AddPeer {
+        /// Requested peer parameters.
+        request: crate::models::AddPeerRequest,
+        /// One-shot response channel for the resulting peer summary or failure message.
+        response: oneshot::Sender<ControlResult<PeerSummary>>,
+    },
+    /// Remove a peer from the live daemon state.
+    RemovePeer {
+        /// Name of the peer to remove.
+        name: String,
+        /// One-shot response channel indicating success or a failure message.
+        response: oneshot::Sender<ControlResult<()>>,
+    },
+}
 
 /// In-memory runtime snapshot exposed through API reads.
 pub struct ApiState {
@@ -22,7 +47,8 @@ pub struct ApiState {
     kem_algorithm: String,
     sign_algorithm: String,
     bulk_algorithm: String,
-    peers: HashMap<String, PeerRuntime>,
+    peers: RwLock<HashMap<String, Arc<PeerRuntime>>>,
+    control: RwLock<Option<ControlCommandSender>>,
     counters: RuntimeCounters,
 }
 
@@ -69,31 +95,8 @@ impl ApiState {
         let peers = peers
             .into_iter()
             .map(|peer| {
-                (
-                    peer.name.clone(),
-                    PeerRuntime {
-                        endpoint: peer.endpoint,
-                        allowed_ips: peer.allowed_ips,
-                        connected: AtomicBool::new(peer.connected),
-                        last_handshake_unix_ms: AtomicI64::new(
-                            peer.last_handshake
-                                .as_deref()
-                                .and_then(parse_rfc3339_unix_millis)
-                                .unwrap_or(NONE_I64),
-                        ),
-                        connect_failures: AtomicU64::new(0),
-                        handshake_failures: AtomicU64::new(0),
-                        reconnect_attempts: AtomicU64::new(0),
-                        reconnect_backoff_millis: AtomicU64::new(0),
-                        heartbeat_sent: AtomicU64::new(0),
-                        heartbeat_failures: AtomicU64::new(0),
-                        last_handshake_duration_micros: AtomicU64::new(NONE_U64),
-                        bytes_sent: AtomicU64::new(0),
-                        bytes_received: AtomicU64::new(0),
-                        latency_micros: AtomicU64::new(NONE_U64),
-                        packet_loss_milli_pct: AtomicU64::new(NONE_U64),
-                    },
-                )
+                let name = peer.name.clone();
+                (name, Arc::new(PeerRuntime::from_summary(peer)))
             })
             .collect();
 
@@ -104,7 +107,8 @@ impl ApiState {
             kem_algorithm,
             sign_algorithm,
             bulk_algorithm,
-            peers,
+            peers: RwLock::new(peers),
+            control: RwLock::new(None),
             counters: RuntimeCounters::default(),
         }
     }
@@ -114,6 +118,50 @@ impl ApiState {
         Arc::new(self)
     }
 
+    /// Attach a daemon control-plane sender used by mutating API handlers.
+    pub fn attach_control_plane(&self, sender: ControlCommandSender) {
+        *self.control.write().expect("control lock poisoned") = Some(sender);
+    }
+
+    /// Clone the daemon control-plane sender, if one is attached.
+    pub fn control_plane(&self) -> Option<ControlCommandSender> {
+        self.control
+            .read()
+            .expect("control lock poisoned")
+            .as_ref()
+            .cloned()
+    }
+
+    /// Add a peer to the runtime snapshot.
+    pub fn add_peer(&self, summary: PeerSummary) -> ControlResult<PeerSummary> {
+        let mut peers = self.peers.write().expect("peer registry lock poisoned");
+        if peers.contains_key(&summary.name) {
+            return Err(format!("peer '{}' already exists", summary.name));
+        }
+        peers.insert(
+            summary.name.clone(),
+            Arc::new(PeerRuntime::from_summary(summary.clone())),
+        );
+        Ok(summary)
+    }
+
+    /// Return whether the runtime snapshot already knows about a peer.
+    pub fn has_peer(&self, peer_name: &str) -> bool {
+        self.peers
+            .read()
+            .expect("peer registry lock poisoned")
+            .contains_key(peer_name)
+    }
+
+    /// Remove a peer from the runtime snapshot.
+    pub fn remove_peer(&self, peer_name: &str) -> ControlResult<()> {
+        let mut peers = self.peers.write().expect("peer registry lock poisoned");
+        if peers.remove(peer_name).is_none() {
+            return Err(format!("peer '{peer_name}' does not exist"));
+        }
+        Ok(())
+    }
+
     /// Mark a peer as connected and update their latest handshake time.
     pub fn mark_peer_connected(&self, peer_name: &str) {
         self.record_handshake_success(peer_name, None);
@@ -121,28 +169,28 @@ impl ApiState {
 
     /// Mark a peer as disconnected.
     pub fn mark_peer_disconnected(&self, peer_name: &str) {
-        if let Some(peer) = self.peers.get(peer_name) {
+        if let Some(peer) = self.peer(peer_name) {
             peer.connected.store(false, Ordering::Relaxed);
         }
     }
 
     /// Increment transmitted byte counters for a peer tunnel.
     pub fn add_bytes_sent(&self, peer_name: &str, bytes: u64) {
-        if let Some(peer) = self.peers.get(peer_name) {
+        if let Some(peer) = self.peer(peer_name) {
             peer.bytes_sent.fetch_add(bytes, Ordering::Relaxed);
         }
     }
 
     /// Increment received byte counters for a peer tunnel.
     pub fn add_bytes_received(&self, peer_name: &str, bytes: u64) {
-        if let Some(peer) = self.peers.get(peer_name) {
+        if let Some(peer) = self.peer(peer_name) {
             peer.bytes_received.fetch_add(bytes, Ordering::Relaxed);
         }
     }
 
     /// Record a successful handshake and optional duration sample for a peer.
     pub fn record_handshake_success(&self, peer_name: &str, duration_ms: Option<f64>) {
-        let Some(peer) = self.peers.get(peer_name) else {
+        let Some(peer) = self.peer(peer_name) else {
             return;
         };
 
@@ -166,7 +214,7 @@ impl ApiState {
         self.counters
             .outbound_connect_failures
             .fetch_add(1, Ordering::Relaxed);
-        if let Some(peer) = self.peers.get(peer_name) {
+        if let Some(peer) = self.peer(peer_name) {
             peer.connect_failures.fetch_add(1, Ordering::Relaxed);
             peer.connected.store(false, Ordering::Relaxed);
         }
@@ -185,7 +233,7 @@ impl ApiState {
         }
 
         if let Some(peer_name) = peer_name {
-            if let Some(peer) = self.peers.get(peer_name) {
+            if let Some(peer) = self.peer(peer_name) {
                 peer.handshake_failures.fetch_add(1, Ordering::Relaxed);
                 peer.connected.store(false, Ordering::Relaxed);
             }
@@ -229,7 +277,7 @@ impl ApiState {
 
     /// Record a scheduled reconnect attempt for a peer.
     pub fn record_reconnect_scheduled(&self, peer_name: &str, backoff: std::time::Duration) {
-        if let Some(peer) = self.peers.get(peer_name) {
+        if let Some(peer) = self.peer(peer_name) {
             peer.reconnect_attempts.fetch_add(1, Ordering::Relaxed);
             peer.reconnect_backoff_millis.store(
                 backoff.as_millis().min(u128::from(u64::MAX)) as u64,
@@ -240,20 +288,21 @@ impl ApiState {
 
     /// Record a successful heartbeat send for a peer.
     pub fn record_heartbeat_sent(&self, peer_name: &str) {
-        if let Some(peer) = self.peers.get(peer_name) {
+        if let Some(peer) = self.peer(peer_name) {
             peer.heartbeat_sent.fetch_add(1, Ordering::Relaxed);
         }
     }
 
     /// Record a heartbeat send failure for a peer.
     pub fn record_heartbeat_failure(&self, peer_name: &str) {
-        if let Some(peer) = self.peers.get(peer_name) {
+        if let Some(peer) = self.peer(peer_name) {
             peer.heartbeat_failures.fetch_add(1, Ordering::Relaxed);
         }
     }
 
     /// Build the current `/v1/status` response.
     pub fn status_response(&self) -> StatusResponse {
+        let peers = self.peer_snapshot();
         StatusResponse {
             name: self.node_name.clone(),
             version: self.version.clone(),
@@ -261,9 +310,8 @@ impl ApiState {
             kem_algorithm: self.kem_algorithm.clone(),
             sign_algorithm: self.sign_algorithm.clone(),
             bulk_algorithm: self.bulk_algorithm.clone(),
-            peer_count: self.peers.len(),
-            tunnel_count: self
-                .peers
+            peer_count: peers.len(),
+            tunnel_count: peers
                 .values()
                 .filter(|peer| peer.connected.load(Ordering::Relaxed))
                 .count(),
@@ -281,8 +329,8 @@ impl ApiState {
 
     /// Build the current `/v1/peers` response.
     pub fn peer_summaries(&self) -> Vec<PeerSummary> {
-        let mut peers: Vec<_> = self
-            .peers
+        let peers = self.peer_snapshot();
+        let mut peers: Vec<_> = peers
             .iter()
             .map(|(name, peer)| PeerSummary {
                 name: name.clone(),
@@ -298,8 +346,8 @@ impl ApiState {
 
     /// Build the current `/v1/tunnels` response.
     pub fn tunnel_stats(&self) -> Vec<TunnelStats> {
-        let mut tunnels: Vec<_> = self
-            .peers
+        let peers = self.peer_snapshot();
+        let mut tunnels: Vec<_> = peers
             .iter()
             .filter_map(|(peer_name, peer)| {
                 let bytes_sent = peer.bytes_sent.load(Ordering::Relaxed);
@@ -332,8 +380,8 @@ impl ApiState {
 
     /// Build a Prometheus-compatible text exposition snapshot.
     pub fn metrics_exposition(&self) -> String {
-        let connected_peers = self
-            .peers
+        let peers = self.peer_snapshot();
+        let connected_peers = peers
             .values()
             .filter(|peer| peer.connected.load(Ordering::Relaxed))
             .count();
@@ -344,7 +392,7 @@ impl ApiState {
             format!("freeq_uptime_seconds {}", self.start_time.elapsed().as_secs()),
             "# HELP freeq_configured_peers Total configured peers.".to_string(),
             "# TYPE freeq_configured_peers gauge".to_string(),
-            format!("freeq_configured_peers {}", self.peers.len()),
+            format!("freeq_configured_peers {}", peers.len()),
             "# HELP freeq_connected_peers Peers with an active tunnel.".to_string(),
             "# TYPE freeq_connected_peers gauge".to_string(),
             format!("freeq_connected_peers {}", connected_peers),
@@ -446,7 +494,7 @@ impl ApiState {
             "# TYPE freeq_peer_last_handshake_duration_ms gauge".to_string(),
         ];
 
-        let mut peers: Vec<_> = self.peers.iter().collect();
+        let mut peers: Vec<_> = peers.iter().collect();
         peers.sort_by(|(left, _), (right, _)| left.cmp(right));
         for (peer_name, peer) in peers {
             lines.push(format!(
@@ -508,6 +556,48 @@ impl ApiState {
 
         lines.push(String::new());
         lines.join("\n")
+    }
+
+    fn peer(&self, peer_name: &str) -> Option<Arc<PeerRuntime>> {
+        self.peers
+            .read()
+            .expect("peer registry lock poisoned")
+            .get(peer_name)
+            .cloned()
+    }
+
+    fn peer_snapshot(&self) -> HashMap<String, Arc<PeerRuntime>> {
+        self.peers
+            .read()
+            .expect("peer registry lock poisoned")
+            .clone()
+    }
+}
+
+impl PeerRuntime {
+    fn from_summary(peer: PeerSummary) -> Self {
+        Self {
+            endpoint: peer.endpoint,
+            allowed_ips: peer.allowed_ips,
+            connected: AtomicBool::new(peer.connected),
+            last_handshake_unix_ms: AtomicI64::new(
+                peer.last_handshake
+                    .as_deref()
+                    .and_then(parse_rfc3339_unix_millis)
+                    .unwrap_or(NONE_I64),
+            ),
+            connect_failures: AtomicU64::new(0),
+            handshake_failures: AtomicU64::new(0),
+            reconnect_attempts: AtomicU64::new(0),
+            reconnect_backoff_millis: AtomicU64::new(0),
+            heartbeat_sent: AtomicU64::new(0),
+            heartbeat_failures: AtomicU64::new(0),
+            last_handshake_duration_micros: AtomicU64::new(NONE_U64),
+            bytes_sent: AtomicU64::new(0),
+            bytes_received: AtomicU64::new(0),
+            latency_micros: AtomicU64::new(NONE_U64),
+            packet_loss_milli_pct: AtomicU64::new(NONE_U64),
+        }
     }
 }
 

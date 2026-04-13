@@ -24,7 +24,7 @@ pub struct StatusResponse {
 }
 
 /// A peer summary returned from `GET /v1/peers`.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerSummary {
     /// Peer name.
     pub name: String,
@@ -39,7 +39,7 @@ pub struct PeerSummary {
 }
 
 /// Request body for `POST /v1/peers`.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddPeerRequest {
     /// Human-readable peer name.
     pub name: String,
@@ -49,8 +49,68 @@ pub struct AddPeerRequest {
     pub kem_key: String,
     /// Optional endpoint address.
     pub endpoint: Option<String>,
+    /// Optional SHA-256 fingerprint of the peer's QUIC transport certificate, hex-encoded.
+    pub transport_cert_fingerprint: Option<String>,
     /// IP prefixes to route through this peer.
     pub allowed_ips: Vec<String>,
+}
+
+impl AddPeerRequest {
+    /// Validate that the request is internally consistent and cryptographically well-formed.
+    pub fn validate(&self) -> crate::Result<()> {
+        use base64::Engine as _;
+
+        if self.name.trim().is_empty() {
+            return Err(crate::ApiError::BadRequest(
+                "peer name must not be empty".into(),
+            ));
+        }
+
+        let public_key = base64::engine::general_purpose::STANDARD
+            .decode(self.public_key.trim())
+            .map_err(|_| {
+                crate::ApiError::BadRequest("peer public_key must be valid base64".into())
+            })?;
+        freeq_crypto::sign::IdentityPublicKey::from_bytes(&public_key)
+            .map_err(|e| crate::ApiError::BadRequest(format!("peer public_key is invalid: {e}")))?;
+
+        let kem_key = base64::engine::general_purpose::STANDARD
+            .decode(self.kem_key.trim())
+            .map_err(|_| crate::ApiError::BadRequest("peer kem_key must be valid base64".into()))?;
+        freeq_crypto::kem::HybridPublicKey::from_bytes(&kem_key)
+            .map_err(|e| crate::ApiError::BadRequest(format!("peer kem_key is invalid: {e}")))?;
+
+        if let Some(endpoint) = &self.endpoint {
+            if endpoint.trim().is_empty() {
+                return Err(crate::ApiError::BadRequest(
+                    "peer endpoint must not be empty when provided".into(),
+                ));
+            }
+            let Some(fingerprint) = &self.transport_cert_fingerprint else {
+                return Err(crate::ApiError::BadRequest(
+                    "peer transport_cert_fingerprint is required when endpoint is set".into(),
+                ));
+            };
+            let fingerprint = fingerprint.trim();
+            if fingerprint.len() != 64 || !fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                return Err(crate::ApiError::BadRequest(
+                    "peer transport_cert_fingerprint must be a 64-character hex SHA-256 digest"
+                        .into(),
+                ));
+            }
+        }
+
+        for prefix in &self.allowed_ips {
+            prefix.parse::<ipnetwork::IpNetwork>().map_err(|e| {
+                crate::ApiError::BadRequest(format!(
+                    "peer allowed_ips entry '{prefix}' is invalid: {e}"
+                ))
+            })?;
+        }
+
+        Ok(())
+    }
 }
 
 /// Request body for `POST /v1/algorithm`.

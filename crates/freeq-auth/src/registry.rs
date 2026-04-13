@@ -67,6 +67,20 @@ impl PeerRegistry {
         Ok(())
     }
 
+    /// Return whether a peer name is already present in the registry.
+    pub fn contains_peer(&self, peer_name: &str) -> bool {
+        self.peers_by_name.contains_key(peer_name)
+    }
+
+    /// Remove a peer from the registry by name.
+    pub fn remove_peer(&mut self, peer_name: &str) -> bool {
+        let Some(previous) = self.peers_by_name.remove(peer_name) else {
+            return false;
+        };
+        self.names_by_fingerprint.remove(&previous.fingerprint);
+        true
+    }
+
     /// Look up a peer by their ML-DSA-65 public key fingerprint.
     pub fn lookup_by_key(&self, fingerprint: &[u8]) -> Option<&PeerEntry> {
         let fingerprint = <[u8; FINGERPRINT_LEN]>::try_from(fingerprint).ok()?;

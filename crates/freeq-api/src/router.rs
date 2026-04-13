@@ -70,7 +70,10 @@ pub fn build_router(state: crate::state::SharedApiState) -> Router {
 #[cfg(test)]
 mod tests {
     use super::{build_router, enforce_api_rate_limit, ApiRateLimiter};
-    use crate::{models::PeerSummary, state::ApiState};
+    use crate::{
+        models::{AddPeerRequest, PeerSummary},
+        state::{ApiState, ControlCommand},
+    };
     use axum::{
         body::{to_bytes, Body},
         http::{Request, StatusCode},
@@ -79,6 +82,7 @@ mod tests {
         Router,
     };
     use std::sync::Arc;
+    use tokio::sync::mpsc;
     use tower::util::ServiceExt;
 
     fn test_state() -> crate::state::SharedApiState {
@@ -97,6 +101,28 @@ mod tests {
             }],
         )
         .shared()
+    }
+
+    fn valid_add_peer_request(name: &str) -> AddPeerRequest {
+        use base64::Engine as _;
+
+        let mut rng = rand::thread_rng();
+        let (identity, public_key) =
+            freeq_crypto::sign::IdentityKeypair::generate(&mut rng).expect("identity keypair");
+        let _ = identity;
+        let (_kem_secret, kem_public) =
+            freeq_crypto::kem::HybridSecretKey::generate(&mut rng).expect("hybrid KEM keypair");
+
+        AddPeerRequest {
+            name: name.into(),
+            public_key: base64::engine::general_purpose::STANDARD.encode(public_key.to_bytes()),
+            kem_key: base64::engine::general_purpose::STANDARD.encode(kem_public.to_bytes()),
+            endpoint: Some("127.0.0.1:51820".into()),
+            transport_cert_fingerprint: Some(
+                "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff".into(),
+            ),
+            allowed_ips: vec!["10.0.0.3/32".into()],
+        }
     }
 
     async fn read_body(response: axum::response::Response) -> String {
@@ -211,6 +237,65 @@ mod tests {
         assert!(body.contains("\"kem_algorithm\":\"ml-kem-768\""));
         assert!(body.contains("\"sign_algorithm\":\"ml-dsa-65\""));
         assert!(body.contains("\"bulk_algorithm\":\"chacha20-poly1305\""));
+    }
+
+    #[tokio::test]
+    async fn add_and_remove_peer_routes_use_control_plane() {
+        let state = test_state();
+        let (control_tx, mut control_rx) = mpsc::channel(4);
+        state.attach_control_plane(control_tx);
+
+        let responder = tokio::spawn(async move {
+            while let Some(command) = control_rx.recv().await {
+                match command {
+                    ControlCommand::AddPeer { request, response } => {
+                        let _ = response.send(Ok(PeerSummary {
+                            name: request.name,
+                            endpoint: request.endpoint,
+                            allowed_ips: request.allowed_ips,
+                            connected: false,
+                            last_handshake: None,
+                        }));
+                    }
+                    ControlCommand::RemovePeer { response, .. } => {
+                        let _ = response.send(Ok(()));
+                        break;
+                    }
+                }
+            }
+        });
+
+        let app = build_router(state);
+        let add_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/peers")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&valid_add_peer_request("sfo-01"))
+                            .expect("request should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        assert_eq!(add_response.status(), StatusCode::OK);
+
+        let remove_response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/v1/peers/sfo-01")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        assert_eq!(remove_response.status(), StatusCode::OK);
+
+        responder.await.expect("responder should complete");
     }
 
     #[tokio::test]
