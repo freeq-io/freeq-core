@@ -153,4 +153,4 @@ The `freeq-api` crate is licensed under **Apache 2.0** — this is the integrati
 ---
 
 *FreeQ — Quantum-safe networking, in the open.*
-*[getfreeq.io](https://getfreeq.io) · [Discord](https://discord.gg/freeq) · [security@getfreeq.com](mailto:security@getfreeq.com)*
+*[getfreeq.com](https://getfreeq.com) · [Discord](https://discord.gg/freeq) · [security@getfreeq.com](mailto:security@getfreeq.com)*
