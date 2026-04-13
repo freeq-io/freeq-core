@@ -165,11 +165,9 @@ async fn start_runtime(
         }
     }
 
-    let engine = Arc::new(tokio::sync::Mutex::new(
-        freeq_tunnel::forward::TunnelEngine::new(
-            freeq_crypto::agility::detect_bulk_algorithm(),
-            router,
-        ),
+    let engine = Arc::new(freeq_tunnel::forward::TunnelEngine::new(
+        freeq_crypto::agility::detect_bulk_algorithm(),
+        router,
     ));
     let registry = Arc::new(registry);
     let identity = Arc::new(identity);
@@ -223,10 +221,7 @@ async fn start_runtime(
             }
         };
 
-        {
-            let mut engine = engine.lock().await;
-            engine.add_peer(peer.name.clone(), connection, &session_keys);
-        }
+        engine.add_peer(peer.name.clone(), connection, &session_keys);
         api_state.record_handshake_success(
             &peer.name,
             Some(handshake_started.elapsed().as_secs_f64() * 1000.0),
@@ -299,7 +294,7 @@ fn build_api_state(config: &freeq_config::Config) -> freeq_api::state::ApiState 
 }
 
 fn spawn_tun_to_peer_loop(
-    engine: Arc<tokio::sync::Mutex<freeq_tunnel::forward::TunnelEngine>>,
+    engine: Arc<freeq_tunnel::forward::TunnelEngine>,
     tun: Arc<freeq_tunnel::iface::TunInterface>,
     api_state: freeq_api::state::SharedApiState,
 ) -> tokio::task::JoinHandle<()> {
@@ -308,7 +303,6 @@ fn spawn_tun_to_peer_loop(
             match tun.read_packet().await {
                 Ok(packet) => {
                     let packet_len = packet.len() as u64;
-                    let engine = engine.lock().await;
                     match engine.forward_packet(packet).await {
                         Ok(peer_name) => {
                             api_state.add_bytes_sent(&peer_name, packet_len);
@@ -331,16 +325,13 @@ fn spawn_tun_to_peer_loop(
 
 fn spawn_peer_to_tun_loop(
     peer_name: String,
-    engine: Arc<tokio::sync::Mutex<freeq_tunnel::forward::TunnelEngine>>,
+    engine: Arc<freeq_tunnel::forward::TunnelEngine>,
     tun: Arc<freeq_tunnel::iface::TunInterface>,
     api_state: freeq_api::state::SharedApiState,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
-            let packet = {
-                let engine = engine.lock().await;
-                engine.receive_packet(&peer_name).await
-            };
+            let packet = engine.receive_packet(&peer_name).await;
 
             match packet {
                 Ok(packet) => {
@@ -368,7 +359,7 @@ fn spawn_accept_loop(
     endpoint: freeq_transport::endpoint::Endpoint,
     identity: Arc<freeq_crypto::sign::IdentityKeypair>,
     registry: Arc<freeq_auth::registry::PeerRegistry>,
-    engine: Arc<tokio::sync::Mutex<freeq_tunnel::forward::TunnelEngine>>,
+    engine: Arc<freeq_tunnel::forward::TunnelEngine>,
     tun: Arc<freeq_tunnel::iface::TunInterface>,
     api_state: freeq_api::state::SharedApiState,
 ) -> tokio::task::JoinHandle<()> {
@@ -386,10 +377,7 @@ fn spawn_accept_loop(
 
             match run_responder_handshake(&identity, &registry, connection.as_ref()).await {
                 Ok((peer_name, session_keys)) => {
-                    {
-                        let mut engine = engine.lock().await;
-                        engine.add_peer(peer_name.clone(), connection, &session_keys);
-                    }
+                    engine.add_peer(peer_name.clone(), connection, &session_keys);
                     api_state.record_handshake_success(
                         &peer_name,
                         Some(handshake_started.elapsed().as_secs_f64() * 1000.0),

@@ -5,15 +5,15 @@ use bytes::Bytes;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 const NONCE_COUNTER_LEN: usize = 8;
 
 /// Forwards packets using the configured router, transport connection, and session keys.
 pub struct TunnelEngine {
     algorithm: freeq_crypto::agility::BulkAlgorithm,
-    router: crate::router::Router,
-    peers: HashMap<String, PeerSession>,
+    router: RwLock<crate::router::Router>,
+    peers: RwLock<HashMap<String, Arc<PeerSession>>>,
 }
 
 struct PeerSession {
@@ -31,38 +31,50 @@ impl TunnelEngine {
     ) -> Self {
         Self {
             algorithm,
-            router,
-            peers: HashMap::new(),
+            router: RwLock::new(router),
+            peers: RwLock::new(HashMap::new()),
         }
     }
 
     /// Register or replace a peer session used for routing and encryption.
     pub fn add_peer(
-        &mut self,
+        &self,
         peer_id: String,
         connection: Arc<freeq_transport::connection::PeerConnection>,
         session_keys: &freeq_auth::handshake::SessionKeys,
     ) {
-        self.peers.insert(
-            peer_id,
-            PeerSession {
-                connection,
-                outbound_key: session_keys.outbound,
-                inbound_key: session_keys.inbound,
-                outbound_nonce: AtomicU64::new(0),
-            },
-        );
+        self.peers
+            .write()
+            .expect("peer registry lock poisoned")
+            .insert(
+                peer_id,
+                Arc::new(PeerSession {
+                    connection,
+                    outbound_key: session_keys.outbound,
+                    inbound_key: session_keys.inbound,
+                    outbound_nonce: AtomicU64::new(0),
+                }),
+            );
     }
 
     /// Remove an active peer session.
-    pub fn remove_peer(&mut self, peer_id: &str) {
-        self.peers.remove(peer_id);
-        self.router.remove_peer(peer_id);
+    pub fn remove_peer(&self, peer_id: &str) {
+        self.peers
+            .write()
+            .expect("peer registry lock poisoned")
+            .remove(peer_id);
+        self.router
+            .write()
+            .expect("router lock poisoned")
+            .remove_peer(peer_id);
     }
 
     /// Add a routing prefix for a peer.
-    pub fn add_route(&mut self, prefix: ipnetwork::IpNetwork, peer_id: String) {
-        self.router.insert(prefix, peer_id);
+    pub fn add_route(&self, prefix: ipnetwork::IpNetwork, peer_id: String) {
+        self.router
+            .write()
+            .expect("router lock poisoned")
+            .insert(prefix, peer_id);
     }
 
     /// Encrypt and forward a raw IP packet to its routed peer.
@@ -70,12 +82,18 @@ impl TunnelEngine {
         let dest = destination_ip(&packet)?;
         let peer_id = self
             .router
+            .read()
+            .expect("router lock poisoned")
             .lookup(dest)
+            .map(str::to_owned)
             .ok_or(TunnelError::NoRoute { dest })?;
         let peer = self
             .peers
-            .get(peer_id)
-            .ok_or_else(|| TunnelError::UnknownPeer(peer_id.to_string()))?;
+            .read()
+            .expect("peer registry lock poisoned")
+            .get(&peer_id)
+            .cloned()
+            .ok_or_else(|| TunnelError::UnknownPeer(peer_id.clone()))?;
 
         let nonce = next_nonce(&peer.outbound_nonce);
         let ciphertext =
@@ -85,14 +103,17 @@ impl TunnelEngine {
         frame.extend_from_slice(&ciphertext);
         peer.connection.send(Bytes::from(frame)).await?;
 
-        Ok(peer_id.to_string())
+        Ok(peer_id)
     }
 
     /// Receive and decrypt the next packet from `peer_id`.
     pub async fn receive_packet(&self, peer_id: &str) -> Result<Bytes> {
         let peer = self
             .peers
+            .read()
+            .expect("peer registry lock poisoned")
             .get(peer_id)
+            .cloned()
             .ok_or_else(|| TunnelError::UnknownPeer(peer_id.to_string()))?;
         let frame = peer.connection.recv().await?;
 
@@ -215,13 +236,13 @@ mod tests {
 
         let mut client_router = crate::router::Router::new();
         client_router.insert("10.0.0.0/24".parse().expect("prefix"), "peer-a".into());
-        let mut client_engine = TunnelEngine::new(
+        let client_engine = TunnelEngine::new(
             freeq_crypto::agility::BulkAlgorithm::ChaCha20Poly1305,
             client_router,
         );
         client_engine.add_peer("peer-a".into(), client_conn.clone(), &sample_session_keys());
 
-        let mut server_engine = TunnelEngine::new(
+        let server_engine = TunnelEngine::new(
             freeq_crypto::agility::BulkAlgorithm::ChaCha20Poly1305,
             crate::router::Router::new(),
         );
