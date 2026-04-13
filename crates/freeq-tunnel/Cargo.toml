@@ -22,14 +22,11 @@ tracing     = { workspace = true }
 thiserror   = { workspace = true }
 anyhow      = { workspace = true }
 ipnetwork   = { workspace = true }
+tun         = "0.8"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # io_uring zero-copy I/O (v0.2)
 # tokio-uring = "0.4"  # enable in v0.2
-
-[target.'cfg(target_os = "macos")'.dependencies]
-# macOS utun interface (no additional deps needed)
-libc        = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # WinTUN driver integration (v0.3)
