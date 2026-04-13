@@ -16,7 +16,7 @@ freeq-config = { path = "../freeq-config" }
 freeq-auth   = { path = "../freeq-auth" }
 
 axum        = { workspace = true }
-tower       = { workspace = true }
+tower       = { workspace = true, features = ["util"] }
 tower-http  = { workspace = true }
 tokio       = { workspace = true }
 serde       = { workspace = true }
