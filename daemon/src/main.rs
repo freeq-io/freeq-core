@@ -6,6 +6,7 @@ use clap::Parser;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 /// freeqd — FreeQ post-quantum overlay network daemon.
 #[derive(Parser, Debug)]
@@ -195,14 +196,35 @@ async fn start_runtime(
             parse_transport_fingerprint(peer.transport_cert_fingerprint.as_deref().ok_or_else(
                 || anyhow::anyhow!("missing transport fingerprint for {}", peer.name),
             )?)?;
-        let peer_addr = resolve_peer_endpoint(endpoint_value).await?;
-        let connection = Arc::new(
-            endpoint
-                .connect(&transport_fingerprint, peer_addr)
-                .await
-                .with_context(|| format!("failed to connect to peer {}", peer.name))?,
-        );
-        let session_keys = run_initiator_handshake(&identity, peer, connection.as_ref()).await?;
+        let handshake_started = Instant::now();
+        let peer_addr = match resolve_peer_endpoint(endpoint_value).await {
+            Ok(peer_addr) => peer_addr,
+            Err(err) => {
+                tracing::warn!(peer = %peer.name, %err, "failed to resolve peer endpoint");
+                let mut state = api_state.write().await;
+                state.record_outbound_connect_failure(&peer.name);
+                continue;
+            }
+        };
+        let connection = match endpoint.connect(&transport_fingerprint, peer_addr).await {
+            Ok(connection) => Arc::new(connection),
+            Err(err) => {
+                tracing::warn!(peer = %peer.name, %err, "failed to connect to peer");
+                let mut state = api_state.write().await;
+                state.record_outbound_connect_failure(&peer.name);
+                continue;
+            }
+        };
+        let session_keys = match run_initiator_handshake(&identity, peer, connection.as_ref()).await
+        {
+            Ok(session_keys) => session_keys,
+            Err(err) => {
+                tracing::warn!(peer = %peer.name, %err, "outbound peer handshake failed");
+                let mut state = api_state.write().await;
+                state.record_handshake_failure(Some(&peer.name), false);
+                continue;
+            }
+        };
 
         {
             let mut engine = engine.lock().await;
@@ -210,7 +232,10 @@ async fn start_runtime(
         }
         {
             let mut state = api_state.write().await;
-            state.mark_peer_connected(&peer.name);
+            state.record_handshake_success(
+                &peer.name,
+                Some(handshake_started.elapsed().as_secs_f64() * 1000.0),
+            );
         }
 
         active_peers.push(peer.name.clone());
@@ -297,11 +322,15 @@ fn spawn_tun_to_peer_loop(
                         }
                         Err(err) => {
                             tracing::warn!(%err, "failed to forward packet from TUN");
+                            let mut state = api_state.write().await;
+                            state.record_packet_forward_failure();
                         }
                     }
                 }
                 Err(err) => {
                     tracing::warn!(%err, "failed to read from TUN");
+                    let mut state = api_state.write().await;
+                    state.record_tun_read_error();
                     break;
                 }
             }
@@ -328,6 +357,7 @@ fn spawn_peer_to_tun_loop(
                     if let Err(err) = tun.write_packet(packet).await {
                         tracing::warn!(peer = %peer_name, %err, "failed to write peer packet to TUN");
                         let mut state = api_state.write().await;
+                        state.record_tun_write_error();
                         state.mark_peer_disconnected(&peer_name);
                         break;
                     }
@@ -337,6 +367,7 @@ fn spawn_peer_to_tun_loop(
                 Err(err) => {
                     tracing::warn!(peer = %peer_name, %err, "failed to receive peer packet");
                     let mut state = api_state.write().await;
+                    state.record_peer_receive_error();
                     state.mark_peer_disconnected(&peer_name);
                     break;
                 }
@@ -359,9 +390,12 @@ fn spawn_accept_loop(
                 Ok(connection) => Arc::new(connection),
                 Err(err) => {
                     tracing::warn!(%err, "failed to accept incoming connection");
+                    let mut state = api_state.write().await;
+                    state.record_incoming_accept_failure();
                     continue;
                 }
             };
+            let handshake_started = Instant::now();
 
             match run_responder_handshake(&identity, &registry, connection.as_ref()).await {
                 Ok((peer_name, session_keys)) => {
@@ -371,7 +405,10 @@ fn spawn_accept_loop(
                     }
                     {
                         let mut state = api_state.write().await;
-                        state.mark_peer_connected(&peer_name);
+                        state.record_handshake_success(
+                            &peer_name,
+                            Some(handshake_started.elapsed().as_secs_f64() * 1000.0),
+                        );
                     }
 
                     std::mem::drop(spawn_peer_to_tun_loop(
@@ -383,6 +420,8 @@ fn spawn_accept_loop(
                 }
                 Err(err) => {
                     tracing::warn!(%err, "incoming peer handshake failed");
+                    let mut state = api_state.write().await;
+                    state.record_handshake_failure(None, true);
                 }
             }
         }
