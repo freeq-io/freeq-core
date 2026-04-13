@@ -22,6 +22,14 @@ pub enum TransportError {
     #[error("connection lost: {0}")]
     ConnectionLost(String),
 
+    /// An async transport operation exceeded its deadline.
+    #[error("transport operation timed out")]
+    Timeout,
+
+    /// The connection pool is at capacity and cannot open another peer connection.
+    #[error("connection pool is full")]
+    PoolFull,
+
     /// TLS/crypto configuration error.
     #[error("TLS configuration error: {0}")]
     Tls(String),
