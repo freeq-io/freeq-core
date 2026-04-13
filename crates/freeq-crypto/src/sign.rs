@@ -40,7 +40,12 @@ impl IdentityKeypair {
 
     /// Sign a handshake challenge: `sign(nonce || kem_pubkey)`.
     pub fn sign_challenge(&self, nonce: &[u8], kem_pubkey: &[u8]) -> Result<Signature> {
-        let signature = self.inner.sign(&challenge_bytes(nonce, kem_pubkey));
+        self.sign_message(&challenge_bytes(nonce, kem_pubkey))
+    }
+
+    /// Sign an arbitrary message with the long-term identity key.
+    pub fn sign_message(&self, msg: &[u8]) -> Result<Signature> {
+        let signature = self.inner.sign(msg);
         Ok(Signature(signature.encode().to_vec()))
     }
 
@@ -93,17 +98,17 @@ impl IdentityPublicKey {
     /// Verify a handshake challenge signature from a remote peer.
     ///
     /// Returns `Ok(())` on success, `Err(CryptoError::SignatureInvalid)` on failure.
-    pub fn verify_challenge(
-        &self,
-        nonce: &[u8],
-        kem_pubkey: &[u8],
-        sig: &Signature,
-    ) -> Result<()> {
+    pub fn verify_challenge(&self, nonce: &[u8], kem_pubkey: &[u8], sig: &Signature) -> Result<()> {
+        self.verify_message(&challenge_bytes(nonce, kem_pubkey), sig)
+    }
+
+    /// Verify a signature over an arbitrary message.
+    pub fn verify_message(&self, msg: &[u8], sig: &Signature) -> Result<()> {
         let signature = ml_dsa::Signature::<MlDsa65>::try_from(sig.0.as_slice())
             .map_err(|_| CryptoError::SignatureInvalid)?;
 
         self.inner
-            .verify(&challenge_bytes(nonce, kem_pubkey), &signature)
+            .verify(msg, &signature)
             .map_err(|_| CryptoError::SignatureInvalid)
     }
 
@@ -169,6 +174,19 @@ mod tests {
 
         restored_public_key
             .verify_challenge(nonce, kem_pubkey, &signature)
+            .expect("signature verification");
+    }
+
+    #[test]
+    fn arbitrary_message_signatures_verify() {
+        let mut rng = rand::thread_rng();
+        let (keypair, public_key) = IdentityKeypair::generate(&mut rng).expect("key generation");
+        let msg = b"registry payload";
+
+        let signature = keypair.sign_message(msg).expect("signature");
+
+        public_key
+            .verify_message(msg, &signature)
             .expect("signature verification");
     }
 }
