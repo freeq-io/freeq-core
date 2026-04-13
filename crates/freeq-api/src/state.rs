@@ -37,6 +37,13 @@ pub enum ControlCommand {
         /// One-shot response channel indicating success or a failure message.
         response: oneshot::Sender<ControlResult<()>>,
     },
+    /// Trigger a fresh handshake for one peer or all peers.
+    RotatePeerKeys {
+        /// Specific peer name to rotate, or `None` for all peers.
+        peer_name: Option<String>,
+        /// One-shot response channel carrying the list of peers scheduled for rotation.
+        response: oneshot::Sender<ControlResult<Vec<String>>>,
+    },
 }
 
 /// In-memory runtime snapshot exposed through API reads.

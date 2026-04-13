@@ -184,9 +184,28 @@ async fn main() -> Result<()> {
                 println!("removed peer '{name}'");
             }
         },
-        Commands::Key { action: _ } => {
-            println!("freeq key — not yet implemented");
-        }
+        Commands::Key { action } => match action {
+            KeyAction::Rotate { peer } => {
+                if let Some(peer) = peer {
+                    let rotated: Vec<String> =
+                        api_post_without_body(&cli.api, &format!("/v1/peers/{peer}/rotate"))
+                            .await?;
+                    println!("rotated peer keys for {}", rotated.join(","));
+                } else {
+                    let peers: Vec<PeerSummary> = api_get(&cli.api, "/v1/peers").await?;
+                    let mut rotated = Vec::new();
+                    for peer in peers {
+                        let mut names: Vec<String> = api_post_without_body(
+                            &cli.api,
+                            &format!("/v1/peers/{}/rotate", peer.name),
+                        )
+                        .await?;
+                        rotated.append(&mut names);
+                    }
+                    println!("rotated peer keys for {}", rotated.join(","));
+                }
+            }
+        },
         Commands::Algorithm { action: _ } => {
             println!("freeq algorithm — not yet implemented");
         }
@@ -238,6 +257,19 @@ async fn api_delete(api_base: &str, path: &str) -> Result<()> {
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     anyhow::bail!("API request failed with status {}: {}", status, body.trim());
+}
+
+async fn api_post_without_body<T>(api_base: &str, path: &str) -> Result<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("{}{}", api_base.trim_end_matches('/'), path))
+        .send()
+        .await
+        .context("failed to contact local freeqd API")?;
+    parse_api_response(response).await
 }
 
 async fn parse_api_response<T>(response: reqwest::Response) -> Result<T>

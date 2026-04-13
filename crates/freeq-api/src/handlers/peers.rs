@@ -66,8 +66,27 @@ pub async fn remove_peer(
 }
 
 /// Rotate the session keys for a specific peer.
-pub async fn rotate_keys(Path(_name): Path<String>) -> Result<()> {
-    Err(ApiError::NotImplemented(
-        "peer key rotation is not implemented yet".into(),
-    ))
+pub async fn rotate_keys(
+    State(state): State<crate::state::SharedApiState>,
+    Path(name): Path<String>,
+) -> Result<Json<Vec<String>>> {
+    let control = state.control_plane().ok_or_else(|| {
+        ApiError::NotImplemented("daemon peer mutation control plane is not available".into())
+    })?;
+    let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+    control
+        .send(crate::state::ControlCommand::RotatePeerKeys {
+            peer_name: Some(name),
+            response: response_tx,
+        })
+        .await
+        .map_err(|_| ApiError::Internal("daemon peer control plane is unavailable".into()))?;
+
+    let peers = response_rx
+        .await
+        .map_err(|_| {
+            ApiError::Internal("daemon did not respond to peer key rotation request".into())
+        })?
+        .map_err(ApiError::NotFound)?;
+    Ok(Json(peers))
 }

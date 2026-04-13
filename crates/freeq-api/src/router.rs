@@ -261,6 +261,9 @@ mod tests {
                         let _ = response.send(Ok(()));
                         break;
                     }
+                    ControlCommand::RotatePeerKeys { response, .. } => {
+                        let _ = response.send(Ok(Vec::new()));
+                    }
                 }
             }
         });
@@ -294,6 +297,44 @@ mod tests {
             .await
             .expect("router should respond");
         assert_eq!(remove_response.status(), StatusCode::OK);
+
+        responder.await.expect("responder should complete");
+    }
+
+    #[tokio::test]
+    async fn rotate_peer_route_uses_control_plane() {
+        let state = test_state();
+        let (control_tx, mut control_rx) = mpsc::channel(4);
+        state.attach_control_plane(control_tx);
+
+        let responder = tokio::spawn(async move {
+            while let Some(command) = control_rx.recv().await {
+                if let ControlCommand::RotatePeerKeys {
+                    peer_name,
+                    response,
+                } = command
+                {
+                    let _ = response.send(Ok(vec![peer_name.expect("peer name")]));
+                    break;
+                }
+            }
+        });
+
+        let app = build_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/peers/lon-01/rotate")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = read_body(response).await;
+        assert!(body.contains("lon-01"));
 
         responder.await.expect("responder should complete");
     }

@@ -552,12 +552,16 @@ fn spawn_peer_control_loop(
     api_state: freeq_api::state::SharedApiState,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let mut managed_peers: std::collections::HashMap<String, ManagedPeer> = initial_peers
+            .into_iter()
+            .map(|peer| (peer.config.name.clone(), peer))
+            .collect();
         let mut outbound_supervisors: std::collections::HashMap<
             String,
             tokio::task::JoinHandle<()>,
         > = std::collections::HashMap::new();
 
-        for peer in initial_peers {
+        for peer in managed_peers.values() {
             if let Some(handle) = spawn_outbound_supervisor_for_peer(
                 &peer, &endpoint, &identity, &engine, &tun, &api_state,
             ) {
@@ -582,6 +586,7 @@ fn spawn_peer_control_loop(
                             registry.add_peer(peer_entry_from_request(&request)?)?;
                         }
                         let summary = peer_summary_from_request(&request);
+                        managed_peers.insert(summary.name.clone(), managed_peer.clone());
                         api_state
                             .add_peer(summary.clone())
                             .map_err(anyhow::Error::msg)?;
@@ -611,6 +616,7 @@ fn spawn_peer_control_loop(
                         if let Some(previous) = outbound_supervisors.remove(&name) {
                             previous.abort();
                         }
+                        managed_peers.remove(&name);
                         api_state.remove_peer(&name).map_err(anyhow::Error::msg)?;
                         engine.remove_peer(&name);
                         let removed = registry
@@ -621,6 +627,50 @@ fn spawn_peer_control_loop(
                             anyhow::bail!("peer '{name}' does not exist");
                         }
                         Ok(())
+                    })()
+                    .map_err(|err| err.to_string());
+                    let _ = response.send(result);
+                }
+                freeq_api::state::ControlCommand::RotatePeerKeys {
+                    peer_name,
+                    response,
+                } => {
+                    let result = (|| -> Result<Vec<String>> {
+                        let peers_to_rotate = match peer_name {
+                            Some(name) => {
+                                if !api_state.has_peer(&name) {
+                                    anyhow::bail!("peer '{name}' does not exist");
+                                }
+                                vec![name]
+                            }
+                            None => api_state
+                                .peer_summaries()
+                                .into_iter()
+                                .map(|peer| peer.name)
+                                .collect(),
+                        };
+
+                        for name in &peers_to_rotate {
+                            engine.remove_session(name);
+                            api_state.mark_peer_disconnected(name);
+                            if let Some(previous) = outbound_supervisors.remove(name) {
+                                previous.abort();
+                            }
+                            if let Some(managed_peer) = managed_peers.get(name) {
+                                if let Some(handle) = spawn_outbound_supervisor_for_peer(
+                                    managed_peer,
+                                    &endpoint,
+                                    &identity,
+                                    &engine,
+                                    &tun,
+                                    &api_state,
+                                ) {
+                                    outbound_supervisors.insert(name.clone(), handle);
+                                }
+                            }
+                        }
+
+                        Ok(peers_to_rotate)
                     })()
                     .map_err(|err| err.to_string());
                     let _ = response.send(result);
