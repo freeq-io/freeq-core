@@ -182,6 +182,63 @@ impl ApiState {
         tunnels.sort_by(|a, b| a.peer.cmp(&b.peer));
         tunnels
     }
+
+    /// Build a Prometheus-compatible text exposition snapshot.
+    pub fn metrics_exposition(&self) -> String {
+        let connected_peers = self.peers.values().filter(|peer| peer.connected).count();
+
+        let mut lines = vec![
+            "# HELP freeq_uptime_seconds Seconds since the daemon started.".to_string(),
+            "# TYPE freeq_uptime_seconds gauge".to_string(),
+            format!(
+                "freeq_uptime_seconds {}",
+                self.start_time.elapsed().as_secs()
+            ),
+            "# HELP freeq_configured_peers Total configured peers.".to_string(),
+            "# TYPE freeq_configured_peers gauge".to_string(),
+            format!("freeq_configured_peers {}", self.peers.len()),
+            "# HELP freeq_connected_peers Peers with an active tunnel.".to_string(),
+            "# TYPE freeq_connected_peers gauge".to_string(),
+            format!("freeq_connected_peers {}", connected_peers),
+            "# HELP freeq_active_tunnels Total active tunnel entries.".to_string(),
+            "# TYPE freeq_active_tunnels gauge".to_string(),
+            format!("freeq_active_tunnels {}", self.tunnels.len()),
+            "# HELP freeq_peer_connected Peer connection state (1=connected, 0=disconnected)."
+                .to_string(),
+            "# TYPE freeq_peer_connected gauge".to_string(),
+            "# HELP freeq_tunnel_bytes_sent_total Bytes sent through each peer tunnel.".to_string(),
+            "# TYPE freeq_tunnel_bytes_sent_total counter".to_string(),
+            "# HELP freeq_tunnel_bytes_received_total Bytes received through each peer tunnel."
+                .to_string(),
+            "# TYPE freeq_tunnel_bytes_received_total counter".to_string(),
+        ];
+
+        let mut peers: Vec<_> = self.peers.iter().collect();
+        peers.sort_by(|(left, _), (right, _)| left.cmp(right));
+        for (peer_name, peer) in peers {
+            lines.push(format!(
+                "freeq_peer_connected{{peer=\"{}\"}} {}",
+                peer_name,
+                if peer.connected { 1 } else { 0 }
+            ));
+        }
+
+        let mut tunnels: Vec<_> = self.tunnels.iter().collect();
+        tunnels.sort_by(|(left, _), (right, _)| left.cmp(right));
+        for (peer_name, tunnel) in tunnels {
+            lines.push(format!(
+                "freeq_tunnel_bytes_sent_total{{peer=\"{}\"}} {}",
+                peer_name, tunnel.bytes_sent
+            ));
+            lines.push(format!(
+                "freeq_tunnel_bytes_received_total{{peer=\"{}\"}} {}",
+                peer_name, tunnel.bytes_received
+            ));
+        }
+
+        lines.push(String::new());
+        lines.join("\n")
+    }
 }
 
 #[cfg(test)]
@@ -213,6 +270,7 @@ mod tests {
         let status = state.status_response();
         let peers = state.peer_summaries();
         let tunnels = state.tunnel_stats();
+        let metrics = state.metrics_exposition();
 
         assert_eq!(status.peer_count, 1);
         assert_eq!(status.tunnel_count, 1);
@@ -220,5 +278,7 @@ mod tests {
         assert!(peers[0].last_handshake.is_some());
         assert_eq!(tunnels[0].bytes_sent, 128);
         assert_eq!(tunnels[0].bytes_received, 256);
+        assert!(metrics.contains("freeq_connected_peers 1"));
+        assert!(metrics.contains("freeq_tunnel_bytes_sent_total{peer=\"lon-01\"} 128"));
     }
 }
