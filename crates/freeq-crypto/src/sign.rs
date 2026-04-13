@@ -18,7 +18,7 @@ pub struct IdentityKeypair {
 }
 
 /// An ML-DSA-65 verification (public) key — safe to share with peers.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct IdentityPublicKey {
     inner: ml_dsa::VerifyingKey<MlDsa65>,
 }
