@@ -136,7 +136,7 @@ FreeQ is built in the open and contributions are welcome. All contributors must 
 - Changes to `freeq-crypto` or `freeq-auth` require two maintainer approvals
 - See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide
 
-**Security vulnerabilities:** Email security@getfreeq.io — do not open public issues. See [SECURITY.md](SECURITY.md).
+**Security vulnerabilities:** Email security@getfreeq.com — do not open public issues. See [SECURITY.md](SECURITY.md).
 
 ## Business model
 
@@ -153,4 +153,4 @@ The `freeq-api` crate is licensed under **Apache 2.0** — this is the integrati
 ---
 
 *FreeQ — Quantum-safe networking, in the open.*
-*[getfreeq.io](https://getfreeq.io) · [Discord](https://discord.gg/freeq) · [security@getfreeq.io](mailto:security@getfreeq.io)*
+*[getfreeq.io](https://getfreeq.io) · [Discord](https://discord.gg/freeq) · [security@getfreeq.com](mailto:security@getfreeq.com)*

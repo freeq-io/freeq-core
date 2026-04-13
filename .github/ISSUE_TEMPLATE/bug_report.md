@@ -39,4 +39,4 @@ Any other context about the problem.
 
 ---
 
-> **Security issues:** Do not open public issues for vulnerabilities. Email security@getfreeq.io instead. See [SECURITY.md](../../SECURITY.md).
+> **Security issues:** Do not open public issues for vulnerabilities. Email security@getfreeq.com instead. See [SECURITY.md](../../SECURITY.md).
