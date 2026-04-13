@@ -20,4 +20,5 @@ freeq-api    = { path = "../crates/freeq-api" }
 tokio       = { workspace = true }
 clap        = { workspace = true }
 anyhow      = { workspace = true }
+serde       = { workspace = true }
 serde_json  = { workspace = true }
