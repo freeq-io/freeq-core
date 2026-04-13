@@ -32,6 +32,7 @@ impl ConnectionPool {
     pub async fn get_or_connect(
         &mut self,
         peer_id: &str,
+        certificate_fingerprint: &crate::endpoint::CertificateFingerprint,
         addr: std::net::SocketAddr,
     ) -> Result<Arc<PeerConnection>> {
         if let Some(connection) = self.connections.get(peer_id) {
@@ -46,7 +47,7 @@ impl ConnectionPool {
             return Err(TransportError::PoolFull);
         }
 
-        let connection = Arc::new(self.endpoint.connect(addr).await?);
+        let connection = Arc::new(self.endpoint.connect(certificate_fingerprint, addr).await?);
         self.connections
             .insert(peer_id.to_string(), connection.clone());
         Ok(connection)
@@ -81,6 +82,7 @@ mod tests {
             .await
             .expect("bind server");
         let server_addr = server.local_addr().expect("server addr");
+        let server_fingerprint = server.certificate_fingerprint();
         let client_endpoint = Endpoint::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
             .await
             .expect("bind client");
@@ -95,11 +97,11 @@ mod tests {
 
         let mut pool = ConnectionPool::with_max_size(client_endpoint.clone(), 4);
         let first = pool
-            .get_or_connect("peer-a", server_addr)
+            .get_or_connect("peer-a", &server_fingerprint, server_addr)
             .await
             .expect("first connect");
         let second = pool
-            .get_or_connect("peer-a", server_addr)
+            .get_or_connect("peer-a", &server_fingerprint, server_addr)
             .await
             .expect("reused connect");
 
@@ -121,6 +123,7 @@ mod tests {
         let err = pool
             .get_or_connect(
                 "peer-a",
+                &[0u8; 32],
                 SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1),
             )
             .await

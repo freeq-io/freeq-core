@@ -193,6 +193,7 @@ mod tests {
         .await
         .expect("bind server");
         let server_addr = server.local_addr().expect("server addr");
+        let server_fingerprint = server.certificate_fingerprint();
         let client = freeq_transport::endpoint::Endpoint::bind(SocketAddr::new(
             IpAddr::V4(Ipv4Addr::LOCALHOST),
             0,
@@ -204,7 +205,12 @@ mod tests {
             let server = server.clone();
             tokio::spawn(async move { Arc::new(server.accept().await.expect("accept")) })
         };
-        let client_conn = Arc::new(client.connect(server_addr).await.expect("connect"));
+        let client_conn = Arc::new(
+            client
+                .connect(&server_fingerprint, server_addr)
+                .await
+                .expect("connect"),
+        );
         let server_conn = server_conn_task.await.expect("server task");
 
         let mut client_router = crate::router::Router::new();
