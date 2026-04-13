@@ -326,6 +326,17 @@ async fn run_peer_to_tun_loop(
                 api_state.add_bytes_received(&peer_name, packet_len);
             }
             Err(freeq_tunnel::TunnelError::Transport(freeq_transport::TransportError::Timeout)) => {
+                if let Err(err) = engine.send_heartbeat(&peer_name, session_generation).await {
+                    match err {
+                        freeq_tunnel::TunnelError::StaleSession(_) => break,
+                        other => {
+                            tracing::warn!(peer = %peer_name, %other, "failed to send peer heartbeat");
+                            api_state.mark_peer_disconnected(&peer_name);
+                            engine.remove_session_if_current(&peer_name, session_generation);
+                            break;
+                        }
+                    }
+                }
                 continue;
             }
             Err(freeq_tunnel::TunnelError::StaleSession(_)) => {

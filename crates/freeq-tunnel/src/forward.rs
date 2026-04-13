@@ -9,6 +9,8 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 const NONCE_COUNTER_LEN: usize = 8;
+const PAYLOAD_KIND_DATA: u8 = 1;
+const PAYLOAD_KIND_HEARTBEAT: u8 = 2;
 
 /// Forwards packets using the configured router, transport connection, and session keys.
 pub struct TunnelEngine {
@@ -118,19 +120,17 @@ impl TunnelEngine {
             .get(&peer_id)
             .cloned()
             .ok_or_else(|| TunnelError::UnknownPeer(peer_id.clone()))?;
-
-        let nonce = next_nonce(&peer.outbound_nonce);
-        let ciphertext =
-            freeq_crypto::bulk::encrypt(&self.algorithm, &peer.outbound_key, &nonce, &[], &packet)?;
-        let mut frame = Vec::with_capacity(freeq_crypto::bulk::NONCE_LEN + ciphertext.len());
-        frame.extend_from_slice(&nonce);
-        frame.extend_from_slice(&ciphertext);
-        if let Err(err) = peer.connection.send(Bytes::from(frame)).await {
-            self.remove_session_if_current(&peer_id, peer.generation);
-            return Err(err.into());
-        }
+        self.send_payload(&peer_id, &peer, PAYLOAD_KIND_DATA, &packet)
+            .await?;
 
         Ok(peer_id)
+    }
+
+    /// Send a small encrypted heartbeat on an active peer session.
+    pub async fn send_heartbeat(&self, peer_id: &str, expected_generation: u64) -> Result<()> {
+        let peer = self.current_peer_session(peer_id, expected_generation)?;
+        self.send_payload(peer_id, &peer, PAYLOAD_KIND_HEARTBEAT, &[])
+            .await
     }
 
     /// Receive and decrypt the next packet from `peer_id`.
@@ -150,6 +150,44 @@ impl TunnelEngine {
         expected_generation: u64,
         timeout: Duration,
     ) -> Result<Bytes> {
+        loop {
+            let peer = self.current_peer_session(peer_id, expected_generation)?;
+            let frame = peer.connection.recv_timeout(timeout).await?;
+            if !self.is_current_generation(peer_id, expected_generation) {
+                return Err(TunnelError::StaleSession(peer_id.to_string()));
+            }
+
+            let plaintext = self.decrypt_payload(peer_id, &peer, &frame)?;
+            let (kind, body) = plaintext
+                .split_first()
+                .ok_or_else(|| TunnelError::InvalidPacket("missing tunnel payload kind".into()))?;
+
+            match *kind {
+                PAYLOAD_KIND_DATA => return Ok(Bytes::copy_from_slice(body)),
+                PAYLOAD_KIND_HEARTBEAT => continue,
+                other => {
+                    return Err(TunnelError::InvalidPacket(format!(
+                        "unsupported tunnel payload kind: {other}"
+                    )))
+                }
+            }
+        }
+    }
+
+    fn is_current_generation(&self, peer_id: &str, expected_generation: u64) -> bool {
+        self.peers
+            .read()
+            .expect("peer registry lock poisoned")
+            .get(peer_id)
+            .map(|peer| peer.generation == expected_generation)
+            .unwrap_or(false)
+    }
+
+    fn current_peer_session(
+        &self,
+        peer_id: &str,
+        expected_generation: u64,
+    ) -> Result<Arc<PeerSession>> {
         let peer = self
             .peers
             .read()
@@ -160,11 +198,38 @@ impl TunnelEngine {
         if peer.generation != expected_generation {
             return Err(TunnelError::StaleSession(peer_id.to_string()));
         }
-        let frame = peer.connection.recv_timeout(timeout).await?;
-        if !self.is_current_generation(peer_id, expected_generation) {
-            return Err(TunnelError::StaleSession(peer_id.to_string()));
-        }
+        Ok(peer)
+    }
 
+    async fn send_payload(
+        &self,
+        peer_id: &str,
+        peer: &Arc<PeerSession>,
+        kind: u8,
+        payload: &[u8],
+    ) -> Result<()> {
+        let nonce = next_nonce(&peer.outbound_nonce);
+        let mut plaintext = Vec::with_capacity(1 + payload.len());
+        plaintext.push(kind);
+        plaintext.extend_from_slice(payload);
+        let ciphertext = freeq_crypto::bulk::encrypt(
+            &self.algorithm,
+            &peer.outbound_key,
+            &nonce,
+            &[],
+            &plaintext,
+        )?;
+        let mut frame = Vec::with_capacity(freeq_crypto::bulk::NONCE_LEN + ciphertext.len());
+        frame.extend_from_slice(&nonce);
+        frame.extend_from_slice(&ciphertext);
+        if let Err(err) = peer.connection.send(Bytes::from(frame)).await {
+            self.remove_session_if_current(peer_id, peer.generation);
+            return Err(err.into());
+        }
+        Ok(())
+    }
+
+    fn decrypt_payload(&self, peer_id: &str, peer: &PeerSession, frame: &[u8]) -> Result<Vec<u8>> {
         if frame.len() <= freeq_crypto::bulk::NONCE_LEN {
             return Err(TunnelError::InvalidPacket(
                 "encrypted frame is missing a ciphertext body".into(),
@@ -181,16 +246,12 @@ impl TunnelEngine {
             &[],
             &frame[freeq_crypto::bulk::NONCE_LEN..],
         )?;
-        Ok(Bytes::from(plaintext))
-    }
-
-    fn is_current_generation(&self, peer_id: &str, expected_generation: u64) -> bool {
-        self.peers
-            .read()
-            .expect("peer registry lock poisoned")
-            .get(peer_id)
-            .map(|peer| peer.generation == expected_generation)
-            .unwrap_or(false)
+        if plaintext.is_empty() {
+            return Err(TunnelError::InvalidPacket(format!(
+                "empty decrypted tunnel payload from peer {peer_id}"
+            )));
+        }
+        Ok(plaintext)
     }
 }
 
@@ -390,6 +451,80 @@ mod tests {
             crate::TunnelError::StaleSession(ref peer) if peer == "peer-a"
         ));
         assert!(second_generation > first_generation);
+
+        client.close().await;
+        server.close().await;
+    }
+
+    #[tokio::test]
+    async fn heartbeats_do_not_surface_as_packets() {
+        let server = freeq_transport::endpoint::Endpoint::bind(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+        ))
+        .await
+        .expect("bind server");
+        let server_addr = server.local_addr().expect("server addr");
+        let server_fingerprint = server.certificate_fingerprint();
+        let client = freeq_transport::endpoint::Endpoint::bind(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+        ))
+        .await
+        .expect("bind client");
+
+        let server_conn_task = {
+            let server = server.clone();
+            tokio::spawn(async move { Arc::new(server.accept().await.expect("accept")) })
+        };
+        let client_conn = Arc::new(
+            client
+                .connect(&server_fingerprint, server_addr)
+                .await
+                .expect("connect"),
+        );
+        let server_conn = server_conn_task.await.expect("server task");
+
+        let client_engine = TunnelEngine::new(
+            freeq_crypto::agility::BulkAlgorithm::ChaCha20Poly1305,
+            crate::router::Router::new(),
+        );
+        client_engine.add_route("10.0.0.0/24".parse().expect("prefix"), "peer-a".into());
+        let client_generation =
+            client_engine.add_peer("peer-a".into(), client_conn.clone(), &sample_session_keys());
+
+        let server_engine = TunnelEngine::new(
+            freeq_crypto::agility::BulkAlgorithm::ChaCha20Poly1305,
+            crate::router::Router::new(),
+        );
+        let reverse_keys = freeq_auth::handshake::SessionKeys {
+            outbound: [0x22; 32],
+            inbound: [0x11; 32],
+        };
+        let server_generation =
+            server_engine.add_peer("peer-a".into(), server_conn.clone(), &reverse_keys);
+
+        client_engine
+            .send_heartbeat("peer-a", client_generation)
+            .await
+            .expect("send heartbeat");
+
+        let payload = sample_ipv4_packet(Ipv4Addr::new(10, 0, 0, 99));
+        client_engine
+            .forward_packet(payload.clone())
+            .await
+            .expect("forward packet");
+
+        let received = server_engine
+            .receive_packet_timeout(
+                "peer-a",
+                server_generation,
+                std::time::Duration::from_secs(1),
+            )
+            .await
+            .expect("receive routed packet after heartbeat");
+
+        assert_eq!(received, payload);
 
         client.close().await;
         server.close().await;
