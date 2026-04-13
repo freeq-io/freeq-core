@@ -58,11 +58,16 @@ impl TunnelEngine {
     }
 
     /// Remove an active peer session.
-    pub fn remove_peer(&self, peer_id: &str) {
+    pub fn remove_session(&self, peer_id: &str) {
         self.peers
             .write()
             .expect("peer registry lock poisoned")
             .remove(peer_id);
+    }
+
+    /// Remove an active peer session and all routes for that peer.
+    pub fn remove_peer(&self, peer_id: &str) {
+        self.remove_session(peer_id);
         self.router
             .write()
             .expect("router lock poisoned")
@@ -101,7 +106,10 @@ impl TunnelEngine {
         let mut frame = Vec::with_capacity(freeq_crypto::bulk::NONCE_LEN + ciphertext.len());
         frame.extend_from_slice(&nonce);
         frame.extend_from_slice(&ciphertext);
-        peer.connection.send(Bytes::from(frame)).await?;
+        if let Err(err) = peer.connection.send(Bytes::from(frame)).await {
+            self.remove_session(&peer_id);
+            return Err(err.into());
+        }
 
         Ok(peer_id)
     }

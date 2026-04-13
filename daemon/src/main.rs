@@ -6,7 +6,10 @@ use clap::Parser;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+const OUTBOUND_RECONNECT_BASE_DELAY: Duration = Duration::from_millis(250);
+const OUTBOUND_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
 
 /// freeqd — FreeQ post-quantum overlay network daemon.
 #[derive(Parser, Debug)]
@@ -186,7 +189,7 @@ async fn start_runtime(
     };
 
     for peer in &config.peer {
-        let Some(endpoint_value) = &peer.endpoint else {
+        let Some(_endpoint_value) = &peer.endpoint else {
             continue;
         };
 
@@ -194,42 +197,13 @@ async fn start_runtime(
             parse_transport_fingerprint(peer.transport_cert_fingerprint.as_deref().ok_or_else(
                 || anyhow::anyhow!("missing transport fingerprint for {}", peer.name),
             )?)?;
-        let handshake_started = Instant::now();
-        let peer_addr = match resolve_peer_endpoint(endpoint_value).await {
-            Ok(peer_addr) => peer_addr,
-            Err(err) => {
-                tracing::warn!(peer = %peer.name, %err, "failed to resolve peer endpoint");
-                api_state.record_outbound_connect_failure(&peer.name);
-                continue;
-            }
-        };
-        let connection = match endpoint.connect(&transport_fingerprint, peer_addr).await {
-            Ok(connection) => Arc::new(connection),
-            Err(err) => {
-                tracing::warn!(peer = %peer.name, %err, "failed to connect to peer");
-                api_state.record_outbound_connect_failure(&peer.name);
-                continue;
-            }
-        };
-        let session_keys = match run_initiator_handshake(&identity, peer, connection.as_ref()).await
-        {
-            Ok(session_keys) => session_keys,
-            Err(err) => {
-                tracing::warn!(peer = %peer.name, %err, "outbound peer handshake failed");
-                api_state.record_handshake_failure(Some(&peer.name), false);
-                continue;
-            }
-        };
-
-        engine.add_peer(peer.name.clone(), connection, &session_keys);
-        api_state.record_handshake_success(
-            &peer.name,
-            Some(handshake_started.elapsed().as_secs_f64() * 1000.0),
-        );
 
         active_peers.push(peer.name.clone());
-        tasks.push(spawn_peer_to_tun_loop(
-            peer.name.clone(),
+        tasks.push(spawn_outbound_peer_supervisor(
+            peer.clone(),
+            transport_fingerprint,
+            endpoint.clone(),
+            identity.clone(),
             engine.clone(),
             tun.clone(),
             api_state.clone(),
@@ -323,34 +297,116 @@ fn spawn_tun_to_peer_loop(
     })
 }
 
+async fn run_peer_to_tun_loop(
+    peer_name: String,
+    engine: Arc<freeq_tunnel::forward::TunnelEngine>,
+    tun: Arc<freeq_tunnel::iface::TunInterface>,
+    api_state: freeq_api::state::SharedApiState,
+) {
+    loop {
+        let packet = engine.receive_packet(&peer_name).await;
+
+        match packet {
+            Ok(packet) => {
+                let packet_len = packet.len() as u64;
+                if let Err(err) = tun.write_packet(packet).await {
+                    tracing::warn!(peer = %peer_name, %err, "failed to write peer packet to TUN");
+                    api_state.record_tun_write_error();
+                    api_state.mark_peer_disconnected(&peer_name);
+                    engine.remove_session(&peer_name);
+                    break;
+                }
+                api_state.add_bytes_received(&peer_name, packet_len);
+            }
+            Err(err) => {
+                tracing::warn!(peer = %peer_name, %err, "failed to receive peer packet");
+                api_state.record_peer_receive_error();
+                api_state.mark_peer_disconnected(&peer_name);
+                engine.remove_session(&peer_name);
+                break;
+            }
+        }
+    }
+}
+
 fn spawn_peer_to_tun_loop(
     peer_name: String,
     engine: Arc<freeq_tunnel::forward::TunnelEngine>,
     tun: Arc<freeq_tunnel::iface::TunInterface>,
     api_state: freeq_api::state::SharedApiState,
 ) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        loop {
-            let packet = engine.receive_packet(&peer_name).await;
+    tokio::spawn(run_peer_to_tun_loop(peer_name, engine, tun, api_state))
+}
 
-            match packet {
-                Ok(packet) => {
-                    let packet_len = packet.len() as u64;
-                    if let Err(err) = tun.write_packet(packet).await {
-                        tracing::warn!(peer = %peer_name, %err, "failed to write peer packet to TUN");
-                        api_state.record_tun_write_error();
-                        api_state.mark_peer_disconnected(&peer_name);
-                        break;
-                    }
-                    api_state.add_bytes_received(&peer_name, packet_len);
-                }
+fn spawn_outbound_peer_supervisor(
+    peer: freeq_config::PeerConfig,
+    transport_fingerprint: freeq_transport::endpoint::CertificateFingerprint,
+    endpoint: freeq_transport::endpoint::Endpoint,
+    identity: Arc<freeq_crypto::sign::IdentityKeypair>,
+    engine: Arc<freeq_tunnel::forward::TunnelEngine>,
+    tun: Arc<freeq_tunnel::iface::TunInterface>,
+    api_state: freeq_api::state::SharedApiState,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut attempt = 0u32;
+
+        loop {
+            let endpoint_value = match &peer.endpoint {
+                Some(value) => value.as_str(),
+                None => return,
+            };
+
+            let handshake_started = Instant::now();
+            let peer_addr = match resolve_peer_endpoint(endpoint_value).await {
+                Ok(peer_addr) => peer_addr,
                 Err(err) => {
-                    tracing::warn!(peer = %peer_name, %err, "failed to receive peer packet");
-                    api_state.record_peer_receive_error();
-                    api_state.mark_peer_disconnected(&peer_name);
-                    break;
+                    tracing::warn!(peer = %peer.name, %err, "failed to resolve peer endpoint");
+                    api_state.record_outbound_connect_failure(&peer.name);
+                    sleep_with_backoff(attempt).await;
+                    attempt = attempt.saturating_add(1);
+                    continue;
                 }
-            }
+            };
+            let connection = match endpoint.connect(&transport_fingerprint, peer_addr).await {
+                Ok(connection) => Arc::new(connection),
+                Err(err) => {
+                    tracing::warn!(peer = %peer.name, %err, "failed to connect to peer");
+                    api_state.record_outbound_connect_failure(&peer.name);
+                    sleep_with_backoff(attempt).await;
+                    attempt = attempt.saturating_add(1);
+                    continue;
+                }
+            };
+            let session_keys =
+                match run_initiator_handshake(&identity, &peer, connection.as_ref()).await {
+                    Ok(session_keys) => session_keys,
+                    Err(err) => {
+                        tracing::warn!(peer = %peer.name, %err, "outbound peer handshake failed");
+                        api_state.record_handshake_failure(Some(&peer.name), false);
+                        sleep_with_backoff(attempt).await;
+                        attempt = attempt.saturating_add(1);
+                        continue;
+                    }
+                };
+
+            engine.add_peer(peer.name.clone(), connection, &session_keys);
+            api_state.record_handshake_success(
+                &peer.name,
+                Some(handshake_started.elapsed().as_secs_f64() * 1000.0),
+            );
+            attempt = 0;
+
+            run_peer_to_tun_loop(
+                peer.name.clone(),
+                engine.clone(),
+                tun.clone(),
+                api_state.clone(),
+            )
+            .await;
+
+            tracing::info!(peer = %peer.name, "peer session ended; scheduling reconnect");
+            sleep_with_backoff(attempt).await;
+            attempt = attempt.saturating_add(1);
         }
     })
 }
@@ -397,6 +453,15 @@ fn spawn_accept_loop(
             }
         }
     })
+}
+
+async fn sleep_with_backoff(attempt: u32) {
+    let multiplier = 1u32.checked_shl(attempt.min(5)).unwrap_or(32);
+    let delay = OUTBOUND_RECONNECT_BASE_DELAY
+        .checked_mul(multiplier)
+        .unwrap_or(OUTBOUND_RECONNECT_MAX_DELAY)
+        .min(OUTBOUND_RECONNECT_MAX_DELAY);
+    tokio::time::sleep(delay).await;
 }
 
 async fn run_initiator_handshake(
