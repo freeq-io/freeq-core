@@ -29,6 +29,7 @@ ipnetwork   = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # macOS utun interface (no additional deps needed)
+libc        = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # WinTUN driver integration (v0.3)
