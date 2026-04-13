@@ -33,6 +33,8 @@ struct PeerRuntime {
     last_handshake_unix_ms: AtomicI64,
     connect_failures: AtomicU64,
     handshake_failures: AtomicU64,
+    reconnect_attempts: AtomicU64,
+    reconnect_backoff_millis: AtomicU64,
     last_handshake_duration_micros: AtomicU64,
     bytes_sent: AtomicU64,
     bytes_received: AtomicU64,
@@ -79,6 +81,8 @@ impl ApiState {
                         ),
                         connect_failures: AtomicU64::new(0),
                         handshake_failures: AtomicU64::new(0),
+                        reconnect_attempts: AtomicU64::new(0),
+                        reconnect_backoff_millis: AtomicU64::new(0),
                         last_handshake_duration_micros: AtomicU64::new(NONE_U64),
                         bytes_sent: AtomicU64::new(0),
                         bytes_received: AtomicU64::new(0),
@@ -139,6 +143,8 @@ impl ApiState {
         };
 
         peer.connected.store(true, Ordering::Relaxed);
+        peer.reconnect_attempts.store(0, Ordering::Relaxed);
+        peer.reconnect_backoff_millis.store(0, Ordering::Relaxed);
         peer.last_handshake_unix_ms
             .store(Utc::now().timestamp_millis(), Ordering::Relaxed);
 
@@ -215,6 +221,17 @@ impl ApiState {
         self.counters
             .peer_receive_errors
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record a scheduled reconnect attempt for a peer.
+    pub fn record_reconnect_scheduled(&self, peer_name: &str, backoff: std::time::Duration) {
+        if let Some(peer) = self.peers.get(peer_name) {
+            peer.reconnect_attempts.fetch_add(1, Ordering::Relaxed);
+            peer.reconnect_backoff_millis.store(
+                backoff.as_millis().min(u128::from(u64::MAX)) as u64,
+                Ordering::Relaxed,
+            );
+        }
     }
 
     /// Build the current `/v1/status` response.
@@ -394,6 +411,12 @@ impl ApiState {
             "# HELP freeq_peer_handshake_failures_total Failed handshakes by peer."
                 .to_string(),
             "# TYPE freeq_peer_handshake_failures_total counter".to_string(),
+            "# HELP freeq_peer_reconnect_attempts_total Reconnect attempts scheduled by peer."
+                .to_string(),
+            "# TYPE freeq_peer_reconnect_attempts_total counter".to_string(),
+            "# HELP freeq_peer_reconnect_backoff_ms Current reconnect backoff delay by peer."
+                .to_string(),
+            "# TYPE freeq_peer_reconnect_backoff_ms gauge".to_string(),
             "# HELP freeq_peer_last_handshake_duration_ms Last successful handshake duration by peer."
                 .to_string(),
             "# TYPE freeq_peer_last_handshake_duration_ms gauge".to_string(),
@@ -420,6 +443,16 @@ impl ApiState {
                 "freeq_peer_handshake_failures_total{{peer=\"{}\"}} {}",
                 peer_name,
                 peer.handshake_failures.load(Ordering::Relaxed)
+            ));
+            lines.push(format!(
+                "freeq_peer_reconnect_attempts_total{{peer=\"{}\"}} {}",
+                peer_name,
+                peer.reconnect_attempts.load(Ordering::Relaxed)
+            ));
+            lines.push(format!(
+                "freeq_peer_reconnect_backoff_ms{{peer=\"{}\"}} {}",
+                peer_name,
+                peer.reconnect_backoff_millis.load(Ordering::Relaxed)
             ));
             if let Some(duration_ms) = load_optional_ms(&peer.last_handshake_duration_micros) {
                 lines.push(format!(
@@ -515,6 +548,7 @@ mod tests {
         state.record_tun_write_error();
         state.record_packet_forward_failure();
         state.record_peer_receive_error();
+        state.record_reconnect_scheduled("lon-01", std::time::Duration::from_millis(750));
         state.record_handshake_success("lon-01", Some(12.5));
 
         let status = state.status_response();
@@ -544,6 +578,8 @@ mod tests {
         assert!(metrics.contains("freeq_peer_receive_errors_total 1"));
         assert!(metrics.contains("freeq_peer_connect_failures_total{peer=\"lon-01\"} 1"));
         assert!(metrics.contains("freeq_peer_handshake_failures_total{peer=\"lon-01\"} 1"));
+        assert!(metrics.contains("freeq_peer_reconnect_attempts_total{peer=\"lon-01\"} 0"));
+        assert!(metrics.contains("freeq_peer_reconnect_backoff_ms{peer=\"lon-01\"} 0"));
         assert!(metrics.contains("freeq_peer_last_handshake_duration_ms{peer=\"lon-01\"} 12.500"));
     }
 }

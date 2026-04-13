@@ -329,6 +329,25 @@ async fn run_peer_to_tun_loop(
     }
 }
 
+fn reconnect_delay(attempt: u32) -> Duration {
+    use rand::Rng as _;
+
+    let multiplier = 1u32.checked_shl(attempt.min(5)).unwrap_or(32);
+    let base_delay = OUTBOUND_RECONNECT_BASE_DELAY
+        .checked_mul(multiplier)
+        .unwrap_or(OUTBOUND_RECONNECT_MAX_DELAY)
+        .min(OUTBOUND_RECONNECT_MAX_DELAY);
+    let base_ms = base_delay.as_millis().min(u128::from(u64::MAX)) as u64;
+
+    if base_ms == 0 {
+        return Duration::from_millis(0);
+    }
+
+    let jitter_floor = (base_ms / 2).max(1);
+    let jitter_ceiling = base_ms;
+    Duration::from_millis(rand::thread_rng().gen_range(jitter_floor..=jitter_ceiling))
+}
+
 fn spawn_peer_to_tun_loop(
     peer_name: String,
     engine: Arc<freeq_tunnel::forward::TunnelEngine>,
@@ -362,7 +381,9 @@ fn spawn_outbound_peer_supervisor(
                 Err(err) => {
                     tracing::warn!(peer = %peer.name, %err, "failed to resolve peer endpoint");
                     api_state.record_outbound_connect_failure(&peer.name);
-                    sleep_with_backoff(attempt).await;
+                    let delay = reconnect_delay(attempt);
+                    api_state.record_reconnect_scheduled(&peer.name, delay);
+                    tokio::time::sleep(delay).await;
                     attempt = attempt.saturating_add(1);
                     continue;
                 }
@@ -372,7 +393,9 @@ fn spawn_outbound_peer_supervisor(
                 Err(err) => {
                     tracing::warn!(peer = %peer.name, %err, "failed to connect to peer");
                     api_state.record_outbound_connect_failure(&peer.name);
-                    sleep_with_backoff(attempt).await;
+                    let delay = reconnect_delay(attempt);
+                    api_state.record_reconnect_scheduled(&peer.name, delay);
+                    tokio::time::sleep(delay).await;
                     attempt = attempt.saturating_add(1);
                     continue;
                 }
@@ -383,7 +406,9 @@ fn spawn_outbound_peer_supervisor(
                     Err(err) => {
                         tracing::warn!(peer = %peer.name, %err, "outbound peer handshake failed");
                         api_state.record_handshake_failure(Some(&peer.name), false);
-                        sleep_with_backoff(attempt).await;
+                        let delay = reconnect_delay(attempt);
+                        api_state.record_reconnect_scheduled(&peer.name, delay);
+                        tokio::time::sleep(delay).await;
                         attempt = attempt.saturating_add(1);
                         continue;
                     }
@@ -405,7 +430,9 @@ fn spawn_outbound_peer_supervisor(
             .await;
 
             tracing::info!(peer = %peer.name, "peer session ended; scheduling reconnect");
-            sleep_with_backoff(attempt).await;
+            let delay = reconnect_delay(attempt);
+            api_state.record_reconnect_scheduled(&peer.name, delay);
+            tokio::time::sleep(delay).await;
             attempt = attempt.saturating_add(1);
         }
     })
@@ -453,15 +480,6 @@ fn spawn_accept_loop(
             }
         }
     })
-}
-
-async fn sleep_with_backoff(attempt: u32) {
-    let multiplier = 1u32.checked_shl(attempt.min(5)).unwrap_or(32);
-    let delay = OUTBOUND_RECONNECT_BASE_DELAY
-        .checked_mul(multiplier)
-        .unwrap_or(OUTBOUND_RECONNECT_MAX_DELAY)
-        .min(OUTBOUND_RECONNECT_MAX_DELAY);
-    tokio::time::sleep(delay).await;
 }
 
 async fn run_initiator_handshake(
