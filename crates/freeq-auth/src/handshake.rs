@@ -163,6 +163,18 @@ impl ResponderHandshake {
         registry: &crate::registry::PeerRegistry,
         msg: &[u8],
     ) -> Result<(Self, Vec<u8>)> {
+        let (_peer_name, state, response) =
+            Self::process_init_with_peer_name(identity_sk, responder_kem_secret, registry, msg)?;
+        Ok((state, response))
+    }
+
+    /// Process Node A's initial message and return the authenticated peer name.
+    pub fn process_init_with_peer_name(
+        identity_sk: &freeq_crypto::sign::IdentityKeypair,
+        responder_kem_secret: freeq_crypto::kem::HybridSecretKey,
+        registry: &crate::registry::PeerRegistry,
+        msg: &[u8],
+    ) -> Result<(String, Self, Vec<u8>)> {
         let init = parse_init_message(msg)
             .map_err(|reason| crate::AuthError::HandshakeFailed { step: 1, reason })?;
 
@@ -199,6 +211,7 @@ impl ResponderHandshake {
         );
 
         Ok((
+            peer_name.to_string(),
             Self {
                 initiator_nonce: init.initiator_nonce,
                 responder_nonce,
@@ -720,5 +733,37 @@ mod tests {
 
         assert_eq!(initiator_keys.outbound, responder_keys.inbound);
         assert_eq!(initiator_keys.inbound, responder_keys.outbound);
+    }
+
+    #[test]
+    fn responder_returns_authenticated_peer_name() {
+        let (
+            initiator_key,
+            _initiator_public,
+            initiator_peer,
+            _initiator_kem_secret,
+            initiator_kem_public,
+        ) = sample_peer("initiator");
+        let (responder_key, responder_public, _, responder_kem_secret, _) =
+            sample_peer("responder");
+        let mut registry = crate::registry::PeerRegistry::new();
+        registry.add_peer(initiator_peer).expect("add peer");
+
+        let (_state, init_msg) = InitiatorHandshake::new(
+            &initiator_key,
+            &initiator_kem_public.to_bytes(),
+            responder_public,
+        )
+        .expect("build init");
+
+        let (peer_name, _state, _response) = ResponderHandshake::process_init_with_peer_name(
+            &responder_key,
+            responder_kem_secret,
+            &registry,
+            &init_msg,
+        )
+        .expect("process init");
+
+        assert_eq!(peer_name, "initiator");
     }
 }

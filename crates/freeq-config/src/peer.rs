@@ -17,6 +17,12 @@ pub struct PeerConfig {
     /// If absent, the peer is passive (we wait for them to initiate).
     pub endpoint: Option<String>,
 
+    /// Optional SHA-256 fingerprint of the peer's QUIC transport certificate, hex-encoded.
+    ///
+    /// Required when `endpoint` is configured.
+    #[serde(default)]
+    pub transport_cert_fingerprint: Option<String>,
+
     /// IP prefixes routed through this peer (e.g. `["10.0.0.2/32"]`).
     #[serde(default)]
     pub allowed_ips: Vec<String>,
@@ -26,4 +32,6 @@ pub struct PeerConfig {
     pub key_rotation_secs: u64,
 }
 
-fn default_rotation() -> u64 { 3600 }
+fn default_rotation() -> u64 {
+    3600
+}

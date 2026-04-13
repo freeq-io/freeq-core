@@ -92,6 +92,21 @@ impl Config {
 
             if let Some(endpoint) = &peer.endpoint {
                 validate_endpoint(&format!("peer.{}.endpoint", peer.name), endpoint)?;
+                let fingerprint = peer.transport_cert_fingerprint.as_deref().ok_or_else(|| {
+                    ConfigError::Invalid(format!(
+                        "peer.{}.transport_cert_fingerprint is required when peer.{}.endpoint is set",
+                        peer.name, peer.name
+                    ))
+                })?;
+                validate_transport_fingerprint(
+                    &format!("peer.{}.transport_cert_fingerprint", peer.name),
+                    fingerprint,
+                )?;
+            } else if let Some(fingerprint) = &peer.transport_cert_fingerprint {
+                validate_transport_fingerprint(
+                    &format!("peer.{}.transport_cert_fingerprint", peer.name),
+                    fingerprint,
+                )?;
             }
 
             if peer.key_rotation_secs == 0 {
@@ -178,6 +193,23 @@ fn validate_endpoint(field: &str, value: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
+fn validate_transport_fingerprint(field: &str, value: &str) -> Result<(), ConfigError> {
+    let normalized = value.trim();
+    if normalized.len() != 64 {
+        return Err(ConfigError::Invalid(format!(
+            "{field} must be a 64-character hex SHA-256 fingerprint"
+        )));
+    }
+
+    hex::decode(normalized).map_err(|e| {
+        ConfigError::Invalid(format!(
+            "{field} must be a valid hex SHA-256 fingerprint: {e}"
+        ))
+    })?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::Config;
@@ -198,6 +230,7 @@ mod tests {
             [[peer]]
             name = "lon-01"
             endpoint = "lon-01.example.com:51820"
+            transport_cert_fingerprint = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
             public_key = "AQIDBA=="
             kem_key = "BQYHCA=="
             allowed_ips = ["10.0.0.2/32"]
@@ -237,5 +270,23 @@ mod tests {
 
         let err = config.validate().expect_err("config should fail");
         assert!(err.to_string().contains("endpoint"));
+    }
+
+    #[test]
+    fn validate_requires_transport_fingerprint_for_outbound_peer() {
+        let mut config = sample_config();
+        config.peer[0].transport_cert_fingerprint = None;
+
+        let err = config.validate().expect_err("config should fail");
+        assert!(err.to_string().contains("transport_cert_fingerprint"));
+    }
+
+    #[test]
+    fn validate_rejects_invalid_transport_fingerprint() {
+        let mut config = sample_config();
+        config.peer[0].transport_cert_fingerprint = Some("not-hex".into());
+
+        let err = config.validate().expect_err("config should fail");
+        assert!(err.to_string().contains("transport_cert_fingerprint"));
     }
 }

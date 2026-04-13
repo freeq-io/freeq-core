@@ -27,6 +27,9 @@ tracing-subscriber = { workspace = true }
 anyhow             = { workspace = true }
 clap               = { workspace = true }
 rand               = { workspace = true }
+base64             = { workspace = true }
+hex                = { workspace = true }
+ipnetwork          = { workspace = true }
 
 [dev-dependencies]
 toml               = { workspace = true }
