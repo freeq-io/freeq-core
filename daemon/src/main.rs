@@ -155,9 +155,9 @@ async fn start_runtime(
         .listen
         .parse()
         .context("node.listen must be a socket address")?;
-    let tun_addr = parse_node_ip(&config.node.address)?;
+    let tun_network = parse_node_network(&config.node.address)?;
     let endpoint = freeq_transport::endpoint::Endpoint::bind(listen_addr).await?;
-    let tun = Arc::new(freeq_tunnel::iface::TunInterface::open(None, tun_addr).await?);
+    let tun = Arc::new(freeq_tunnel::iface::TunInterface::open(None, tun_network).await?);
     let tun_name = tun.name().to_string();
 
     let mut registry = freeq_auth::registry::PeerRegistry::new();
@@ -397,11 +397,10 @@ fn parse_transport_fingerprint(
         .map_err(|_| anyhow::anyhow!("transport fingerprint must be 32 bytes"))?)
 }
 
-fn parse_node_ip(value: &str) -> Result<std::net::IpAddr> {
-    let (ip, _prefix) = value
-        .split_once('/')
-        .ok_or_else(|| anyhow::anyhow!("node.address must be in ip/prefix form"))?;
-    Ok(ip.parse()?)
+fn parse_node_network(value: &str) -> Result<ipnetwork::IpNetwork> {
+    Ok(value
+        .parse()
+        .map_err(|e| anyhow::anyhow!("node.address must be a valid IP network: {e}"))?)
 }
 
 async fn resolve_peer_endpoint(value: &str) -> Result<std::net::SocketAddr> {

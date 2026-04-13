@@ -2,11 +2,11 @@
 
 use crate::Result;
 use bytes::Bytes;
+use ipnetwork::IpNetwork;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod platform {
     use super::*;
-    use std::net::{IpAddr, Ipv4Addr};
     use std::sync::{Arc, Mutex};
     use tun::AbstractDevice as _;
 
@@ -18,8 +18,8 @@ mod platform {
     }
 
     impl PlatformTun {
-        pub async fn open(name: Option<&str>, addr: IpAddr) -> Result<Self> {
-            let device = create_device(name, addr)?;
+        pub async fn open(name: Option<&str>, network: IpNetwork) -> Result<Self> {
+            let device = create_device(name, network)?;
             let interface_name = device
                 .tun_name()
                 .map_err(|e| crate::TunnelError::Interface(e.to_string()))?;
@@ -83,23 +83,36 @@ mod platform {
         }
     }
 
-    fn create_device(name: Option<&str>, addr: IpAddr) -> Result<tun::Device> {
-        let ipv4_addr = match addr {
-            IpAddr::V4(addr) => addr,
-            IpAddr::V6(_) => {
-                return Err(crate::TunnelError::Interface(
-                    "tun-backed interface setup currently supports IPv4 addresses only".into(),
-                ));
-            }
-        };
-
+    fn create_device(name: Option<&str>, network: IpNetwork) -> Result<tun::Device> {
         let mut config = tun::Configuration::default();
-        config
-            .layer(tun::Layer::L3)
-            .address(ipv4_addr)
-            .netmask(Ipv4Addr::new(255, 255, 255, 255))
-            .destination(ipv4_addr)
-            .up();
+        config.layer(tun::Layer::L3).up();
+
+        match network {
+            IpNetwork::V4(network) => {
+                config
+                    .address(network.ip())
+                    .netmask(prefix_to_ipv4_netmask(network.prefix()))
+                    .destination(network.ip());
+            }
+            IpNetwork::V6(network) => {
+                #[cfg(target_os = "macos")]
+                {
+                    let _ = network;
+                    return Err(crate::TunnelError::Interface(
+                        "the tun crate macOS backend does not yet support IPv6 interface setup"
+                            .into(),
+                    ));
+                }
+
+                #[cfg(target_os = "linux")]
+                {
+                    config
+                        .address(network.ip())
+                        .netmask(prefix_to_ipv6_netmask(network.prefix()))
+                        .destination(network.ip());
+                }
+            }
+        }
 
         if let Some(name) = name {
             config.tun_name(name);
@@ -115,17 +128,32 @@ mod platform {
 
     #[cfg(test)]
     mod tests {
-        use super::create_device;
-        use std::net::Ipv6Addr;
+        use crate::iface::{prefix_to_ipv4_netmask, prefix_to_ipv6_netmask};
+        use std::net::Ipv4Addr;
 
         #[test]
-        fn tun_backend_rejects_ipv6_until_dual_stack_setup_exists() {
-            let err = match create_device(None, std::net::IpAddr::V6(Ipv6Addr::LOCALHOST)) {
-                Ok(_) => panic!("IPv6 should be rejected for now"),
-                Err(err) => err,
-            };
+        fn ipv4_netmask_conversion_matches_prefix_length() {
+            assert_eq!(prefix_to_ipv4_netmask(24), Ipv4Addr::new(255, 255, 255, 0));
+            assert_eq!(
+                prefix_to_ipv4_netmask(32),
+                Ipv4Addr::new(255, 255, 255, 255)
+            );
+        }
 
-            assert!(matches!(err, crate::TunnelError::Interface(_)));
+        #[test]
+        fn ipv6_netmask_conversion_matches_prefix_length() {
+            assert_eq!(
+                prefix_to_ipv6_netmask(64),
+                "ffff:ffff:ffff:ffff::"
+                    .parse::<std::net::Ipv6Addr>()
+                    .expect("mask"),
+            );
+            assert_eq!(
+                prefix_to_ipv6_netmask(128),
+                "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+                    .parse::<std::net::Ipv6Addr>()
+                    .expect("mask"),
+            );
         }
     }
 }
@@ -139,7 +167,7 @@ mod platform {
     }
 
     impl PlatformTun {
-        pub async fn open(name: Option<&str>, _addr: std::net::IpAddr) -> Result<Self> {
+        pub async fn open(name: Option<&str>, _network: IpNetwork) -> Result<Self> {
             Err(crate::TunnelError::Interface(format!(
                 "TUN interface support is not implemented for {}{}",
                 std::env::consts::OS,
@@ -178,9 +206,9 @@ impl TunInterface {
     ///
     /// `name` is an optional interface name hint (e.g. `"freeq0"`).
     /// The OS may assign a different name; check [`TunInterface::name`].
-    pub async fn open(name: Option<&str>, addr: std::net::IpAddr) -> Result<Self> {
+    pub async fn open(name: Option<&str>, network: IpNetwork) -> Result<Self> {
         Ok(Self {
-            inner: platform::PlatformTun::open(name, addr).await?,
+            inner: platform::PlatformTun::open(name, network).await?,
         })
     }
 
@@ -198,4 +226,25 @@ impl TunInterface {
     pub async fn write_packet(&self, pkt: Bytes) -> Result<()> {
         self.inner.write_packet(pkt).await
     }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn prefix_to_ipv4_netmask(prefix: u8) -> std::net::Ipv4Addr {
+    let mask = if prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - u32::from(prefix))
+    };
+    std::net::Ipv4Addr::from(mask)
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn prefix_to_ipv6_netmask(prefix: u8) -> std::net::Ipv6Addr {
+    let mask = if prefix == 0 {
+        0
+    } else {
+        u128::MAX << (128 - u32::from(prefix))
+    };
+    std::net::Ipv6Addr::from(mask)
 }
