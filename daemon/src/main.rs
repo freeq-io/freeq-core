@@ -54,103 +54,80 @@ async fn main() -> Result<()> {
 
     tracing::info!(node = %config.node.name, "configuration loaded");
 
-    // 1. Initialize identity keypair.
-    let key_path = PathBuf::from(&config.node.key_path);
-    let (_keypair, _identity) = init_identity(&key_path)?;
-    tracing::info!(key_path = %key_path.display(), "identity keypair ready");
-
-    // 2. Bind QUIC endpoint.
-    let listen: std::net::SocketAddr = config
-        .node
-        .listen
-        .parse()
-        .map_err(|e| anyhow::anyhow!("invalid listen address '{}': {e}", config.node.listen))?;
-    let endpoint = freeq_transport::endpoint::Endpoint::bind(listen).await?;
-    tracing::info!(%listen, "QUIC endpoint bound");
-
-    // 3. Open TUN interface.
-    let tun_ip: std::net::IpAddr = config
-        .node
-        .address
-        .split('/')
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("node.address '{}' has no IP part", config.node.address))?
-        .parse()
-        .map_err(|e| anyhow::anyhow!("invalid node address: {e}"))?;
-    let tun = freeq_tunnel::iface::TunInterface::open(Some("freeq0"), tun_ip).await?;
-    tracing::info!(iface = tun.name(), "TUN interface open");
-
-    // 4. Start REST API server.
-    if config.node.api_enabled {
-        let api_addr: std::net::SocketAddr = config
-            .node
-            .api_addr
-            .parse()
-            .map_err(|e| anyhow::anyhow!("invalid api_addr '{}': {e}", config.node.api_addr))?;
-        let server = freeq_api::ApiServer::new(api_addr);
-        tokio::spawn(async move {
-            if let Err(e) = server.serve().await {
-                tracing::error!(error = %e, "API server error");
-            }
-        });
+    if args.foreground {
+        tracing::info!("foreground mode selected");
     }
 
-    // 5. Main event loop: accept inbound connections and handle shutdown.
-    tracing::info!("freeqd initialized — entering main event loop");
-    loop {
-        tokio::select! {
-            result = endpoint.accept() => {
-                match result {
-                    Ok(conn) => {
-                        tracing::debug!("inbound connection accepted");
-                        // TODO(v0.1): cloaking check → handshake → tunnel
-                        let _ = conn;
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "accept error; endpoint closed");
-                        break;
-                    }
-                }
-            }
-            _ = tokio::signal::ctrl_c() => {
-                tracing::info!("freeqd shutting down");
-                break;
-            }
-        }
+    let startup_blockers = collect_startup_blockers(&config);
+    for blocker in &startup_blockers {
+        tracing::warn!(%blocker, "startup blocked by unimplemented subsystem");
+    }
+
+    if !startup_blockers.is_empty() {
+        anyhow::bail!(
+            "freeqd cannot start yet; unimplemented startup subsystems: {}",
+            startup_blockers.join(", ")
+        );
     }
 
     Ok(())
 }
 
-/// Load an existing identity keypair from `path`, or generate and persist a new one.
-///
-/// Key material is stored at the path from `config.node.key_path`
-/// (default `/etc/freeq/identity.key`).
-fn init_identity(
-    path: &std::path::Path,
-) -> Result<(freeq_crypto::sign::IdentityKeypair, freeq_crypto::sign::IdentityPublicKey)> {
-    if path.exists() {
-        // TODO(v0.1): deserialize the stored keypair bytes once IdentityKeypair
-        // gains zeroize-safe from_bytes / to_bytes serialization.
-        anyhow::bail!(
-            "loading an existing identity key at '{}' is not yet implemented",
-            path.display()
-        );
+fn collect_startup_blockers(config: &freeq_config::Config) -> Vec<String> {
+    let mut blockers = vec![
+        format!(
+            "identity key load/generation is not implemented for {}",
+            PathBuf::from(&config.node.key_path).display()
+        ),
+        format!(
+            "QUIC endpoint binding is not implemented for {}",
+            config.node.listen
+        ),
+        format!(
+            "TUN interface bring-up is not implemented for {}",
+            config.node.address
+        ),
+    ];
+
+    if config.node.api_enabled {
+        blockers.push(format!(
+            "REST API startup is deferred until daemon state is available on {}",
+            config.node.api_addr
+        ));
     }
 
-    // First-time startup: generate a fresh keypair.
-    let mut rng = rand::thread_rng();
-    let (keypair, pubkey) = freeq_crypto::sign::IdentityKeypair::generate(&mut rng)
-        .map_err(|e| anyhow::anyhow!("identity key generation failed: {e}"))?;
+    blockers
+}
 
-    // Ensure the key directory exists.
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+#[cfg(test)]
+mod tests {
+    use super::collect_startup_blockers;
+
+    fn sample_config() -> freeq_config::Config {
+        toml::from_str(
+            r#"
+            [node]
+            name = "nyc-01"
+            listen = "0.0.0.0:51820"
+            address = "10.0.0.1/24"
+            key_path = "/etc/freeq/identity.key"
+            algorithm = "ml-kem-768"
+            sign = "ml-dsa-65"
+            api_enabled = true
+            api_addr = "127.0.0.1:6789"
+            "#,
+        )
+        .expect("sample config should deserialize")
     }
-    // TODO(v0.1): persist the full keypair (including secret key, mode 0o600)
-    // once IdentityKeypair gains serialization support.
-    std::fs::write(path, pubkey.to_bytes())?;
-    tracing::info!(key_path = %path.display(), "generated new identity keypair");
 
-    Ok((keypair, pubkey))
+    #[test]
+    fn startup_blockers_cover_stubbed_subsystems() {
+        let blockers = collect_startup_blockers(&sample_config());
+
+        assert_eq!(blockers.len(), 4);
+        assert!(blockers.iter().any(|b| b.contains("identity key")));
+        assert!(blockers.iter().any(|b| b.contains("QUIC endpoint")));
+        assert!(blockers.iter().any(|b| b.contains("TUN interface")));
+        assert!(blockers.iter().any(|b| b.contains("REST API startup")));
+    }
 }
