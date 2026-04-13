@@ -22,6 +22,8 @@ use clap::{Parser, Subcommand};
 use freeq_api::models::{AddPeerRequest, PeerSummary, StatusResponse};
 use serde::Deserialize;
 use std::io::Read;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 /// freeq — FreeQ post-quantum overlay network management CLI.
 #[derive(Parser, Debug)]
@@ -134,9 +136,15 @@ async fn main() -> Result<()> {
                 status.bulk_algorithm
             );
         }
-        Commands::Init { config: _, name: _ } => {
-            // TODO(v0.1): generate identity keypair, write config
-            println!("freeq init — not yet implemented");
+        Commands::Init { config, name } => {
+            let summary = initialize_config(config, name)?;
+            println!(
+                "initialized node '{}' config={} key_path={} address={}",
+                summary.node_name,
+                summary.config_path.display(),
+                summary.key_path.display(),
+                summary.address
+            );
         }
         Commands::Peer { action } => match action {
             PeerAction::Add {
@@ -209,6 +217,94 @@ async fn main() -> Result<()> {
         Commands::Algorithm { action: _ } => {
             println!("freeq algorithm — not yet implemented");
         }
+    }
+
+    Ok(())
+}
+
+#[derive(Debug)]
+struct InitSummary {
+    node_name: String,
+    config_path: std::path::PathBuf,
+    key_path: std::path::PathBuf,
+    address: String,
+}
+
+fn initialize_config(config_path: std::path::PathBuf, name: Option<String>) -> Result<InitSummary> {
+    if config_path.exists() {
+        anyhow::bail!("config file '{}' already exists", config_path.display());
+    }
+
+    let node_name = name.unwrap_or_else(default_node_name);
+    let config_dir = config_path
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let key_path = config_dir.join("identity.key");
+
+    if key_path.exists() {
+        anyhow::bail!("identity key '{}' already exists", key_path.display());
+    }
+
+    std::fs::create_dir_all(&config_dir).with_context(|| {
+        format!(
+            "failed to create configuration directory '{}'",
+            config_dir.display()
+        )
+    })?;
+
+    let mut rng = rand::thread_rng();
+    let (identity, _public_key) = freeq_crypto::sign::IdentityKeypair::generate(&mut rng)
+        .map_err(|e| anyhow::anyhow!("identity key generation failed: {e}"))?;
+    std::fs::write(&key_path, identity.to_bytes())
+        .with_context(|| format!("failed to write identity key '{}'", key_path.display()))?;
+    set_private_key_permissions(&key_path)?;
+
+    let config = freeq_config::Config {
+        node: freeq_config::NodeConfig {
+            name: node_name.clone(),
+            listen: "0.0.0.0:51820".into(),
+            address: "10.0.0.1/24".into(),
+            key_path: key_path.to_string_lossy().into_owned(),
+            algorithm: "ml-kem-768".into(),
+            sign: "ml-dsa-65".into(),
+            api_enabled: true,
+            api_addr: "127.0.0.1:6789".into(),
+        },
+        peer: Vec::new(),
+    };
+    config.validate()?;
+
+    let rendered =
+        toml::to_string_pretty(&config).context("failed to render configuration TOML")?;
+    std::fs::write(&config_path, rendered)
+        .with_context(|| format!("failed to write config '{}'", config_path.display()))?;
+
+    Ok(InitSummary {
+        node_name,
+        config_path,
+        key_path,
+        address: config.node.address,
+    })
+}
+
+fn default_node_name() -> String {
+    std::env::var("HOSTNAME")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "freeq-node".into())
+}
+
+fn set_private_key_permissions(path: &std::path::Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("failed to set permissions on '{}'", path.display()))?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = path;
     }
 
     Ok(())
@@ -348,7 +444,9 @@ fn normalize_peer_key_material(keys: PeerKeyMaterial) -> Result<PeerKeyMaterial>
 
 #[cfg(test)]
 mod tests {
-    use super::{load_peer_key_material_from_env, load_peer_key_material_from_reader};
+    use super::{
+        initialize_config, load_peer_key_material_from_env, load_peer_key_material_from_reader,
+    };
 
     #[test]
     fn loads_peer_key_material_from_env() {
@@ -385,5 +483,35 @@ mod tests {
         assert!(error
             .to_string()
             .contains("peer public key must not be empty"));
+    }
+
+    #[test]
+    fn init_writes_config_and_identity_key() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config_path = tempdir.path().join("freeq.toml");
+
+        let summary = initialize_config(config_path.clone(), Some("chi-01".into()))
+            .expect("init should succeed");
+
+        assert_eq!(summary.node_name, "chi-01");
+        assert!(config_path.exists());
+        assert!(summary.key_path.exists());
+
+        let config = freeq_config::Config::load(&config_path).expect("config load");
+        config.validate().expect("config validate");
+        assert_eq!(config.node.name, "chi-01");
+        assert_eq!(config.node.key_path, summary.key_path.to_string_lossy());
+    }
+
+    #[test]
+    fn init_rejects_existing_config() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config_path = tempdir.path().join("freeq.toml");
+        std::fs::write(&config_path, "existing").expect("seed config");
+
+        let error = initialize_config(config_path, Some("chi-01".into()))
+            .expect_err("existing config should be rejected");
+
+        assert!(error.to_string().contains("config file"));
     }
 }
