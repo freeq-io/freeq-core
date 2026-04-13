@@ -1,12 +1,46 @@
 //! Axum router configuration.
 
 use axum::{
+    extract::State,
+    http::Request,
+    middleware::{self, Next},
+    response::Response,
     routing::{delete, get, post},
     Router,
 };
+use std::sync::Arc;
+
+const API_RATE_LIMIT_BURST: u64 = 128;
+const API_RATE_LIMIT_PER_SECOND: u64 = 64;
+
+#[derive(Clone)]
+struct ApiRateLimiter {
+    bucket: Arc<crate::rate_limit::TokenBucket>,
+}
+
+async fn enforce_api_rate_limit(
+    State(limiter): State<ApiRateLimiter>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> crate::Result<Response> {
+    if !limiter.bucket.allow() {
+        return Err(crate::ApiError::RateLimited(
+            "local API request rate exceeded".into(),
+        ));
+    }
+
+    Ok(next.run(request).await)
+}
 
 /// Build the Axum router with all API endpoints.
 pub fn build_router(state: crate::state::SharedApiState) -> Router {
+    let limiter = ApiRateLimiter {
+        bucket: Arc::new(crate::rate_limit::TokenBucket::new(
+            API_RATE_LIMIT_BURST,
+            API_RATE_LIMIT_PER_SECOND,
+        )),
+    };
+
     Router::new()
         .route("/v1/status", get(crate::handlers::status::get_status))
         .route("/v1/peers", get(crate::handlers::peers::list_peers))
@@ -26,17 +60,25 @@ pub fn build_router(state: crate::state::SharedApiState) -> Router {
             get(crate::handlers::algorithm::get_algorithm)
                 .post(crate::handlers::algorithm::switch_algorithm),
         )
+        .layer(middleware::from_fn_with_state(
+            limiter,
+            enforce_api_rate_limit,
+        ))
         .with_state(state)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::build_router;
+    use super::{build_router, enforce_api_rate_limit, ApiRateLimiter};
     use crate::{models::PeerSummary, state::ApiState};
     use axum::{
         body::{to_bytes, Body},
         http::{Request, StatusCode},
+        middleware,
+        routing::get,
+        Router,
     };
+    use std::sync::Arc;
     use tower::util::ServiceExt;
 
     fn test_state() -> crate::state::SharedApiState {
@@ -169,5 +211,42 @@ mod tests {
         assert!(body.contains("\"kem_algorithm\":\"ml-kem-768\""));
         assert!(body.contains("\"sign_algorithm\":\"ml-dsa-65\""));
         assert!(body.contains("\"bulk_algorithm\":\"chacha20-poly1305\""));
+    }
+
+    #[tokio::test]
+    async fn rate_limiter_sheds_excess_requests() {
+        let limiter = ApiRateLimiter {
+            bucket: Arc::new(crate::rate_limit::TokenBucket::new(1, 0)),
+        };
+        let app = Router::new()
+            .route("/v1/status", get(crate::handlers::status::get_status))
+            .layer(middleware::from_fn_with_state(
+                limiter,
+                enforce_api_rate_limit,
+            ))
+            .with_state(test_state());
+
+        let first = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/status")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        assert_eq!(first.status(), StatusCode::OK);
+
+        let second = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/status")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 }

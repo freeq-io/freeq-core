@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+const ACCEPT_RATE_LIMIT_BURST: u64 = 64;
+const ACCEPT_RATE_LIMIT_PER_SECOND: u64 = 32;
 const OUTBOUND_RECONNECT_BASE_DELAY: Duration = Duration::from_millis(250);
 const OUTBOUND_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
 
@@ -482,6 +484,11 @@ fn spawn_accept_loop(
     api_state: freeq_api::state::SharedApiState,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let accept_limiter = freeq_api::rate_limit::TokenBucket::new(
+            ACCEPT_RATE_LIMIT_BURST,
+            ACCEPT_RATE_LIMIT_PER_SECOND,
+        );
+
         loop {
             let connection = match endpoint.accept().await {
                 Ok(connection) => Arc::new(connection),
@@ -491,6 +498,10 @@ fn spawn_accept_loop(
                     continue;
                 }
             };
+            if !accept_limiter.allow() {
+                tracing::warn!("dropping inbound connection due to accept rate limit");
+                continue;
+            }
             let handshake_started = Instant::now();
 
             match run_responder_handshake(&identity, &registry, connection.as_ref()).await {
