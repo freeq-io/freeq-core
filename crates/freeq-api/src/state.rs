@@ -1,14 +1,18 @@
 //! Shared runtime state exposed through the local REST API.
 
 use crate::models::{AlgorithmResponse, PeerSummary, StatusResponse, TunnelStats};
-use chrono::{DateTime, Utc};
+use chrono::{TimeZone, Utc};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::RwLock;
 
-/// Shared mutable API state used by the daemon and request handlers.
-pub type SharedApiState = Arc<RwLock<ApiState>>;
+const NONE_I64: i64 = -1;
+const NONE_U64: u64 = u64::MAX;
+const MICROS_PER_MILLISECOND: f64 = 1_000.0;
+
+/// Shared API state used by the daemon and request handlers.
+pub type SharedApiState = Arc<ApiState>;
 
 /// In-memory runtime snapshot exposed through API reads.
 pub struct ApiState {
@@ -19,37 +23,33 @@ pub struct ApiState {
     sign_algorithm: String,
     bulk_algorithm: String,
     peers: HashMap<String, PeerRuntime>,
-    tunnels: HashMap<String, TunnelRuntime>,
     counters: RuntimeCounters,
 }
 
 struct PeerRuntime {
     endpoint: Option<String>,
     allowed_ips: Vec<String>,
-    connected: bool,
-    last_handshake: Option<DateTime<Utc>>,
-    connect_failures: u64,
-    handshake_failures: u64,
-    last_handshake_duration_ms: Option<f64>,
-}
-
-struct TunnelRuntime {
-    bytes_sent: u64,
-    bytes_received: u64,
-    latency_ms: Option<f64>,
-    packet_loss_pct: Option<f64>,
+    connected: AtomicBool,
+    last_handshake_unix_ms: AtomicI64,
+    connect_failures: AtomicU64,
+    handshake_failures: AtomicU64,
+    last_handshake_duration_micros: AtomicU64,
+    bytes_sent: AtomicU64,
+    bytes_received: AtomicU64,
+    latency_micros: AtomicU64,
+    packet_loss_milli_pct: AtomicU64,
 }
 
 #[derive(Default)]
 struct RuntimeCounters {
-    incoming_accept_failures: u64,
-    outbound_connect_failures: u64,
-    outbound_handshake_failures: u64,
-    inbound_handshake_failures: u64,
-    tun_read_errors: u64,
-    tun_write_errors: u64,
-    packet_forward_failures: u64,
-    peer_receive_errors: u64,
+    incoming_accept_failures: AtomicU64,
+    outbound_connect_failures: AtomicU64,
+    outbound_handshake_failures: AtomicU64,
+    inbound_handshake_failures: AtomicU64,
+    tun_read_errors: AtomicU64,
+    tun_write_errors: AtomicU64,
+    packet_forward_failures: AtomicU64,
+    peer_receive_errors: AtomicU64,
 }
 
 impl ApiState {
@@ -70,17 +70,20 @@ impl ApiState {
                     PeerRuntime {
                         endpoint: peer.endpoint,
                         allowed_ips: peer.allowed_ips,
-                        connected: peer.connected,
-                        last_handshake: peer
-                            .last_handshake
-                            .as_deref()
-                            .and_then(|timestamp| {
-                                chrono::DateTime::parse_from_rfc3339(timestamp).ok()
-                            })
-                            .map(|timestamp| timestamp.with_timezone(&Utc)),
-                        connect_failures: 0,
-                        handshake_failures: 0,
-                        last_handshake_duration_ms: None,
+                        connected: AtomicBool::new(peer.connected),
+                        last_handshake_unix_ms: AtomicI64::new(
+                            peer.last_handshake
+                                .as_deref()
+                                .and_then(parse_rfc3339_unix_millis)
+                                .unwrap_or(NONE_I64),
+                        ),
+                        connect_failures: AtomicU64::new(0),
+                        handshake_failures: AtomicU64::new(0),
+                        last_handshake_duration_micros: AtomicU64::new(NONE_U64),
+                        bytes_sent: AtomicU64::new(0),
+                        bytes_received: AtomicU64::new(0),
+                        latency_micros: AtomicU64::new(NONE_U64),
+                        packet_loss_milli_pct: AtomicU64::new(NONE_U64),
                     },
                 )
             })
@@ -94,130 +97,124 @@ impl ApiState {
             sign_algorithm,
             bulk_algorithm,
             peers,
-            tunnels: HashMap::new(),
             counters: RuntimeCounters::default(),
         }
     }
 
     /// Create a shared API state handle.
     pub fn shared(self) -> SharedApiState {
-        Arc::new(RwLock::new(self))
+        Arc::new(self)
     }
 
     /// Mark a peer as connected and update their latest handshake time.
-    pub fn mark_peer_connected(&mut self, peer_name: &str) {
+    pub fn mark_peer_connected(&self, peer_name: &str) {
         self.record_handshake_success(peer_name, None);
     }
 
     /// Mark a peer as disconnected.
-    pub fn mark_peer_disconnected(&mut self, peer_name: &str) {
-        if let Some(peer) = self.peers.get_mut(peer_name) {
-            peer.connected = false;
+    pub fn mark_peer_disconnected(&self, peer_name: &str) {
+        if let Some(peer) = self.peers.get(peer_name) {
+            peer.connected.store(false, Ordering::Relaxed);
         }
     }
 
     /// Increment transmitted byte counters for a peer tunnel.
-    pub fn add_bytes_sent(&mut self, peer_name: &str, bytes: u64) {
-        self.tunnels
-            .entry(peer_name.to_string())
-            .or_insert(TunnelRuntime {
-                bytes_sent: 0,
-                bytes_received: 0,
-                latency_ms: None,
-                packet_loss_pct: None,
-            })
-            .bytes_sent += bytes;
+    pub fn add_bytes_sent(&self, peer_name: &str, bytes: u64) {
+        if let Some(peer) = self.peers.get(peer_name) {
+            peer.bytes_sent.fetch_add(bytes, Ordering::Relaxed);
+        }
     }
 
     /// Increment received byte counters for a peer tunnel.
-    pub fn add_bytes_received(&mut self, peer_name: &str, bytes: u64) {
-        self.tunnels
-            .entry(peer_name.to_string())
-            .or_insert(TunnelRuntime {
-                bytes_sent: 0,
-                bytes_received: 0,
-                latency_ms: None,
-                packet_loss_pct: None,
-            })
-            .bytes_received += bytes;
+    pub fn add_bytes_received(&self, peer_name: &str, bytes: u64) {
+        if let Some(peer) = self.peers.get(peer_name) {
+            peer.bytes_received.fetch_add(bytes, Ordering::Relaxed);
+        }
     }
 
     /// Record a successful handshake and optional duration sample for a peer.
-    pub fn record_handshake_success(&mut self, peer_name: &str, duration_ms: Option<f64>) {
-        let now = Utc::now();
-        if let Some(peer) = self.peers.get_mut(peer_name) {
-            peer.connected = true;
-            peer.last_handshake = Some(now);
-            peer.last_handshake_duration_ms = duration_ms;
-        }
+    pub fn record_handshake_success(&self, peer_name: &str, duration_ms: Option<f64>) {
+        let Some(peer) = self.peers.get(peer_name) else {
+            return;
+        };
 
-        let tunnel = self
-            .tunnels
-            .entry(peer_name.to_string())
-            .or_insert(TunnelRuntime {
-                bytes_sent: 0,
-                bytes_received: 0,
-                latency_ms: None,
-                packet_loss_pct: None,
-            });
+        peer.connected.store(true, Ordering::Relaxed);
+        peer.last_handshake_unix_ms
+            .store(Utc::now().timestamp_millis(), Ordering::Relaxed);
+
         if let Some(duration_ms) = duration_ms {
-            tunnel.latency_ms = Some(duration_ms);
+            let duration_micros = duration_ms_to_micros(duration_ms);
+            peer.last_handshake_duration_micros
+                .store(duration_micros, Ordering::Relaxed);
+            peer.latency_micros
+                .store(duration_micros, Ordering::Relaxed);
         }
     }
 
     /// Record an outbound connection failure for a peer.
-    pub fn record_outbound_connect_failure(&mut self, peer_name: &str) {
-        self.counters.outbound_connect_failures =
-            self.counters.outbound_connect_failures.saturating_add(1);
-        if let Some(peer) = self.peers.get_mut(peer_name) {
-            peer.connect_failures = peer.connect_failures.saturating_add(1);
-            peer.connected = false;
+    pub fn record_outbound_connect_failure(&self, peer_name: &str) {
+        self.counters
+            .outbound_connect_failures
+            .fetch_add(1, Ordering::Relaxed);
+        if let Some(peer) = self.peers.get(peer_name) {
+            peer.connect_failures.fetch_add(1, Ordering::Relaxed);
+            peer.connected.store(false, Ordering::Relaxed);
         }
     }
 
     /// Record a handshake failure on the inbound or outbound control path.
-    pub fn record_handshake_failure(&mut self, peer_name: Option<&str>, inbound: bool) {
+    pub fn record_handshake_failure(&self, peer_name: Option<&str>, inbound: bool) {
         if inbound {
-            self.counters.inbound_handshake_failures =
-                self.counters.inbound_handshake_failures.saturating_add(1);
+            self.counters
+                .inbound_handshake_failures
+                .fetch_add(1, Ordering::Relaxed);
         } else {
-            self.counters.outbound_handshake_failures =
-                self.counters.outbound_handshake_failures.saturating_add(1);
+            self.counters
+                .outbound_handshake_failures
+                .fetch_add(1, Ordering::Relaxed);
         }
 
         if let Some(peer_name) = peer_name {
-            if let Some(peer) = self.peers.get_mut(peer_name) {
-                peer.handshake_failures = peer.handshake_failures.saturating_add(1);
-                peer.connected = false;
+            if let Some(peer) = self.peers.get(peer_name) {
+                peer.handshake_failures.fetch_add(1, Ordering::Relaxed);
+                peer.connected.store(false, Ordering::Relaxed);
             }
         }
     }
 
     /// Record a failed incoming connection accept.
-    pub fn record_incoming_accept_failure(&mut self) {
-        self.counters.incoming_accept_failures =
-            self.counters.incoming_accept_failures.saturating_add(1);
+    pub fn record_incoming_accept_failure(&self) {
+        self.counters
+            .incoming_accept_failures
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record a TUN read error.
-    pub fn record_tun_read_error(&mut self) {
-        self.counters.tun_read_errors = self.counters.tun_read_errors.saturating_add(1);
+    pub fn record_tun_read_error(&self) {
+        self.counters
+            .tun_read_errors
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record a TUN write error.
-    pub fn record_tun_write_error(&mut self) {
-        self.counters.tun_write_errors = self.counters.tun_write_errors.saturating_add(1);
+    pub fn record_tun_write_error(&self) {
+        self.counters
+            .tun_write_errors
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record a packet forward failure.
-    pub fn record_packet_forward_failure(&mut self) {
-        self.counters.packet_forward_failures =
-            self.counters.packet_forward_failures.saturating_add(1);
+    pub fn record_packet_forward_failure(&self) {
+        self.counters
+            .packet_forward_failures
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record a peer receive error.
-    pub fn record_peer_receive_error(&mut self) {
-        self.counters.peer_receive_errors = self.counters.peer_receive_errors.saturating_add(1);
+    pub fn record_peer_receive_error(&self) {
+        self.counters
+            .peer_receive_errors
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Build the current `/v1/status` response.
@@ -230,7 +227,11 @@ impl ApiState {
             sign_algorithm: self.sign_algorithm.clone(),
             bulk_algorithm: self.bulk_algorithm.clone(),
             peer_count: self.peers.len(),
-            tunnel_count: self.tunnels.len(),
+            tunnel_count: self
+                .peers
+                .values()
+                .filter(|peer| peer.connected.load(Ordering::Relaxed))
+                .count(),
         }
     }
 
@@ -252,8 +253,8 @@ impl ApiState {
                 name: name.clone(),
                 endpoint: peer.endpoint.clone(),
                 allowed_ips: peer.allowed_ips.clone(),
-                connected: peer.connected,
-                last_handshake: peer.last_handshake.map(|ts| ts.to_rfc3339()),
+                connected: peer.connected.load(Ordering::Relaxed),
+                last_handshake: load_timestamp_rfc3339(&peer.last_handshake_unix_ms),
             })
             .collect();
         peers.sort_by(|a, b| a.name.cmp(&b.name));
@@ -263,14 +264,31 @@ impl ApiState {
     /// Build the current `/v1/tunnels` response.
     pub fn tunnel_stats(&self) -> Vec<TunnelStats> {
         let mut tunnels: Vec<_> = self
-            .tunnels
+            .peers
             .iter()
-            .map(|(peer, tunnel)| TunnelStats {
-                peer: peer.clone(),
-                bytes_sent: tunnel.bytes_sent,
-                bytes_received: tunnel.bytes_received,
-                latency_ms: tunnel.latency_ms,
-                packet_loss_pct: tunnel.packet_loss_pct,
+            .filter_map(|(peer_name, peer)| {
+                let bytes_sent = peer.bytes_sent.load(Ordering::Relaxed);
+                let bytes_received = peer.bytes_received.load(Ordering::Relaxed);
+                let latency_ms = load_optional_ms(&peer.latency_micros);
+                let packet_loss_pct = load_optional_milli_pct(&peer.packet_loss_milli_pct);
+                let connected = peer.connected.load(Ordering::Relaxed);
+
+                if !connected
+                    && bytes_sent == 0
+                    && bytes_received == 0
+                    && latency_ms.is_none()
+                    && packet_loss_pct.is_none()
+                {
+                    return None;
+                }
+
+                Some(TunnelStats {
+                    peer: peer_name.clone(),
+                    bytes_sent,
+                    bytes_received,
+                    latency_ms,
+                    packet_loss_pct,
+                })
             })
             .collect();
         tunnels.sort_by(|a, b| a.peer.cmp(&b.peer));
@@ -279,15 +297,16 @@ impl ApiState {
 
     /// Build a Prometheus-compatible text exposition snapshot.
     pub fn metrics_exposition(&self) -> String {
-        let connected_peers = self.peers.values().filter(|peer| peer.connected).count();
+        let connected_peers = self
+            .peers
+            .values()
+            .filter(|peer| peer.connected.load(Ordering::Relaxed))
+            .count();
 
         let mut lines = vec![
             "# HELP freeq_uptime_seconds Seconds since the daemon started.".to_string(),
             "# TYPE freeq_uptime_seconds gauge".to_string(),
-            format!(
-                "freeq_uptime_seconds {}",
-                self.start_time.elapsed().as_secs()
-            ),
+            format!("freeq_uptime_seconds {}", self.start_time.elapsed().as_secs()),
             "# HELP freeq_configured_peers Total configured peers.".to_string(),
             "# TYPE freeq_configured_peers gauge".to_string(),
             format!("freeq_configured_peers {}", self.peers.len()),
@@ -296,7 +315,7 @@ impl ApiState {
             format!("freeq_connected_peers {}", connected_peers),
             "# HELP freeq_active_tunnels Total active tunnel entries.".to_string(),
             "# TYPE freeq_active_tunnels gauge".to_string(),
-            format!("freeq_active_tunnels {}", self.tunnels.len()),
+            format!("freeq_active_tunnels {}", connected_peers),
             "# HELP freeq_peer_connected Peer connection state (1=connected, 0=disconnected)."
                 .to_string(),
             "# TYPE freeq_peer_connected gauge".to_string(),
@@ -310,48 +329,64 @@ impl ApiState {
             "# TYPE freeq_incoming_accept_failures_total counter".to_string(),
             format!(
                 "freeq_incoming_accept_failures_total {}",
-                self.counters.incoming_accept_failures
+                self.counters
+                    .incoming_accept_failures
+                    .load(Ordering::Relaxed)
             ),
             "# HELP freeq_outbound_connect_failures_total Failed outbound peer connects."
                 .to_string(),
             "# TYPE freeq_outbound_connect_failures_total counter".to_string(),
             format!(
                 "freeq_outbound_connect_failures_total {}",
-                self.counters.outbound_connect_failures
+                self.counters
+                    .outbound_connect_failures
+                    .load(Ordering::Relaxed)
             ),
             "# HELP freeq_outbound_handshake_failures_total Failed outbound handshakes."
                 .to_string(),
             "# TYPE freeq_outbound_handshake_failures_total counter".to_string(),
             format!(
                 "freeq_outbound_handshake_failures_total {}",
-                self.counters.outbound_handshake_failures
+                self.counters
+                    .outbound_handshake_failures
+                    .load(Ordering::Relaxed)
             ),
             "# HELP freeq_inbound_handshake_failures_total Failed inbound handshakes."
                 .to_string(),
             "# TYPE freeq_inbound_handshake_failures_total counter".to_string(),
             format!(
                 "freeq_inbound_handshake_failures_total {}",
-                self.counters.inbound_handshake_failures
+                self.counters
+                    .inbound_handshake_failures
+                    .load(Ordering::Relaxed)
             ),
             "# HELP freeq_tun_read_errors_total Failed TUN reads.".to_string(),
             "# TYPE freeq_tun_read_errors_total counter".to_string(),
-            format!("freeq_tun_read_errors_total {}", self.counters.tun_read_errors),
+            format!(
+                "freeq_tun_read_errors_total {}",
+                self.counters.tun_read_errors.load(Ordering::Relaxed)
+            ),
             "# HELP freeq_tun_write_errors_total Failed TUN writes.".to_string(),
             "# TYPE freeq_tun_write_errors_total counter".to_string(),
-            format!("freeq_tun_write_errors_total {}", self.counters.tun_write_errors),
+            format!(
+                "freeq_tun_write_errors_total {}",
+                self.counters.tun_write_errors.load(Ordering::Relaxed)
+            ),
             "# HELP freeq_packet_forward_failures_total Failed routed packet forwards."
                 .to_string(),
             "# TYPE freeq_packet_forward_failures_total counter".to_string(),
             format!(
                 "freeq_packet_forward_failures_total {}",
-                self.counters.packet_forward_failures
+                self.counters
+                    .packet_forward_failures
+                    .load(Ordering::Relaxed)
             ),
             "# HELP freeq_peer_receive_errors_total Failed encrypted peer receives."
                 .to_string(),
             "# TYPE freeq_peer_receive_errors_total counter".to_string(),
             format!(
                 "freeq_peer_receive_errors_total {}",
-                self.counters.peer_receive_errors
+                self.counters.peer_receive_errors.load(Ordering::Relaxed)
             ),
             "# HELP freeq_peer_connect_failures_total Failed outbound connects by peer."
                 .to_string(),
@@ -370,39 +405,81 @@ impl ApiState {
             lines.push(format!(
                 "freeq_peer_connected{{peer=\"{}\"}} {}",
                 peer_name,
-                if peer.connected { 1 } else { 0 }
+                if peer.connected.load(Ordering::Relaxed) {
+                    1
+                } else {
+                    0
+                }
             ));
             lines.push(format!(
                 "freeq_peer_connect_failures_total{{peer=\"{}\"}} {}",
-                peer_name, peer.connect_failures
+                peer_name,
+                peer.connect_failures.load(Ordering::Relaxed)
             ));
             lines.push(format!(
                 "freeq_peer_handshake_failures_total{{peer=\"{}\"}} {}",
-                peer_name, peer.handshake_failures
+                peer_name,
+                peer.handshake_failures.load(Ordering::Relaxed)
             ));
-            if let Some(duration_ms) = peer.last_handshake_duration_ms {
+            if let Some(duration_ms) = load_optional_ms(&peer.last_handshake_duration_micros) {
                 lines.push(format!(
                     "freeq_peer_last_handshake_duration_ms{{peer=\"{}\"}} {:.3}",
                     peer_name, duration_ms
                 ));
             }
-        }
-
-        let mut tunnels: Vec<_> = self.tunnels.iter().collect();
-        tunnels.sort_by(|(left, _), (right, _)| left.cmp(right));
-        for (peer_name, tunnel) in tunnels {
             lines.push(format!(
                 "freeq_tunnel_bytes_sent_total{{peer=\"{}\"}} {}",
-                peer_name, tunnel.bytes_sent
+                peer_name,
+                peer.bytes_sent.load(Ordering::Relaxed)
             ));
             lines.push(format!(
                 "freeq_tunnel_bytes_received_total{{peer=\"{}\"}} {}",
-                peer_name, tunnel.bytes_received
+                peer_name,
+                peer.bytes_received.load(Ordering::Relaxed)
             ));
         }
 
         lines.push(String::new());
         lines.join("\n")
+    }
+}
+
+fn parse_rfc3339_unix_millis(value: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|timestamp| timestamp.timestamp_millis())
+}
+
+fn load_timestamp_rfc3339(timestamp: &AtomicI64) -> Option<String> {
+    let unix_ms = timestamp.load(Ordering::Relaxed);
+    if unix_ms == NONE_I64 {
+        return None;
+    }
+
+    Utc.timestamp_millis_opt(unix_ms)
+        .single()
+        .map(|timestamp| timestamp.to_rfc3339())
+}
+
+fn duration_ms_to_micros(duration_ms: f64) -> u64 {
+    (duration_ms * MICROS_PER_MILLISECOND).round() as u64
+}
+
+fn load_optional_ms(value: &AtomicU64) -> Option<f64> {
+    let raw = value.load(Ordering::Relaxed);
+    if raw == NONE_U64 {
+        None
+    } else {
+        Some(raw as f64 / MICROS_PER_MILLISECOND)
+    }
+}
+
+fn load_optional_milli_pct(value: &AtomicU64) -> Option<f64> {
+    let raw = value.load(Ordering::Relaxed);
+    if raw == NONE_U64 {
+        None
+    } else {
+        Some(raw as f64 / 1_000.0)
     }
 }
 
@@ -413,7 +490,7 @@ mod tests {
 
     #[test]
     fn state_tracks_peer_and_tunnel_counters() {
-        let mut state = ApiState::new(
+        let state = ApiState::new(
             "nyc-01".into(),
             "0.1.0".into(),
             "ml-kem-768".into(),
@@ -455,6 +532,7 @@ mod tests {
         assert!(peers[0].last_handshake.is_some());
         assert_eq!(tunnels[0].bytes_sent, 128);
         assert_eq!(tunnels[0].bytes_received, 256);
+        assert_eq!(tunnels[0].latency_ms, Some(12.5));
         assert!(metrics.contains("freeq_connected_peers 1"));
         assert!(metrics.contains("freeq_tunnel_bytes_sent_total{peer=\"lon-01\"} 128"));
         assert!(metrics.contains("freeq_outbound_connect_failures_total 1"));

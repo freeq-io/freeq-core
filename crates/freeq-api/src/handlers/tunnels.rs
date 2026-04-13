@@ -7,6 +7,5 @@ use axum::{extract::State, Json};
 pub async fn list_tunnels(
     State(state): State<crate::state::SharedApiState>,
 ) -> Result<Json<Vec<TunnelStats>>> {
-    let state = state.read().await;
     Ok(Json(state.tunnel_stats()))
 }

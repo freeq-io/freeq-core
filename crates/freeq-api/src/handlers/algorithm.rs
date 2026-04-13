@@ -7,7 +7,7 @@ use axum::{extract::State, Json};
 pub async fn get_algorithm(
     State(state): State<crate::state::SharedApiState>,
 ) -> Json<crate::models::AlgorithmResponse> {
-    Json(state.read().await.algorithm_response())
+    Json(state.algorithm_response())
 }
 
 /// Hot-swap the active KEM or signature algorithm without interrupting sessions.

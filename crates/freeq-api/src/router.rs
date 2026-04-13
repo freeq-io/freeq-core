@@ -67,10 +67,7 @@ mod tests {
     #[tokio::test]
     async fn status_route_returns_runtime_snapshot() {
         let state = test_state();
-        {
-            let mut guard = state.write().await;
-            guard.mark_peer_connected("lon-01");
-        }
+        state.mark_peer_connected("lon-01");
 
         let app = build_router(state);
         let response = app
@@ -94,12 +91,9 @@ mod tests {
     #[tokio::test]
     async fn peers_and_tunnels_routes_return_sorted_runtime_data() {
         let state = test_state();
-        {
-            let mut guard = state.write().await;
-            guard.mark_peer_connected("lon-01");
-            guard.add_bytes_sent("lon-01", 128);
-            guard.add_bytes_received("lon-01", 256);
-        }
+        state.mark_peer_connected("lon-01");
+        state.add_bytes_sent("lon-01", 128);
+        state.add_bytes_received("lon-01", 256);
 
         let app = build_router(state.clone());
 
@@ -137,11 +131,8 @@ mod tests {
     #[tokio::test]
     async fn metrics_route_returns_prometheus_text() {
         let state = test_state();
-        {
-            let mut guard = state.write().await;
-            guard.mark_peer_connected("lon-01");
-            guard.add_bytes_sent("lon-01", 128);
-        }
+        state.mark_peer_connected("lon-01");
+        state.add_bytes_sent("lon-01", 128);
 
         let app = build_router(state);
         let response = app

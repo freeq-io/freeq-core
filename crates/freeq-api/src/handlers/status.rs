@@ -7,6 +7,5 @@ use axum::{extract::State, Json};
 pub async fn get_status(
     State(state): State<crate::state::SharedApiState>,
 ) -> Result<Json<StatusResponse>> {
-    let state = state.read().await;
     Ok(Json(state.status_response()))
 }

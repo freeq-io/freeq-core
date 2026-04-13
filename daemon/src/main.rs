@@ -201,8 +201,7 @@ async fn start_runtime(
             Ok(peer_addr) => peer_addr,
             Err(err) => {
                 tracing::warn!(peer = %peer.name, %err, "failed to resolve peer endpoint");
-                let mut state = api_state.write().await;
-                state.record_outbound_connect_failure(&peer.name);
+                api_state.record_outbound_connect_failure(&peer.name);
                 continue;
             }
         };
@@ -210,8 +209,7 @@ async fn start_runtime(
             Ok(connection) => Arc::new(connection),
             Err(err) => {
                 tracing::warn!(peer = %peer.name, %err, "failed to connect to peer");
-                let mut state = api_state.write().await;
-                state.record_outbound_connect_failure(&peer.name);
+                api_state.record_outbound_connect_failure(&peer.name);
                 continue;
             }
         };
@@ -220,8 +218,7 @@ async fn start_runtime(
             Ok(session_keys) => session_keys,
             Err(err) => {
                 tracing::warn!(peer = %peer.name, %err, "outbound peer handshake failed");
-                let mut state = api_state.write().await;
-                state.record_handshake_failure(Some(&peer.name), false);
+                api_state.record_handshake_failure(Some(&peer.name), false);
                 continue;
             }
         };
@@ -230,13 +227,10 @@ async fn start_runtime(
             let mut engine = engine.lock().await;
             engine.add_peer(peer.name.clone(), connection, &session_keys);
         }
-        {
-            let mut state = api_state.write().await;
-            state.record_handshake_success(
-                &peer.name,
-                Some(handshake_started.elapsed().as_secs_f64() * 1000.0),
-            );
-        }
+        api_state.record_handshake_success(
+            &peer.name,
+            Some(handshake_started.elapsed().as_secs_f64() * 1000.0),
+        );
 
         active_peers.push(peer.name.clone());
         tasks.push(spawn_peer_to_tun_loop(
@@ -317,20 +311,17 @@ fn spawn_tun_to_peer_loop(
                     let engine = engine.lock().await;
                     match engine.forward_packet(packet).await {
                         Ok(peer_name) => {
-                            let mut state = api_state.write().await;
-                            state.add_bytes_sent(&peer_name, packet_len);
+                            api_state.add_bytes_sent(&peer_name, packet_len);
                         }
                         Err(err) => {
                             tracing::warn!(%err, "failed to forward packet from TUN");
-                            let mut state = api_state.write().await;
-                            state.record_packet_forward_failure();
+                            api_state.record_packet_forward_failure();
                         }
                     }
                 }
                 Err(err) => {
                     tracing::warn!(%err, "failed to read from TUN");
-                    let mut state = api_state.write().await;
-                    state.record_tun_read_error();
+                    api_state.record_tun_read_error();
                     break;
                 }
             }
@@ -356,19 +347,16 @@ fn spawn_peer_to_tun_loop(
                     let packet_len = packet.len() as u64;
                     if let Err(err) = tun.write_packet(packet).await {
                         tracing::warn!(peer = %peer_name, %err, "failed to write peer packet to TUN");
-                        let mut state = api_state.write().await;
-                        state.record_tun_write_error();
-                        state.mark_peer_disconnected(&peer_name);
+                        api_state.record_tun_write_error();
+                        api_state.mark_peer_disconnected(&peer_name);
                         break;
                     }
-                    let mut state = api_state.write().await;
-                    state.add_bytes_received(&peer_name, packet_len);
+                    api_state.add_bytes_received(&peer_name, packet_len);
                 }
                 Err(err) => {
                     tracing::warn!(peer = %peer_name, %err, "failed to receive peer packet");
-                    let mut state = api_state.write().await;
-                    state.record_peer_receive_error();
-                    state.mark_peer_disconnected(&peer_name);
+                    api_state.record_peer_receive_error();
+                    api_state.mark_peer_disconnected(&peer_name);
                     break;
                 }
             }
@@ -390,8 +378,7 @@ fn spawn_accept_loop(
                 Ok(connection) => Arc::new(connection),
                 Err(err) => {
                     tracing::warn!(%err, "failed to accept incoming connection");
-                    let mut state = api_state.write().await;
-                    state.record_incoming_accept_failure();
+                    api_state.record_incoming_accept_failure();
                     continue;
                 }
             };
@@ -403,13 +390,10 @@ fn spawn_accept_loop(
                         let mut engine = engine.lock().await;
                         engine.add_peer(peer_name.clone(), connection, &session_keys);
                     }
-                    {
-                        let mut state = api_state.write().await;
-                        state.record_handshake_success(
-                            &peer_name,
-                            Some(handshake_started.elapsed().as_secs_f64() * 1000.0),
-                        );
-                    }
+                    api_state.record_handshake_success(
+                        &peer_name,
+                        Some(handshake_started.elapsed().as_secs_f64() * 1000.0),
+                    );
 
                     std::mem::drop(spawn_peer_to_tun_loop(
                         peer_name,
@@ -420,8 +404,7 @@ fn spawn_accept_loop(
                 }
                 Err(err) => {
                     tracing::warn!(%err, "incoming peer handshake failed");
-                    let mut state = api_state.write().await;
-                    state.record_handshake_failure(None, true);
+                    api_state.record_handshake_failure(None, true);
                 }
             }
         }

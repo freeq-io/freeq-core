@@ -5,5 +5,5 @@ use axum::extract::State;
 
 /// Return node metrics in Prometheus text exposition format.
 pub async fn get_metrics(State(state): State<SharedApiState>) -> String {
-    state.read().await.metrics_exposition()
+    state.metrics_exposition()
 }

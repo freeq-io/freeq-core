@@ -13,7 +13,6 @@ use axum::{
 pub async fn list_peers(
     State(state): State<crate::state::SharedApiState>,
 ) -> Result<Json<Vec<PeerSummary>>> {
-    let state = state.read().await;
     Ok(Json(state.peer_summaries()))
 }
 
