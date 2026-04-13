@@ -30,6 +30,7 @@ rand               = { workspace = true }
 base64             = { workspace = true }
 hex                = { workspace = true }
 ipnetwork          = { workspace = true }
+libc               = "0.2"
 
 [dev-dependencies]
 toml               = { workspace = true }

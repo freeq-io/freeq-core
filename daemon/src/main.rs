@@ -136,6 +136,143 @@ fn set_private_key_permissions(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+#[derive(Debug, Clone)]
+struct PrivilegeDropTarget {
+    uid: libc::uid_t,
+    gid: libc::gid_t,
+    label: String,
+}
+
+#[cfg(unix)]
+fn current_euid() -> libc::uid_t {
+    unsafe { libc::geteuid() }
+}
+
+#[cfg(unix)]
+fn maybe_drop_privileges() -> Result<Option<PrivilegeDropTarget>> {
+    if current_euid() != 0 {
+        return Ok(None);
+    }
+
+    let target = resolve_privilege_drop_target_from_env()?;
+    let Some(target) = target else {
+        tracing::warn!("running as root with no privilege drop target configured");
+        return Ok(None);
+    };
+
+    drop_privileges_to(&target)?;
+    Ok(Some(target))
+}
+
+#[cfg(not(unix))]
+fn maybe_drop_privileges() -> Result<Option<()>> {
+    Ok(None)
+}
+
+#[cfg(unix)]
+fn resolve_privilege_drop_target_from_env() -> Result<Option<PrivilegeDropTarget>> {
+    if let (Some(uid), Some(gid)) = (
+        parse_env_id("FREEQ_DROP_TO_UID")?,
+        parse_env_id("FREEQ_DROP_TO_GID")?,
+    ) {
+        return Ok(Some(PrivilegeDropTarget {
+            uid,
+            gid,
+            label: format!("uid={uid},gid={gid}"),
+        }));
+    }
+
+    if let Some(user) = std::env::var_os("FREEQ_DROP_TO_USER") {
+        let user = user.to_string_lossy().into_owned();
+        let group = std::env::var_os("FREEQ_DROP_TO_GROUP")
+            .map(|value| value.to_string_lossy().into_owned());
+        return lookup_privilege_target_by_name(&user, group.as_deref()).map(Some);
+    }
+
+    if let (Some(uid), Some(gid)) = (parse_env_id("SUDO_UID")?, parse_env_id("SUDO_GID")?) {
+        return Ok(Some(PrivilegeDropTarget {
+            uid,
+            gid,
+            label: format!("sudo uid={uid},gid={gid}"),
+        }));
+    }
+
+    Ok(None)
+}
+
+#[cfg(unix)]
+fn parse_env_id(key: &str) -> Result<Option<u32>> {
+    match std::env::var(key) {
+        Ok(value) => {
+            Ok(Some(value.parse().with_context(|| {
+                format!("{key} must be a valid integer")
+            })?))
+        }
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            anyhow::bail!("{key} must be valid unicode");
+        }
+    }
+}
+
+#[cfg(unix)]
+fn lookup_privilege_target_by_name(user: &str, group: Option<&str>) -> Result<PrivilegeDropTarget> {
+    use std::ffi::CString;
+
+    let user_cstr = CString::new(user).context("drop user contains interior NUL")?;
+    let passwd = unsafe { libc::getpwnam(user_cstr.as_ptr()) };
+    if passwd.is_null() {
+        anyhow::bail!("drop user '{user}' was not found");
+    }
+    let passwd = unsafe { *passwd };
+
+    let gid = if let Some(group) = group {
+        let group_cstr = CString::new(group).context("drop group contains interior NUL")?;
+        let group_entry = unsafe { libc::getgrnam(group_cstr.as_ptr()) };
+        if group_entry.is_null() {
+            anyhow::bail!("drop group '{group}' was not found");
+        }
+        unsafe { (*group_entry).gr_gid }
+    } else {
+        passwd.pw_gid
+    };
+
+    Ok(PrivilegeDropTarget {
+        uid: passwd.pw_uid,
+        gid,
+        label: match group {
+            Some(group) => format!("{user}:{group}"),
+            None => user.to_string(),
+        },
+    })
+}
+
+#[cfg(unix)]
+fn drop_privileges_to(target: &PrivilegeDropTarget) -> Result<()> {
+    let empty_groups: [libc::gid_t; 0] = [];
+    if unsafe {
+        libc::setgroups(
+            empty_groups
+                .len()
+                .try_into()
+                .expect("empty supplementary group list fits in c_int"),
+            empty_groups.as_ptr(),
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error())
+            .context("failed to clear supplementary groups");
+    }
+    if unsafe { libc::setgid(target.gid) } != 0 {
+        return Err(std::io::Error::last_os_error()).context("failed to drop group privileges");
+    }
+    if unsafe { libc::setuid(target.uid) } != 0 {
+        return Err(std::io::Error::last_os_error()).context("failed to drop user privileges");
+    }
+    Ok(())
+}
+
 struct RuntimeHandles {
     endpoint: freeq_transport::endpoint::Endpoint,
     tun_name: String,
@@ -159,6 +296,12 @@ async fn start_runtime(
     let endpoint = freeq_transport::endpoint::Endpoint::bind(listen_addr).await?;
     let tun = Arc::new(freeq_tunnel::iface::TunInterface::open(None, tun_network).await?);
     let tun_name = tun.name().to_string();
+    #[cfg(unix)]
+    if let Some(target) = maybe_drop_privileges()? {
+        tracing::info!(target = %target.label, "dropped daemon privileges after TUN initialization");
+    }
+    #[cfg(not(unix))]
+    let _ = maybe_drop_privileges()?;
     let api_state = build_api_state(&config).shared();
 
     let mut registry = freeq_auth::registry::PeerRegistry::new();
@@ -629,6 +772,8 @@ async fn resolve_peer_endpoint(value: &str) -> Result<std::net::SocketAddr> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::parse_env_id;
     use super::{
         build_api_state, collect_startup_blockers, init_identity, parse_transport_fingerprint,
     };
@@ -704,5 +849,18 @@ mod tests {
         assert_eq!(status.peer_count, 1);
         assert_eq!(peers[0].name, "lon-01");
         assert!(!peers[0].connected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parse_env_id_accepts_integer_values() {
+        unsafe {
+            std::env::set_var("FREEQ_TEST_DROP_ID", "1234");
+        }
+        let parsed = parse_env_id("FREEQ_TEST_DROP_ID").expect("env should parse");
+        assert_eq!(parsed, Some(1234));
+        unsafe {
+            std::env::remove_var("FREEQ_TEST_DROP_ID");
+        }
     }
 }
