@@ -46,9 +46,21 @@ pub struct NodeConfig {
     pub api_addr: String,
 }
 
-fn default_listen()   -> String { "0.0.0.0:51820".into() }
-fn default_key_path() -> String { "/etc/freeq/identity.key".into() }
-fn default_kem()      -> String { "ml-kem-768".into() }
-fn default_sign()     -> String { "ml-dsa-65".into() }
-fn default_true()     -> bool   { true }
-fn default_api_addr() -> String { "127.0.0.1:6789".into() }
+fn default_listen() -> String {
+    "0.0.0.0:51820".into()
+}
+fn default_key_path() -> String {
+    "/etc/freeq/identity.key".into()
+}
+fn default_kem() -> String {
+    "ml-kem-768".into()
+}
+fn default_sign() -> String {
+    "ml-dsa-65".into()
+}
+fn default_true() -> bool {
+    true
+}
+fn default_api_addr() -> String {
+    "127.0.0.1:6789".into()
+}

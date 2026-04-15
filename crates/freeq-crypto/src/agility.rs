@@ -106,8 +106,9 @@ pub trait KemScheme: Send + Sync {
     type Ciphertext;
 
     /// Generate a fresh KEM keypair.
-    fn generate_keypair(rng: &mut impl rand_core::CryptoRngCore)
-        -> Result<(Self::DecapsKey, Self::EncapsKey)>;
+    fn generate_keypair(
+        rng: &mut impl rand_core::CryptoRngCore,
+    ) -> Result<(Self::DecapsKey, Self::EncapsKey)>;
 
     /// Encapsulate: produce a shared secret and ciphertext for `pk`.
     fn encapsulate(
@@ -129,8 +130,9 @@ pub trait SignScheme: Send + Sync {
     type Signature;
 
     /// Generate a fresh signing keypair.
-    fn generate_keypair(rng: &mut impl rand_core::CryptoRngCore)
-        -> Result<(Self::SigningKey, Self::VerifyKey)>;
+    fn generate_keypair(
+        rng: &mut impl rand_core::CryptoRngCore,
+    ) -> Result<(Self::SigningKey, Self::VerifyKey)>;
 
     /// Sign a message.
     fn sign(sk: &Self::SigningKey, msg: &[u8]) -> Result<Self::Signature>;
