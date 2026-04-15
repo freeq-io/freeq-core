@@ -3,6 +3,9 @@
 use crate::{connection, Result, TransportError};
 use quinn::crypto::rustls::QuicClientConfig;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::sync::Arc;
 
 /// SHA-256 fingerprint of the leaf QUIC certificate.
@@ -23,6 +26,23 @@ impl Endpoint {
     /// `addr` is typically `0.0.0.0:51820` (user-configurable).
     pub async fn bind(addr: std::net::SocketAddr) -> Result<Self> {
         let (server_config, certificate_fingerprint) = configure_server()?;
+        let endpoint = quinn::Endpoint::server(server_config, addr)
+            .map_err(|e| TransportError::Bind(e.to_string()))?;
+
+        Ok(Self {
+            endpoint,
+            certificate_fingerprint,
+        })
+    }
+
+    /// Bind a QUIC endpoint using a certificate/key persisted on disk.
+    pub async fn bind_persistent(
+        addr: std::net::SocketAddr,
+        certificate_path: &Path,
+        private_key_path: &Path,
+    ) -> Result<Self> {
+        let (server_config, certificate_fingerprint) =
+            configure_persistent_server(certificate_path, private_key_path)?;
         let endpoint = quinn::Endpoint::server(server_config, addr)
             .map_err(|e| TransportError::Bind(e.to_string()))?;
 
@@ -87,16 +107,116 @@ impl Endpoint {
 }
 
 fn configure_server() -> Result<(quinn::ServerConfig, CertificateFingerprint)> {
-    let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()])
-        .map_err(|e| TransportError::Tls(e.to_string()))?;
-    let cert_der = CertificateDer::from(cert.cert);
+    let (certificate_der, private_key_der) = generate_server_identity()?;
+    let cert_der = CertificateDer::from(certificate_der);
     let certificate_fingerprint = certificate_fingerprint(cert_der.as_ref());
-    let private_key = PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der());
+    let private_key = PrivatePkcs8KeyDer::from(private_key_der);
     let mut server_config =
         quinn::ServerConfig::with_single_cert(vec![cert_der], private_key.into())
             .map_err(|e| TransportError::Tls(e.to_string()))?;
     server_config.transport = Arc::new(transport_config());
     Ok((server_config, certificate_fingerprint))
+}
+
+fn configure_persistent_server(
+    certificate_path: &Path,
+    private_key_path: &Path,
+) -> Result<(quinn::ServerConfig, CertificateFingerprint)> {
+    let (certificate_der, private_key_der) =
+        load_or_create_server_identity(certificate_path, private_key_path)?;
+    let cert_der = CertificateDer::from(certificate_der);
+    let certificate_fingerprint = certificate_fingerprint(cert_der.as_ref());
+    let private_key = PrivatePkcs8KeyDer::from(private_key_der);
+    let mut server_config =
+        quinn::ServerConfig::with_single_cert(vec![cert_der], private_key.into())
+            .map_err(|e| TransportError::Tls(e.to_string()))?;
+    server_config.transport = Arc::new(transport_config());
+    Ok((server_config, certificate_fingerprint))
+}
+
+fn load_or_create_server_identity(
+    certificate_path: &Path,
+    private_key_path: &Path,
+) -> Result<(Vec<u8>, Vec<u8>)> {
+    match (
+        std::fs::read(certificate_path),
+        std::fs::read(private_key_path),
+    ) {
+        (Ok(certificate_der), Ok(private_key_der)) => {
+            validate_server_identity(&certificate_der, &private_key_der)?;
+            Ok((certificate_der, private_key_der))
+        }
+        (Err(cert_err), Err(key_err))
+            if cert_err.kind() == std::io::ErrorKind::NotFound
+                && key_err.kind() == std::io::ErrorKind::NotFound =>
+        {
+            let (certificate_der, private_key_der) = generate_server_identity()?;
+            write_server_identity(
+                certificate_path,
+                private_key_path,
+                &certificate_der,
+                &private_key_der,
+            )?;
+            Ok((certificate_der, private_key_der))
+        }
+        (Err(err), _) | (_, Err(err)) if err.kind() == std::io::ErrorKind::NotFound => {
+            Err(TransportError::Tls(format!(
+                "transport certificate and key must either both exist or both be absent: {} / {}",
+                certificate_path.display(),
+                private_key_path.display()
+            )))
+        }
+        (Err(err), _) => Err(TransportError::Io(err)),
+        (_, Err(err)) => Err(TransportError::Io(err)),
+    }
+}
+
+fn write_server_identity(
+    certificate_path: &Path,
+    private_key_path: &Path,
+    certificate_der: &[u8],
+    private_key_der: &[u8],
+) -> Result<()> {
+    if let Some(parent) = certificate_path.parent() {
+        std::fs::create_dir_all(parent).map_err(TransportError::Io)?;
+    }
+    if let Some(parent) = private_key_path.parent() {
+        std::fs::create_dir_all(parent).map_err(TransportError::Io)?;
+    }
+
+    std::fs::write(certificate_path, certificate_der).map_err(TransportError::Io)?;
+    std::fs::write(private_key_path, private_key_der).map_err(TransportError::Io)?;
+    set_private_key_permissions(private_key_path)?;
+    Ok(())
+}
+
+fn validate_server_identity(certificate_der: &[u8], private_key_der: &[u8]) -> Result<()> {
+    let cert_der = CertificateDer::from(certificate_der.to_vec());
+    let private_key = PrivatePkcs8KeyDer::from(private_key_der.to_vec());
+    quinn::ServerConfig::with_single_cert(vec![cert_der], private_key.into())
+        .map_err(|e| TransportError::Tls(e.to_string()))?;
+    Ok(())
+}
+
+fn generate_server_identity() -> Result<(Vec<u8>, Vec<u8>)> {
+    let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()])
+        .map_err(|e| TransportError::Tls(e.to_string()))?;
+    Ok((cert.cert.der().to_vec(), cert.key_pair.serialize_der()))
+}
+
+fn set_private_key_permissions(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .map_err(TransportError::Io)?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+
+    Ok(())
 }
 
 fn configure_client(
@@ -263,5 +383,27 @@ mod tests {
 
         client.close().await;
         server.close().await;
+    }
+
+    #[tokio::test]
+    async fn persistent_endpoint_reuses_certificate_fingerprint_across_restarts() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let cert_path = tempdir.path().join("transport.cert.der");
+        let key_path = tempdir.path().join("transport.key.der");
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+
+        let first = Endpoint::bind_persistent(addr, &cert_path, &key_path)
+            .await
+            .expect("bind first endpoint");
+        let first_fingerprint = first.certificate_fingerprint();
+        first.close().await;
+
+        let second = Endpoint::bind_persistent(addr, &cert_path, &key_path)
+            .await
+            .expect("bind second endpoint");
+        let second_fingerprint = second.certificate_fingerprint();
+        second.close().await;
+
+        assert_eq!(first_fingerprint, second_fingerprint);
     }
 }

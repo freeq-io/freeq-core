@@ -299,7 +299,14 @@ async fn start_runtime(
         .parse()
         .context("node.listen must be a socket address")?;
     let tun_network = parse_node_network(&config.node.address)?;
-    let endpoint = freeq_transport::endpoint::Endpoint::bind(listen_addr).await?;
+    let node_key_path = PathBuf::from(&config.node.key_path);
+    let (transport_cert_path, transport_key_path) = transport_identity_paths(&node_key_path);
+    let endpoint = freeq_transport::endpoint::Endpoint::bind_persistent(
+        listen_addr,
+        &transport_cert_path,
+        &transport_key_path,
+    )
+    .await?;
     let tun = Arc::new(freeq_tunnel::iface::TunInterface::open(None, tun_network).await?);
     let tun_name = tun.name().to_string();
     #[cfg(unix)]
@@ -392,6 +399,13 @@ async fn start_runtime(
         _api_state: api_state,
         _tasks: tasks,
     })
+}
+
+fn transport_identity_paths(identity_key_path: &std::path::Path) -> (PathBuf, PathBuf) {
+    (
+        identity_key_path.with_extension("transport.cert.der"),
+        identity_key_path.with_extension("transport.key.der"),
+    )
 }
 
 fn build_api_state(config: &freeq_config::Config) -> freeq_api::state::ApiState {
@@ -994,6 +1008,7 @@ mod tests {
     use super::parse_env_id;
     use super::{
         build_api_state, collect_startup_blockers, init_identity, parse_transport_fingerprint,
+        transport_identity_paths,
     };
 
     fn sample_config() -> freeq_config::Config {
@@ -1067,6 +1082,21 @@ mod tests {
         assert_eq!(status.peer_count, 1);
         assert_eq!(peers[0].name, "lon-01");
         assert!(!peers[0].connected);
+    }
+
+    #[test]
+    fn transport_identity_paths_are_derived_next_to_identity_key() {
+        let identity_path = std::path::Path::new("/etc/freeq/identity.key");
+        let (cert_path, key_path) = transport_identity_paths(identity_path);
+
+        assert_eq!(
+            cert_path,
+            std::path::Path::new("/etc/freeq/identity.transport.cert.der")
+        );
+        assert_eq!(
+            key_path,
+            std::path::Path::new("/etc/freeq/identity.transport.key.der")
+        );
     }
 
     #[cfg(unix)]
