@@ -12,6 +12,8 @@ const ACCEPT_RATE_LIMIT_BURST: u64 = 64;
 const ACCEPT_RATE_LIMIT_PER_SECOND: u64 = 32;
 const OUTBOUND_RECONNECT_BASE_DELAY: Duration = Duration::from_millis(250);
 const OUTBOUND_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
+const API_ALLOW_REMOTE_ENV: &str = "FREEQ_API_ALLOW_REMOTE";
+const API_TOKEN_ENV: &str = "FREEQ_API_TOKEN";
 
 /// freeqd — FreeQ post-quantum overlay network daemon.
 #[derive(Parser, Debug)]
@@ -343,13 +345,13 @@ async fn start_runtime(
     let mut tasks = Vec::new();
     let active_peers = config.peer.iter().map(|peer| peer.name.clone()).collect();
     let api_addr = if config.node.api_enabled {
-        Some(
+        Some(validate_api_bind_policy(
             config
                 .node
                 .api_addr
                 .parse()
                 .context("node.api_addr must be a socket address")?,
-        )
+        )?)
     } else {
         None
     };
@@ -382,7 +384,7 @@ async fn start_runtime(
     ));
 
     if let Some(api_addr) = api_addr {
-        let server = freeq_api::ApiServer::new(api_addr, api_state.clone());
+        let server = freeq_api::ApiServer::new(api_addr, api_state.clone(), api_auth_token()?);
         tasks.push(tokio::spawn(async move {
             if let Err(err) = server.serve().await {
                 tracing::warn!(%err, "API server exited with error");
@@ -399,6 +401,46 @@ async fn start_runtime(
         _api_state: api_state,
         _tasks: tasks,
     })
+}
+
+fn api_auth_token() -> Result<Option<String>> {
+    match std::env::var(API_TOKEN_ENV) {
+        Ok(token) if token.trim().is_empty() => {
+            anyhow::bail!("{API_TOKEN_ENV} must not be empty when set");
+        }
+        Ok(token) => Ok(Some(token)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            anyhow::bail!("{API_TOKEN_ENV} must be valid unicode")
+        }
+    }
+}
+
+fn validate_api_bind_policy(addr: std::net::SocketAddr) -> Result<std::net::SocketAddr> {
+    if addr.ip().is_loopback() {
+        return Ok(addr);
+    }
+
+    let allow_remote = std::env::var(API_ALLOW_REMOTE_ENV)
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false);
+    if !allow_remote {
+        anyhow::bail!(
+            "refusing to bind API to non-loopback address {}; set {}=true to allow remote exposure",
+            addr,
+            API_ALLOW_REMOTE_ENV
+        );
+    }
+
+    if api_auth_token()?.is_none() {
+        anyhow::bail!(
+            "refusing to bind API to non-loopback address {} without {}",
+            addr,
+            API_TOKEN_ENV
+        );
+    }
+
+    Ok(addr)
 }
 
 fn transport_identity_paths(identity_key_path: &std::path::Path) -> (PathBuf, PathBuf) {
@@ -1007,8 +1049,8 @@ mod tests {
     #[cfg(unix)]
     use super::parse_env_id;
     use super::{
-        build_api_state, collect_startup_blockers, init_identity, parse_transport_fingerprint,
-        transport_identity_paths,
+        api_auth_token, build_api_state, collect_startup_blockers, init_identity,
+        parse_transport_fingerprint, transport_identity_paths, validate_api_bind_policy,
     };
 
     fn sample_config() -> freeq_config::Config {
@@ -1097,6 +1139,45 @@ mod tests {
             key_path,
             std::path::Path::new("/etc/freeq/identity.transport.key.der")
         );
+    }
+
+    #[test]
+    fn loopback_api_bind_is_allowed_without_token() {
+        let addr: std::net::SocketAddr = "127.0.0.1:6789".parse().expect("addr");
+        assert_eq!(validate_api_bind_policy(addr).expect("loopback bind"), addr);
+    }
+
+    #[test]
+    fn remote_api_bind_requires_explicit_opt_in_and_token() {
+        let addr: std::net::SocketAddr = "10.0.0.1:6789".parse().expect("addr");
+        std::env::remove_var(super::API_ALLOW_REMOTE_ENV);
+        std::env::remove_var(super::API_TOKEN_ENV);
+
+        let error = validate_api_bind_policy(addr).expect_err("remote bind should fail closed");
+        assert!(error
+            .to_string()
+            .contains("refusing to bind API to non-loopback address"));
+
+        std::env::set_var(super::API_ALLOW_REMOTE_ENV, "true");
+        let error = validate_api_bind_policy(addr).expect_err("token should be required");
+        assert!(error.to_string().contains(super::API_TOKEN_ENV));
+
+        std::env::set_var(super::API_TOKEN_ENV, "topsecret");
+        assert_eq!(
+            validate_api_bind_policy(addr).expect("remote bind allowed"),
+            addr
+        );
+
+        std::env::remove_var(super::API_ALLOW_REMOTE_ENV);
+        std::env::remove_var(super::API_TOKEN_ENV);
+    }
+
+    #[test]
+    fn api_auth_token_rejects_empty_value() {
+        std::env::set_var(super::API_TOKEN_ENV, "   ");
+        let error = api_auth_token().expect_err("empty token should fail");
+        assert!(error.to_string().contains("must not be empty"));
+        std::env::remove_var(super::API_TOKEN_ENV);
     }
 
     #[cfg(unix)]

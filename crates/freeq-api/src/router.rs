@@ -2,7 +2,7 @@
 
 use axum::{
     extract::State,
-    http::Request,
+    http::{Method, Request},
     middleware::{self, Next},
     response::Response,
     routing::{delete, get, post},
@@ -16,6 +16,11 @@ const API_RATE_LIMIT_PER_SECOND: u64 = 64;
 #[derive(Clone)]
 struct ApiRateLimiter {
     bucket: Arc<crate::rate_limit::TokenBucket>,
+}
+
+#[derive(Clone)]
+struct ApiAuth {
+    bearer_token: Option<Arc<str>>,
 }
 
 async fn enforce_api_rate_limit(
@@ -32,13 +37,48 @@ async fn enforce_api_rate_limit(
     Ok(next.run(request).await)
 }
 
+async fn enforce_api_auth(
+    State(auth): State<ApiAuth>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> crate::Result<Response> {
+    if !matches!(
+        *request.method(),
+        Method::POST | Method::PUT | Method::PATCH | Method::DELETE
+    ) {
+        return Ok(next.run(request).await);
+    }
+
+    let Some(expected) = auth.bearer_token.as_deref() else {
+        return Ok(next.run(request).await);
+    };
+
+    let actual = request
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::trim);
+
+    if actual != Some(expected) {
+        return Err(crate::ApiError::Unauthorized(
+            "missing or invalid bearer token".into(),
+        ));
+    }
+
+    Ok(next.run(request).await)
+}
+
 /// Build the Axum router with all API endpoints.
-pub fn build_router(state: crate::state::SharedApiState) -> Router {
+pub fn build_router(state: crate::state::SharedApiState, auth_token: Option<String>) -> Router {
     let limiter = ApiRateLimiter {
         bucket: Arc::new(crate::rate_limit::TokenBucket::new(
             API_RATE_LIMIT_BURST,
             API_RATE_LIMIT_PER_SECOND,
         )),
+    };
+    let auth = ApiAuth {
+        bearer_token: auth_token.map(Arc::<str>::from),
     };
 
     Router::new()
@@ -60,6 +100,7 @@ pub fn build_router(state: crate::state::SharedApiState) -> Router {
             get(crate::handlers::algorithm::get_algorithm)
                 .post(crate::handlers::algorithm::switch_algorithm),
         )
+        .layer(middleware::from_fn_with_state(auth, enforce_api_auth))
         .layer(middleware::from_fn_with_state(
             limiter,
             enforce_api_rate_limit,
@@ -137,7 +178,7 @@ mod tests {
         let state = test_state();
         state.mark_peer_connected("lon-01");
 
-        let app = build_router(state);
+        let app = build_router(state, None);
         let response = app
             .oneshot(
                 Request::builder()
@@ -163,7 +204,7 @@ mod tests {
         state.add_bytes_sent("lon-01", 128);
         state.add_bytes_received("lon-01", 256);
 
-        let app = build_router(state.clone());
+        let app = build_router(state.clone(), None);
 
         let peers_response = app
             .clone()
@@ -202,7 +243,7 @@ mod tests {
         state.mark_peer_connected("lon-01");
         state.add_bytes_sent("lon-01", 128);
 
-        let app = build_router(state);
+        let app = build_router(state, None);
         let response = app
             .oneshot(
                 Request::builder()
@@ -221,7 +262,7 @@ mod tests {
 
     #[tokio::test]
     async fn algorithm_route_returns_active_algorithm_set() {
-        let app = build_router(test_state());
+        let app = build_router(test_state(), None);
         let response = app
             .oneshot(
                 Request::builder()
@@ -268,7 +309,7 @@ mod tests {
             }
         });
 
-        let app = build_router(state);
+        let app = build_router(state, None);
         let add_response = app
             .clone()
             .oneshot(
@@ -320,7 +361,7 @@ mod tests {
             }
         });
 
-        let app = build_router(state);
+        let app = build_router(state, None);
         let response = app
             .oneshot(
                 Request::builder()
@@ -337,6 +378,41 @@ mod tests {
         assert!(body.contains("lon-01"));
 
         responder.await.expect("responder should complete");
+    }
+
+    #[tokio::test]
+    async fn mutating_routes_require_bearer_token_when_configured() {
+        let state = test_state();
+        let app = build_router(state, Some("topsecret".into()));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/v1/peers/lon-01")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn read_routes_remain_available_without_bearer_token() {
+        let state = test_state();
+        let app = build_router(state, Some("topsecret".into()));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/status")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]

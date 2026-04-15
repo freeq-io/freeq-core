@@ -11,10 +11,13 @@ mod platform {
     use tun::AbstractDevice as _;
 
     const MAX_PACKET_SIZE: usize = 65_535;
+    const READ_CHANNEL_CAPACITY: usize = 1024;
+    const WRITE_CHANNEL_CAPACITY: usize = 1024;
 
     pub struct PlatformTun {
-        device: Arc<Mutex<tun::Device>>,
         name: String,
+        read_rx: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<Result<Bytes>>>,
+        write_tx: tokio::sync::mpsc::Sender<Bytes>,
     }
 
     impl PlatformTun {
@@ -23,10 +26,81 @@ mod platform {
             let interface_name = device
                 .tun_name()
                 .map_err(|e| crate::TunnelError::Interface(e.to_string()))?;
+            let device = Arc::new(Mutex::new(device));
+            let (read_tx, read_rx) =
+                tokio::sync::mpsc::channel::<Result<Bytes>>(READ_CHANNEL_CAPACITY);
+            let (write_tx, mut write_rx) =
+                tokio::sync::mpsc::channel::<Bytes>(WRITE_CHANNEL_CAPACITY);
+
+            {
+                let device = device.clone();
+                std::thread::Builder::new()
+                    .name(format!("freeq-tun-reader-{interface_name}"))
+                    .spawn(move || loop {
+                        let mut buf = vec![0u8; MAX_PACKET_SIZE];
+                        let amount = match device
+                            .lock()
+                            .map_err(|_| {
+                                crate::TunnelError::Interface(
+                                    "TUN device mutex poisoned during read".into(),
+                                )
+                            })
+                            .and_then(|device| {
+                                device
+                                    .recv(&mut buf)
+                                    .map_err(|e| crate::TunnelError::Interface(e.to_string()))
+                            }) {
+                            Ok(amount) => amount,
+                            Err(err) => {
+                                let _ = read_tx.blocking_send(Err(err));
+                                break;
+                            }
+                        };
+                        buf.truncate(amount);
+                        if read_tx.blocking_send(Ok(Bytes::from(buf))).is_err() {
+                            break;
+                        }
+                    })
+                    .map_err(|e| crate::TunnelError::Interface(e.to_string()))?;
+            }
+
+            {
+                let device = device.clone();
+                std::thread::Builder::new()
+                    .name(format!("freeq-tun-writer-{interface_name}"))
+                    .spawn(move || {
+                        while let Some(packet) = write_rx.blocking_recv() {
+                            if let Err(err) = device
+                                .lock()
+                                .map_err(|_| {
+                                    crate::TunnelError::Interface(
+                                        "TUN device mutex poisoned during write".into(),
+                                    )
+                                })
+                                .and_then(|device| {
+                                    let written = device.send(&packet).map_err(|e| {
+                                        crate::TunnelError::Interface(e.to_string())
+                                    })?;
+                                    if written != packet.len() {
+                                        return Err(crate::TunnelError::Interface(
+                                            "short write to TUN interface".into(),
+                                        ));
+                                    }
+                                    Ok(())
+                                })
+                            {
+                                tracing::warn!(%err, "TUN writer exiting after write failure");
+                                break;
+                            }
+                        }
+                    })
+                    .map_err(|e| crate::TunnelError::Interface(e.to_string()))?;
+            }
 
             Ok(Self {
-                device: Arc::new(Mutex::new(device)),
                 name: interface_name,
+                read_rx: tokio::sync::Mutex::new(read_rx),
+                write_tx,
             })
         }
 
@@ -35,51 +109,18 @@ mod platform {
         }
 
         pub async fn read_packet(&self) -> Result<Bytes> {
-            let device = self.device.clone();
-
-            tokio::task::spawn_blocking(move || {
-                let mut buf = vec![0u8; MAX_PACKET_SIZE];
-                let amount = device
-                    .lock()
-                    .map_err(|_| {
-                        crate::TunnelError::Interface(
-                            "TUN device mutex poisoned during read".into(),
-                        )
-                    })?
-                    .recv(&mut buf)
-                    .map_err(|e| crate::TunnelError::Interface(e.to_string()))?;
-                buf.truncate(amount);
-                Ok(Bytes::from(buf))
-            })
-            .await
-            .map_err(|e| crate::TunnelError::Interface(e.to_string()))?
+            let mut read_rx = self.read_rx.lock().await;
+            read_rx
+                .recv()
+                .await
+                .ok_or_else(|| crate::TunnelError::Interface("TUN reader task exited".into()))?
         }
 
         pub async fn write_packet(&self, pkt: Bytes) -> Result<()> {
-            let device = self.device.clone();
-            let packet = pkt.to_vec();
-
-            tokio::task::spawn_blocking(move || {
-                let written = device
-                    .lock()
-                    .map_err(|_| {
-                        crate::TunnelError::Interface(
-                            "TUN device mutex poisoned during write".into(),
-                        )
-                    })?
-                    .send(&packet)
-                    .map_err(|e| crate::TunnelError::Interface(e.to_string()))?;
-
-                if written != packet.len() {
-                    return Err(crate::TunnelError::Interface(
-                        "short write to TUN interface".into(),
-                    ));
-                }
-
-                Ok(())
-            })
-            .await
-            .map_err(|e| crate::TunnelError::Interface(e.to_string()))?
+            self.write_tx
+                .send(pkt)
+                .await
+                .map_err(|_| crate::TunnelError::Interface("TUN writer task exited".into()))
         }
     }
 
