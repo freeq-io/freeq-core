@@ -19,7 +19,9 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use freeq_api::models::{AddPeerRequest, PeerSummary, StatusResponse};
+use freeq_api::models::{
+    AddPeerRequest, AlgorithmResponse, AlgorithmSwitchRequest, PeerSummary, StatusResponse,
+};
 use serde::Deserialize;
 use std::io::Read;
 #[cfg(unix)]
@@ -214,9 +216,27 @@ async fn main() -> Result<()> {
                 }
             }
         },
-        Commands::Algorithm { action: _ } => {
-            println!("freeq algorithm — not yet implemented");
-        }
+        Commands::Algorithm { action } => match action {
+            AlgorithmAction::Get => {
+                let algorithm: AlgorithmResponse = api_get(&cli.api, "/v1/algorithm").await?;
+                println!(
+                    "kem={} sign={} bulk={}",
+                    algorithm.kem_algorithm, algorithm.sign_algorithm, algorithm.bulk_algorithm
+                );
+            }
+            AlgorithmAction::Set { kem, sign } => {
+                let algorithm: AlgorithmResponse = api_post(
+                    &cli.api,
+                    "/v1/algorithm",
+                    &AlgorithmSwitchRequest { kem, sign },
+                )
+                .await?;
+                println!(
+                    "algorithm suite unchanged kem={} sign={} bulk={}",
+                    algorithm.kem_algorithm, algorithm.sign_algorithm, algorithm.bulk_algorithm
+                );
+            }
+        },
     }
 
     Ok(())

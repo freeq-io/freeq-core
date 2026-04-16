@@ -114,12 +114,30 @@ impl AddPeerRequest {
 }
 
 /// Request body for `POST /v1/algorithm`.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlgorithmSwitchRequest {
     /// New KEM algorithm (e.g. `"ml-kem-1024"`).
     pub kem: Option<String>,
     /// New signature algorithm.
     pub sign: Option<String>,
+}
+
+impl AlgorithmSwitchRequest {
+    /// Validate any explicitly provided algorithms against the supported identifier set.
+    pub fn validate(&self) -> crate::Result<()> {
+        if let Some(kem) = &self.kem {
+            validate_kem_algorithm(kem)?;
+        }
+        if let Some(sign) = &self.sign {
+            validate_sign_algorithm(sign)?;
+        }
+        if self.kem.is_none() && self.sign.is_none() {
+            return Err(crate::ApiError::BadRequest(
+                "at least one of kem or sign must be provided".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Response from `GET /v1/algorithm`.
@@ -131,6 +149,24 @@ pub struct AlgorithmResponse {
     pub sign_algorithm: String,
     /// Active bulk encryption algorithm.
     pub bulk_algorithm: String,
+}
+
+fn validate_kem_algorithm(value: &str) -> crate::Result<()> {
+    match value.trim() {
+        "ml-kem-512" | "ml-kem-768" | "ml-kem-1024" => Ok(()),
+        other => Err(crate::ApiError::BadRequest(format!(
+            "unsupported KEM algorithm: {other}"
+        ))),
+    }
+}
+
+fn validate_sign_algorithm(value: &str) -> crate::Result<()> {
+    match value.trim() {
+        "ml-dsa-44" | "ml-dsa-65" | "ml-dsa-87" | "slh-dsa-sha2-128f" => Ok(()),
+        other => Err(crate::ApiError::BadRequest(format!(
+            "unsupported signature algorithm: {other}"
+        ))),
+    }
 }
 
 /// Tunnel statistics from `GET /v1/tunnels`.

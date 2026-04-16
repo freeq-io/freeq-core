@@ -112,7 +112,7 @@ pub fn build_router(state: crate::state::SharedApiState, auth_token: Option<Stri
 mod tests {
     use super::{build_router, enforce_api_rate_limit, ApiRateLimiter};
     use crate::{
-        models::{AddPeerRequest, PeerSummary},
+        models::{AddPeerRequest, AlgorithmSwitchRequest, PeerSummary},
         state::{ApiState, ControlCommand},
     };
     use axum::{
@@ -278,6 +278,59 @@ mod tests {
         assert!(body.contains("\"kem_algorithm\":\"ml-kem-768\""));
         assert!(body.contains("\"sign_algorithm\":\"ml-dsa-65\""));
         assert!(body.contains("\"bulk_algorithm\":\"chacha20-poly1305\""));
+    }
+
+    #[tokio::test]
+    async fn algorithm_switch_accepts_exact_match_as_noop() {
+        let app = build_router(test_state(), None);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/algorithm")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&AlgorithmSwitchRequest {
+                            kem: Some("ml-kem-768".into()),
+                            sign: Some("ml-dsa-65".into()),
+                        })
+                        .expect("request should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = read_body(response).await;
+        assert!(body.contains("\"kem_algorithm\":\"ml-kem-768\""));
+        assert!(body.contains("\"sign_algorithm\":\"ml-dsa-65\""));
+    }
+
+    #[tokio::test]
+    async fn algorithm_switch_rejects_live_suite_change() {
+        let app = build_router(test_state(), None);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/algorithm")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&AlgorithmSwitchRequest {
+                            kem: Some("ml-kem-1024".into()),
+                            sign: None,
+                        })
+                        .expect("request should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = read_body(response).await;
+        assert!(body.contains("live algorithm switching is not supported yet"));
     }
 
     #[tokio::test]
