@@ -22,3 +22,7 @@ tracing     = { workspace = true }
 thiserror   = { workspace = true }
 anyhow      = { workspace = true }
 rcgen       = "0.13"
+
+[[example]]
+name = "loopback_test"
+path = "examples/loopback_test.rs"
