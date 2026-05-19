@@ -174,3 +174,12 @@ cargo build --release
 
 # Or build only specific crates for faster iteration
 cargo build -p freeq-transport -p freeq-crypto --release
+
+## Quick Local Testing (macOS / Linux)
+
+```bash
+# 1. Build the test
+cargo build -p freeq-transport --example loopback_test
+
+# 2. Run the enhanced loopback test
+cargo run -p freeq-transport --example loopback_test
