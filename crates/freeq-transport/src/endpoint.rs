@@ -75,7 +75,9 @@ impl Endpoint {
     }
 
     fn configure_client() -> Result<ClientConfig> {
-        let rustls_config = rustls::ClientConfig::builder()
+        let rustls_config = rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
+            .with_safe_default_protocol_versions()
+            .map_err(|e| TransportError::Tls(e.to_string()))?
             .dangerous()
             .with_custom_certificate_verifier(SkipServerVerification::new())
             .with_no_client_auth();
