@@ -35,7 +35,7 @@ impl SessionManager {
         peer_addr: std::net::SocketAddr,
     ) -> Result<Arc<Session>> {
         let session = Session::new(
-            peer.clone(),
+            peer,
             self.hooks.clone(),
             self.config.clone(),
             &self.endpoint,

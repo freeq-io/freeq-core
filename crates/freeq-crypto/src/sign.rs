@@ -135,6 +135,7 @@ fn challenge_bytes(nonce: &[u8], kem_pubkey: &[u8]) -> Vec<u8> {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::{IdentityKeypair, IdentityPublicKey};
 

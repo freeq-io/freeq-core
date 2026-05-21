@@ -7,39 +7,29 @@
 ///
 /// Controls the security level and handshake size trade-off.
 /// ML-KEM-768 is the default (Category 3 ≈ AES-192).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum KemAlgorithm {
     /// FIPS 203 ML-KEM-512  — Category 1 ≈ AES-128, 1.6 KB handshake
     MlKem512,
     /// FIPS 203 ML-KEM-768  — Category 3 ≈ AES-192, 2.2 KB handshake (default)
+    #[default]
     MlKem768,
     /// FIPS 203 ML-KEM-1024 — Category 5 ≈ AES-256, 3.2 KB handshake
     MlKem1024,
 }
 
-impl Default for KemAlgorithm {
-    fn default() -> Self {
-        Self::MlKem768
-    }
-}
-
 /// Active signature algorithm parameter set.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SignAlgorithm {
     /// FIPS 204 ML-DSA-44 — Category 2, 2.5 KB signature
     MlDsa44,
     /// FIPS 204 ML-DSA-65 — Category 3, 3.3 KB signature (default)
+    #[default]
     MlDsa65,
     /// FIPS 204 ML-DSA-87 — Category 5, 4.6 KB signature
     MlDsa87,
-}
-
-impl Default for SignAlgorithm {
-    fn default() -> Self {
-        Self::MlDsa65
-    }
 }
 
 /// Active bulk encryption algorithm.
