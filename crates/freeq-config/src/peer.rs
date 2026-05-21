@@ -26,4 +26,6 @@ pub struct PeerConfig {
     pub key_rotation_secs: u64,
 }
 
-fn default_rotation() -> u64 { 3600 }
+fn default_rotation() -> u64 {
+    3600
+}

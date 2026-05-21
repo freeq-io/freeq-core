@@ -23,8 +23,8 @@
 pub mod agility;
 pub mod bulk;
 pub mod error;
-pub mod kem;
 pub mod kdf;
+pub mod kem;
 pub mod sign;
 
 pub use error::CryptoError;

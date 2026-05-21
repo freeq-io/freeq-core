@@ -13,16 +13,25 @@ rust-version.workspace = true
 freeq-crypto = { path = "../freeq-crypto" }
 
 quinn       = { workspace = true }
-rustls      = { workspace = true }
-tokio       = { workspace = true }
+
+
 tokio-util  = { workspace = true }
 futures     = { workspace = true }
 bytes       = { workspace = true }
-tracing     = { workspace = true }
+
 thiserror   = { workspace = true }
 anyhow      = { workspace = true }
 rcgen       = "0.13"
+async-trait = "0.1"
+tracing = "0.1"
+uuid = { version = "1", features = ["v4"] }
+tokio = { workspace = true, features = ["sync", "time", "macros", "rt-multi-thread"] }
+rustls = { version = "0.23", features = ["ring"] }
+rand = "0.8"
 
-[[example]]
-name = "loopback_test"
-path = "examples/loopback_test.rs"
+[dev-dependencies]
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = { version = "1", features = ["v4"] }
+rcgen = "0.13"
+bytes = "1"
+freeq-crypto = { path = "../freeq-crypto" }   # ← for PQC handshake

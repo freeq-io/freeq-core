@@ -10,9 +10,9 @@ pub mod labels {
     /// Primary handshake KDF label.
     pub const HANDSHAKE: &[u8] = b"freeq v1 handshake";
     /// Label for deriving the inbound traffic key.
-    pub const INBOUND:   &[u8] = b"freeq v1 inbound";
+    pub const INBOUND: &[u8] = b"freeq v1 inbound";
     /// Label for deriving the outbound traffic key.
-    pub const OUTBOUND:  &[u8] = b"freeq v1 outbound";
+    pub const OUTBOUND: &[u8] = b"freeq v1 outbound";
 }
 
 /// Derive a 32-byte key from `ikm` using HKDF-SHA256.

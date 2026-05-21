@@ -72,11 +72,16 @@ enum PeerAction {
     List,
     /// Add a peer.
     Add {
-        #[arg(long)] name: String,
-        #[arg(long)] public_key: String,
-        #[arg(long)] kem_key: String,
-        #[arg(long)] endpoint: Option<String>,
-        #[arg(long)] allowed_ips: Vec<String>,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        public_key: String,
+        #[arg(long)]
+        kem_key: String,
+        #[arg(long)]
+        endpoint: Option<String>,
+        #[arg(long)]
+        allowed_ips: Vec<String>,
     },
     /// Remove a peer by name.
     Remove { name: String },
@@ -98,8 +103,10 @@ enum AlgorithmAction {
     Get,
     /// Switch to a different algorithm.
     Set {
-        #[arg(long)] kem: Option<String>,
-        #[arg(long)] sign: Option<String>,
+        #[arg(long)]
+        kem: Option<String>,
+        #[arg(long)]
+        sign: Option<String>,
     },
 }
 

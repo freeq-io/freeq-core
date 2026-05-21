@@ -5,7 +5,7 @@
 //! are silently dropped if they carry no valid ML-DSA-65 signature.
 
 use crate::{CryptoError, Result};
-use ml_dsa::{Keypair as _, MlDsa65, SigningKey, Signer as _, Verifier as _};
+use ml_dsa::{Keypair as _, MlDsa65, Signer as _, SigningKey, Verifier as _};
 use zeroize::Zeroize;
 
 /// An ML-DSA-65 signing keypair (long-term node identity).
