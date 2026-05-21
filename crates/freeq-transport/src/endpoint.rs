@@ -1,4 +1,4 @@
-//! QUIC endpoint — the local UDP socket that accepts incoming connections.
+//! QUIC endpoint -- the local UDP socket that accepts incoming connections.
 
 use crate::{connection::PeerConnection, Result, TransportError};
 use quinn::{ClientConfig, Endpoint as QuinnEndpoint, ServerConfig, VarInt};
@@ -67,19 +67,29 @@ impl Endpoint {
         let cert_der = CertificateDer::from(cert_key.cert.der().to_vec());
         let key_der = PrivatePkcs8KeyDer::from(cert_key.key_pair.serialize_der());
 
-        let mut server_config = ServerConfig::with_single_cert(vec![cert_der], key_der.into())
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let rustls_server_config = rustls::ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .map_err(|e| TransportError::Tls(e.to_string()))?
+            .with_no_client_auth()
+            .with_single_cert(vec![cert_der], key_der.into())
             .map_err(|e| TransportError::Tls(e.to_string()))?;
 
+        let mut server_config = ServerConfig::with_crypto(Arc::new(
+            quinn::crypto::rustls::QuicServerConfig::try_from(rustls_server_config)
+                .map_err(|e| TransportError::Tls(e.to_string()))?,
+        ));
         server_config.transport = Arc::new(Self::transport_config());
         Ok(server_config)
     }
 
     fn configure_client() -> Result<ClientConfig> {
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
         let rustls_config = rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
             .with_safe_default_protocol_versions()
             .map_err(|e| TransportError::Tls(e.to_string()))?
             .dangerous()
-            .with_custom_certificate_verifier(SkipServerVerification::new())
+            .with_custom_certificate_verifier(Arc::new(SkipServerVerification(provider)))
             .with_no_client_auth();
 
         let mut client_config = ClientConfig::new(Arc::new(
@@ -105,12 +115,6 @@ impl Endpoint {
 
 #[derive(Debug)]
 struct SkipServerVerification(Arc<rustls::crypto::CryptoProvider>);
-
-impl SkipServerVerification {
-    fn new() -> Arc<Self> {
-        Arc::new(Self(Arc::new(rustls::crypto::ring::default_provider())))
-    }
-}
 
 impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
     fn verify_server_cert(
