@@ -279,6 +279,7 @@ fn mlkem_secret_from_seed(seed: &[u8; MLKEM_SEED_LEN]) -> DecapsulationKey768 {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::{hybrid_decapsulate, hybrid_encapsulate, HybridPublicKey, HybridSecretKey};
 

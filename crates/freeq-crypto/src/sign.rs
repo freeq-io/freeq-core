@@ -5,15 +5,14 @@
 //! are silently dropped if they carry no valid ML-DSA-65 signature.
 
 use crate::{CryptoError, Result};
-use ml_dsa::signature::{Keypair as _, Signer as _, Verifier as _};
-use ml_dsa::{KeyGen as _, MlDsa65};
+use ml_dsa::{Keypair as _, MlDsa65, Signer as _, SigningKey, Verifier as _};
 use zeroize::Zeroize;
 
 /// An ML-DSA-65 signing keypair (long-term node identity).
 ///
 /// The secret key is wrapped in a `zeroize`-on-drop guard.
 pub struct IdentityKeypair {
-    inner: ml_dsa::ExpandedSigningKey<MlDsa65>,
+    inner: SigningKey<MlDsa65>,
     seed: Vec<u8>,
 }
 
@@ -73,14 +72,14 @@ impl IdentityKeypair {
     }
 
     fn from_seed(seed: ml_dsa::Seed) -> Result<(Self, IdentityPublicKey)> {
-        let keypair = MlDsa65::from_seed(&seed);
+        let signing_key = SigningKey::<MlDsa65>::from_seed(&seed);
         let public_key = IdentityPublicKey {
-            inner: keypair.verifying_key(),
+            inner: signing_key.verifying_key(),
         };
 
         Ok((
             Self {
-                inner: keypair.signing_key().clone(),
+                inner: signing_key,
                 seed: seed.to_vec(),
             },
             public_key,
@@ -136,6 +135,7 @@ fn challenge_bytes(nonce: &[u8], kem_pubkey: &[u8]) -> Vec<u8> {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::{IdentityKeypair, IdentityPublicKey};
 

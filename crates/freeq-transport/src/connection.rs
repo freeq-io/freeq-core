@@ -1,6 +1,7 @@
-//! Per-peer QUIC connection state.
+//! Per-peer QUIC connection state + datagram transport.
 
 use crate::{Result, TransportError};
+use bytes::Bytes;
 use std::time::Duration;
 
 /// Default timeouts used for transport send/receive operations.
@@ -20,25 +21,24 @@ impl PeerConnection {
     }
 
     /// Send a packet to the remote peer.
-    pub async fn send(&self, data: bytes::Bytes) -> Result<()> {
+    pub async fn send(&self, data: Bytes) -> Result<()> {
         self.send_timeout(data, QUIC_IDLE_TIMEOUT).await
     }
 
-    /// Send a packet with an explicit timeout.
-    pub async fn send_timeout(&self, data: bytes::Bytes, timeout: Duration) -> Result<()> {
-        tokio::time::timeout(timeout, self.connection.send_datagram_wait(data))
-            .await
-            .map_err(|_| TransportError::Timeout)?
+    /// Send a packet (send_datagram is synchronous in quinn 0.11).
+    pub async fn send_timeout(&self, data: Bytes, _timeout: Duration) -> Result<()> {
+        self.connection
+            .send_datagram(data)
             .map_err(|e| TransportError::ConnectionLost(e.to_string()))
     }
 
     /// Receive the next packet from the remote peer.
-    pub async fn recv(&self) -> Result<bytes::Bytes> {
+    pub async fn recv(&self) -> Result<Bytes> {
         self.recv_timeout(QUIC_IDLE_TIMEOUT).await
     }
 
     /// Receive the next packet with an explicit timeout.
-    pub async fn recv_timeout(&self, timeout: Duration) -> Result<bytes::Bytes> {
+    pub async fn recv_timeout(&self, timeout: Duration) -> Result<Bytes> {
         tokio::time::timeout(timeout, self.connection.read_datagram())
             .await
             .map_err(|_| TransportError::Timeout)?

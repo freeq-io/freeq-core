@@ -65,13 +65,13 @@ jobs:
         run: cargo test --all
 
   msrv:
-    name: Minimum Supported Rust Version (1.75)
+    name: Minimum Supported Rust Version (1.88)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust 1.75
-        uses: dtolnay/rust-toolchain@1.75
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@1.88
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2

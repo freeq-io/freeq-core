@@ -154,3 +154,32 @@ The `freeq-api` crate is licensed under **Apache 2.0** — this is the integrati
 
 *FreeQ — Quantum-safe networking, in the open.*
 *[getfreeq.com](https://getfreeq.com) · [Discord](https://discord.gg/freeq) · [security@getfreeq.com](mailto:security@getfreeq.com)*
+
+
+## Quick Start - Local Loopback Testing (macOS / Linux)
+
+### Prerequisites
+
+- Rust 1.80+ (`rustup` recommended)
+- macOS or Linux (Windows coming soon)
+
+### 1. Clone & Build
+
+```bash
+git clone https://github.com/freeq-io/freeq-core.git
+cd freeq-core
+
+# Build everything
+cargo build --release
+
+# Or build only specific crates for faster iteration
+cargo build -p freeq-transport -p freeq-crypto --release
+
+## Quick Local Testing (macOS / Linux)
+
+```bash
+# 1. Build the test
+cargo build -p freeq-transport --example loopback_test
+
+# 2. Run the enhanced loopback test
+cargo run -p freeq-transport --example loopback_test

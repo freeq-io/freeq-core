@@ -107,11 +107,15 @@ fn collect_startup_blockers(config: &freeq_config::Config) -> Vec<String> {
 
 fn init_identity(
     path: &std::path::Path,
-) -> Result<(freeq_crypto::sign::IdentityKeypair, freeq_crypto::sign::IdentityPublicKey)> {
+) -> Result<(
+    freeq_crypto::sign::IdentityKeypair,
+    freeq_crypto::sign::IdentityPublicKey,
+)> {
     if path.exists() {
         let key_bytes = std::fs::read(path)?;
-        let keypair = freeq_crypto::sign::IdentityKeypair::from_bytes(&key_bytes)
-            .map_err(|e| anyhow::anyhow!("failed to load identity key '{}': {e}", path.display()))?;
+        let keypair = freeq_crypto::sign::IdentityKeypair::from_bytes(&key_bytes).map_err(|e| {
+            anyhow::anyhow!("failed to load identity key '{}': {e}", path.display())
+        })?;
         let public_key = keypair.public_key();
         return Ok((keypair, public_key));
     }
@@ -187,6 +191,9 @@ mod tests {
             init_identity(&key_path).expect("reload from disk");
 
         assert_eq!(generated_keypair.to_bytes(), loaded_keypair.to_bytes());
-        assert_eq!(generated_public_key.to_bytes(), loaded_public_key.to_bytes());
+        assert_eq!(
+            generated_public_key.to_bytes(),
+            loaded_public_key.to_bytes()
+        );
     }
 }
