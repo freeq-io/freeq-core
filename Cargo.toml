@@ -22,11 +22,8 @@ rust-version = "1.75"
 
 [workspace.dependencies]
 # ── Post-Quantum Cryptography (NIST FIPS 203/204/205) ────────────────────────
-# NOTE: RustCrypto PQC crates are pre-1.0; RC versions must be pinned explicitly.
-# Run `cargo check` and update any RC pins cargo suggests.
-ml-kem             = { version = "0.3.0-rc.2", features = ["getrandom"] }
-ml-dsa             = { version = "0.1.0-rc.8" }
-slh-dsa            = { version = "0.2.0-rc.4" }
+ml-kem             = { version = "0.3", features = ["getrandom"] }
+ml-dsa             = { version = "0.1" }
 
 # ── Classical Cryptography ────────────────────────────────────────────────────
 x25519-dalek       = { version = "2.0", features = ["reusable_secrets", "static_secrets"] }
@@ -96,7 +93,3 @@ inherits  = "release"
 debug     = true
 
 # loopback testing 
-[[example]]
-name = "loopback_test"
-path = "examples/loopback_test.rs"
-required-features = []   # add features later if needed

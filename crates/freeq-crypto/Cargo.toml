@@ -14,7 +14,6 @@ rust-version.workspace = true
 # PQC
 ml-kem           = { workspace = true }
 ml-dsa           = { workspace = true }
-slh-dsa          = { workspace = true }
 
 # Classical
 x25519-dalek     = { workspace = true }
@@ -49,4 +48,3 @@ ml-kem-1024     = []
 ml-dsa-44       = []
 ml-dsa-65       = []
 ml-dsa-87       = []
-slh-dsa-backup  = []
