@@ -74,29 +74,26 @@ freeq-core/
 └── docs/                  # Architecture, crypto design, threat model
 ```
 
+```
 mermaid
-
 graph TD
     subgraph CLI & Management
         A["freeq CLI"] -->|Local REST API| B["freeqd Daemon"]
     end
-
     subgraph freeqd Daemon Crate Layer
         B --> C["freeq-config"]
         B --> D["freeq-api"]
     end
-
     subgraph Core Engine Crates
         E["freeq-tunnel"] -->|"Intercepts Packets"| F["TUN/TAP L3 Interface"]
         G["freeq-auth"] -->|"ML-DSA-65 Identity / Cloaking"| H["freeq-transport"]
         I["freeq-crypto"] -->|"Hybrid X25519 + ML-KEM"| H
         H -->|"QUIC / quinn"| J["Secure Overlay Network"]
     end
-
     B --> E
     B --> G
     B --> I
-
+```
 
 ## Cryptographic dependencies
 
@@ -189,7 +186,9 @@ The `freeq-api` crate is licensed under **Apache 2.0** — this is the integrati
 
 ### 1. Clone & Build
 
+```
 bash
+```
 git clone https://github.com/freeq-io/freeq-core.git
 cd freeq-core
 
@@ -201,7 +200,9 @@ cargo build -p freeq-transport -p freeq-crypto --release
 
 ## Quick Local Testing (macOS / Linux)
 
+```
 bash
+```
 # 1. Build the test
 cargo build -p freeq-transport --example loopback_test
 
