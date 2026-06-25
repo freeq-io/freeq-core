@@ -73,6 +73,26 @@ freeq-core/
 ├── cli/                   # freeq — management CLI
 └── docs/                  # Architecture, crypto design, threat model
 ```
+graph TD
+    subgraph CLI & Management
+        A[freeq CLI] -->|Local REST API| B[freeqd Daemon]
+    end
+
+    subgraph freeqd Daemon Crate Layer
+        B --> C[freeq-config]
+        B --> D[freeq-api]
+    end
+
+    subgraph Core Engine Crates
+        E[freeq-tunnel] -->|Intercepts Packets| F[TUN/TAP L3 Interface]
+        G[freeq-auth] -->|ML-DSA-65 Identity / Cloaking| H[freeq-transport]
+        I[freeq-crypto] -->|Hybrid X25519 + ML-KEM| H
+        H -->|QUIC / quinn| J[Secure Overlay Network]
+    end
+
+    B --> E
+    B --> G
+    B --> I
 
 ## Cryptographic dependencies
 
