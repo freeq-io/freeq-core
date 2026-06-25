@@ -74,8 +74,7 @@ freeq-core/
 └── docs/                  # Architecture, crypto design, threat model
 ```
 
-```
-mermaid
+```mermaid
 graph TD
     subgraph CLI & Management
         A["freeq CLI"] -->|Local REST API| B["freeqd Daemon"]
