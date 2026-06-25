@@ -185,7 +185,7 @@ The `freeq-api` crate is licensed under **Apache 2.0** — this is the integrati
 
 ### 1. Clone & Build
 
-```bash
+bash
 git clone https://github.com/freeq-io/freeq-core.git
 cd freeq-core
 
@@ -197,7 +197,7 @@ cargo build -p freeq-transport -p freeq-crypto --release
 
 ## Quick Local Testing (macOS / Linux)
 
-```bash
+bash
 # 1. Build the test
 cargo build -p freeq-transport --example loopback_test
 
