@@ -34,6 +34,10 @@ pub enum TransportError {
     #[error("TLS configuration error: {0}")]
     Tls(String),
 
+    /// Packet framing failed before a transport write could be attempted.
+    #[error("frame construction error: {0}")]
+    Frame(String),
+
     /// I/O error at the socket level.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),

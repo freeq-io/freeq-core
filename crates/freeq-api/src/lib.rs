@@ -27,9 +27,11 @@ pub mod handlers;
 pub mod models;
 pub mod router;
 pub mod server;
+pub mod state;
 
 pub use error::ApiError;
 pub use server::ApiServer;
+pub use state::{ApiState, ErrorKind, TunnelRuntimeSnapshot};
 
 /// Library-wide result type.
 pub type Result<T> = std::result::Result<T, ApiError>;

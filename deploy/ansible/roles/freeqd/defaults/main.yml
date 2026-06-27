@@ -1,0 +1,43 @@
+---
+freeq_service_name: freeqd
+freeq_user: freeq
+freeq_group: freeq
+
+freeq_install_root: /etc/freeq
+freeq_config_path: /etc/freeq/freeq.toml
+freeq_key_path: /etc/freeq/identity.key
+freeq_state_dir: /var/lib/freeq
+freeq_log_dir: /var/log/freeq
+freeq_binary_dest: /usr/local/bin/freeqd
+
+freeq_repo_root: "{{ playbook_dir }}/../../.."
+freeq_binary_src: "{{ freeq_repo_root }}/target/release/freeqd"
+freeq_build_local_binary: false
+freeq_build_command: cargo build --release -p freeqd
+
+freeq_node_name: "{{ inventory_hostname }}"
+freeq_node_listen: "0.0.0.0:51820"
+freeq_node_address: ""
+freeq_node_algorithm: "ml-kem-768"
+freeq_node_sign: "ml-dsa-65"
+freeq_api_enabled: true
+freeq_api_addr: "127.0.0.1:6789"
+freeq_peers: []
+
+freeq_systemd_restart_sec: 5
+freeq_systemd_limit_nofile: 1048576
+freeq_systemd_exec_start_extra_args: ""
+
+freeq_healthcheck_enabled: "{{ freeq_api_enabled | bool }}"
+freeq_healthcheck_retries: 12
+freeq_healthcheck_delay: 2
+freeq_healthcheck_url: "http://{{ freeq_api_addr }}/v1/status"
+
+freeq_manage_sysctl: false
+freeq_sysctl:
+  net.ipv4.ip_forward: "1"
+  net.ipv4.conf.all.rp_filter: "0"
+  net.core.rmem_max: "8388608"
+  net.core.wmem_max: "8388608"
+
+freeq_environment: {}

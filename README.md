@@ -71,6 +71,7 @@ freeq-core/
 │   └── freeq-api/         # Local REST API — Apache 2.0 (FreeQ Cloud agent bridge)
 ├── daemon/                # freeqd — the overlay network daemon
 ├── cli/                   # freeq — management CLI
+├── deploy/ansible/        # Host provisioning and systemd rollout
 └── docs/                  # Architecture, crypto design, threat model
 ```
 
@@ -150,6 +151,24 @@ graph TD
 | Windows        | 🔜 v0.3        |
 | Docker         | ✅ Supported   |
 | Kubernetes CNI | 🔜 v0.2        |
+
+## Deployment Automation
+
+FreeQ now ships with a first-party Ansible layer in
+[deploy/ansible](/Users/patrickmccormick/Documents/FreeQ/freeq-core/deploy/ansible/README.md).
+It is designed for host orchestration, not as the long-term network control
+plane:
+
+- install and update `freeqd`
+- template `freeq.toml`
+- manage the systemd unit and service user
+- run host-local health checks against `/v1/status`
+
+This keeps provisioning and rollout in Ansible while leaving dynamic mesh
+coordination to `freeq-cloud` or a future custom management layer.
+
+Run Ansible commands from `deploy/ansible/` so the bundled `ansible.cfg` is
+picked up automatically.
 
 ## Contributing
 

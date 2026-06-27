@@ -16,9 +16,15 @@
 
 pub mod error;
 pub mod iface;
+pub mod packet;
+pub mod pipeline;
 pub mod router;
+pub mod service;
 
 pub use error::TunnelError;
+pub use iface::TunInterface;
+pub use pipeline::{PreparedTransportPacket, TunnelConfig, TunnelInterface};
+pub use service::{PreparedPeerPacket, ServiceIngestReport, TunnelService, TunnelServiceStats};
 
 /// Library-wide result type.
 pub type Result<T> = std::result::Result<T, TunnelError>;

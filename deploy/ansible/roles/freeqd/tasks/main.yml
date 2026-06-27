@@ -1,0 +1,145 @@
+---
+- name: Validate required FreeQ variables
+  ansible.builtin.assert:
+    that:
+      - ansible_service_mgr == "systemd"
+      - ansible_system == "Linux"
+      - freeq_node_name | length > 0
+      - freeq_node_address | length > 0
+      - freeq_config_path | length > 0
+      - freeq_key_path | length > 0
+      - freeq_binary_dest | length > 0
+      - freeq_peers is iterable
+    fail_msg: >-
+      FreeQ deployment requires Linux + systemd and a non-empty
+      freeq_node_address.
+
+- name: Validate peer definitions
+  ansible.builtin.assert:
+    that:
+      - item.name | length > 0
+      - item.public_key | length > 0
+      - item.kem_key | length > 0
+      - item.allowed_ips is iterable
+      - item.key_rotation_secs | default(3600) | int > 0
+    fail_msg: "Invalid FreeQ peer entry: {{ item | to_nice_yaml }}"
+  loop: "{{ freeq_peers }}"
+  loop_control:
+    label: "{{ item.name | default('unnamed-peer') }}"
+
+- name: Optionally build freeqd locally
+  ansible.builtin.command:
+    cmd: "{{ freeq_build_command }}"
+    chdir: "{{ freeq_repo_root }}"
+  delegate_to: localhost
+  become: false
+  when: freeq_build_local_binary | bool
+
+- name: Verify local freeqd binary exists
+  ansible.builtin.stat:
+    path: "{{ freeq_binary_src }}"
+  delegate_to: localhost
+  become: false
+  register: freeq_local_binary
+
+- name: Fail when local freeqd binary is missing
+  ansible.builtin.assert:
+    that:
+      - freeq_local_binary.stat.exists
+      - freeq_local_binary.stat.isreg
+    fail_msg: >-
+      Local freeqd binary not found at {{ freeq_binary_src }}.
+      Build it first or set freeq_binary_src.
+
+- name: Ensure freeq group exists
+  ansible.builtin.group:
+    name: "{{ freeq_group }}"
+    system: true
+
+- name: Ensure freeq user exists
+  ansible.builtin.user:
+    name: "{{ freeq_user }}"
+    group: "{{ freeq_group }}"
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+    home: "{{ freeq_state_dir }}"
+
+- name: Ensure FreeQ directories exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - path: "{{ freeq_install_root }}"
+      owner: root
+      group: "{{ freeq_group }}"
+      mode: "0750"
+    - path: "{{ freeq_state_dir }}"
+      owner: "{{ freeq_user }}"
+      group: "{{ freeq_group }}"
+      mode: "0750"
+    - path: "{{ freeq_log_dir }}"
+      owner: "{{ freeq_user }}"
+      group: "{{ freeq_group }}"
+      mode: "0750"
+
+- name: Copy freeqd binary
+  ansible.builtin.copy:
+    src: "{{ freeq_binary_src }}"
+    dest: "{{ freeq_binary_dest }}"
+    owner: root
+    group: root
+    mode: "0755"
+  notify: restart freeqd
+
+- name: Render freeq.toml
+  ansible.builtin.template:
+    src: freeq.toml.j2
+    dest: "{{ freeq_config_path }}"
+    owner: root
+    group: "{{ freeq_group }}"
+    mode: "0640"
+  notify: restart freeqd
+
+- name: Install systemd unit
+  ansible.builtin.template:
+    src: freeqd.service.j2
+    dest: "/etc/systemd/system/{{ freeq_service_name }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - daemon reload
+    - restart freeqd
+
+- name: Apply optional sysctl profile
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    reload: true
+  loop: "{{ freeq_sysctl | dict2items }}"
+  when: freeq_manage_sysctl | bool
+
+- name: Flush handlers before service enable
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start freeqd
+  ansible.builtin.systemd:
+    name: "{{ freeq_service_name }}"
+    enabled: true
+    state: started
+
+- name: Wait for local FreeQ status API
+  ansible.builtin.uri:
+    url: "{{ freeq_healthcheck_url }}"
+    return_content: true
+    status_code: 200
+  register: freeq_health
+  until: freeq_health.status == 200
+  retries: "{{ freeq_healthcheck_retries }}"
+  delay: "{{ freeq_healthcheck_delay }}"
+  when: freeq_healthcheck_enabled | bool

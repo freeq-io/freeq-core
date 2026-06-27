@@ -21,6 +21,28 @@ pub struct StatusResponse {
     pub peer_count: usize,
     /// Number of currently active tunnels.
     pub tunnel_count: usize,
+    /// Name of the active tunnel interface, if initialized.
+    pub interface_name: Option<String>,
+    /// MTU of the active tunnel interface, if initialized.
+    pub interface_mtu: Option<usize>,
+    /// Tunnel packets accepted by the daemon packet pipeline.
+    pub packets_ingested: u64,
+    /// Tunnel bytes emitted after encryption.
+    pub encrypted_bytes: u64,
+    /// QUIC-sized transport frames emitted by the tunnel pipeline.
+    pub transport_frames: u64,
+    /// Packets rejected because no route matched the destination IP.
+    pub route_misses: u64,
+    /// Packets rejected as structurally malformed.
+    pub malformed_packet_errors: u64,
+    /// Packets rejected during crypto processing.
+    pub crypto_errors: u64,
+    /// Packets rejected during transport framing.
+    pub transport_errors: u64,
+    /// Most recent daemon error summary, if any.
+    pub last_error: Option<String>,
+    /// Startup blockers currently preventing the full daemon main loop.
+    pub startup_blockers: Vec<String>,
 }
 
 /// A peer summary returned from `GET /v1/peers`.

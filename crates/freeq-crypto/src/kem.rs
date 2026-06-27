@@ -5,6 +5,8 @@
 
 use ml_kem::kem::{Decapsulate as _, Encapsulate as _, KeyExport as _};
 use ml_kem::{DecapsulationKey768, EncapsulationKey768};
+use sha2::{Digest, Sha256};
+use subtle::{Choice, ConditionallySelectable};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 use zeroize::ZeroizeOnDrop;
 
@@ -13,6 +15,7 @@ use crate::{kdf, CryptoError, Result};
 const X25519_PUBLIC_KEY_LEN: usize = 32;
 const X25519_SECRET_KEY_LEN: usize = 32;
 const MLKEM_SEED_LEN: usize = 64;
+const MLKEM_768_CIPHERTEXT_LEN: usize = 1088;
 
 /// Hybrid per-session secret key material.
 ///
@@ -237,27 +240,64 @@ pub fn hybrid_decapsulate(
     let x25519_sk = X25519StaticSecret::from(*x25519_sk);
     let peer_x25519_pk = X25519PublicKey::from(ct.x25519_epk);
     let ecdh_secret = x25519_sk.diffie_hellman(&peer_x25519_pk);
-
-    if !ecdh_secret.was_contributory() {
-        return Err(CryptoError::KemFailure);
-    }
+    let contributory = Choice::from(u8::from(ecdh_secret.was_contributory()));
 
     let mlkem_seed: [u8; MLKEM_SEED_LEN] =
         mlkem_sk.try_into().map_err(|_| CryptoError::KemFailure)?;
     let mlkem_sk = mlkem_secret_from_seed(&mlkem_seed);
-    let mlkem_ct: ml_kem::ml_kem_768::Ciphertext = ct
-        .mlkem_ct
+    let (mlkem_ct, ciphertext_well_formed) = normalize_mlkem_ciphertext(&ct.mlkem_ct);
+    let mlkem_secret = mlkem_sk.decapsulate(&mlkem_ct);
+    let real_mlkem_secret: [u8; 32] = mlkem_secret
         .as_slice()
         .try_into()
         .map_err(|_| CryptoError::KemFailure)?;
-    let mlkem_secret = mlkem_sk.decapsulate(&mlkem_ct);
-    let session_key = kdf::derive_session_key(
-        &ecdh_secret.to_bytes(),
-        mlkem_secret.as_slice(),
-        session_info,
-    )?;
+    let fake_mlkem_secret = deterministic_rejection_secret(&mlkem_seed, &ct.mlkem_ct);
+    let selected_mlkem_secret = select_secret(
+        &fake_mlkem_secret,
+        &real_mlkem_secret,
+        ciphertext_well_formed,
+    );
+    let zero_secret = [0u8; 32];
+    let selected_ecdh_secret = select_secret(&zero_secret, &ecdh_secret.to_bytes(), contributory);
+    let session_key =
+        kdf::derive_session_key(&selected_ecdh_secret, &selected_mlkem_secret, session_info)?;
 
     Ok(HybridSharedSecret { session_key })
+}
+
+fn normalize_mlkem_ciphertext(bytes: &[u8]) -> (ml_kem::ml_kem_768::Ciphertext, Choice) {
+    let mut normalized = [0u8; MLKEM_768_CIPHERTEXT_LEN];
+    let success = Choice::from(u8::from(bytes.len() == MLKEM_768_CIPHERTEXT_LEN));
+    if bytes.len() == MLKEM_768_CIPHERTEXT_LEN {
+        normalized.copy_from_slice(bytes);
+    }
+
+    (
+        normalized
+            .as_slice()
+            .try_into()
+            .unwrap_or_else(|_| unreachable!("normalized ML-KEM ciphertext length is fixed")),
+        success,
+    )
+}
+
+fn deterministic_rejection_secret(seed: &[u8; MLKEM_SEED_LEN], ciphertext: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"FreeQ-v1-MLKEM-Implicit-Rejection");
+    hasher.update(seed);
+    hasher.update(ciphertext);
+    hasher.finalize().into()
+}
+
+fn select_secret(fake_secret: &[u8; 32], real_secret: &[u8; 32], success: Choice) -> [u8; 32] {
+    let mut selected = [0u8; 32];
+    for (out, (fake, real)) in selected
+        .iter_mut()
+        .zip(fake_secret.iter().zip(real_secret.iter()))
+    {
+        *out = u8::conditional_select(fake, real, success);
+    }
+    selected
 }
 
 fn validate_mlkem_public_key(bytes: &[u8]) -> Result<()> {

@@ -24,17 +24,35 @@ pub fn encrypt(
     plaintext: &[u8],
 ) -> Result<Vec<u8>> {
     use crate::agility::BulkAlgorithm;
+    use aes_gcm::aead::{Aead, KeyInit, Payload};
+    use chacha20poly1305::ChaCha20Poly1305;
 
     match algorithm {
         BulkAlgorithm::Aes256Gcm => {
-            // TODO(v0.1): aes_gcm::Aes256Gcm::new_from_slice(key)?.encrypt(nonce, payload)
-            let _ = (key, nonce, aad, plaintext);
-            todo!("AES-256-GCM encrypt")
+            let cipher =
+                aes_gcm::Aes256Gcm::new_from_slice(key).map_err(|_| CryptoError::KdfLength)?;
+            cipher
+                .encrypt(
+                    aes_gcm::Nonce::from_slice(nonce),
+                    Payload {
+                        msg: plaintext,
+                        aad,
+                    },
+                )
+                .map_err(|_| CryptoError::AeadAuthFailure)
         }
         BulkAlgorithm::ChaCha20Poly1305 => {
-            // TODO(v0.1): chacha20poly1305::ChaCha20Poly1305::new_from_slice(key)?.encrypt(...)
-            let _ = (key, nonce, aad, plaintext);
-            todo!("ChaCha20-Poly1305 encrypt")
+            let cipher =
+                ChaCha20Poly1305::new_from_slice(key).map_err(|_| CryptoError::KdfLength)?;
+            cipher
+                .encrypt(
+                    chacha20poly1305::Nonce::from_slice(nonce),
+                    Payload {
+                        msg: plaintext,
+                        aad,
+                    },
+                )
+                .map_err(|_| CryptoError::AeadAuthFailure)
         }
     }
 }
@@ -51,15 +69,35 @@ pub fn decrypt(
     ciphertext: &[u8],
 ) -> Result<Vec<u8>> {
     use crate::agility::BulkAlgorithm;
+    use aes_gcm::aead::{Aead, KeyInit, Payload};
+    use chacha20poly1305::ChaCha20Poly1305;
 
     match algorithm {
         BulkAlgorithm::Aes256Gcm => {
-            let _ = (key, nonce, aad, ciphertext);
-            todo!("AES-256-GCM decrypt")
+            let cipher =
+                aes_gcm::Aes256Gcm::new_from_slice(key).map_err(|_| CryptoError::KdfLength)?;
+            cipher
+                .decrypt(
+                    aes_gcm::Nonce::from_slice(nonce),
+                    Payload {
+                        msg: ciphertext,
+                        aad,
+                    },
+                )
+                .map_err(|_| CryptoError::AeadAuthFailure)
         }
         BulkAlgorithm::ChaCha20Poly1305 => {
-            let _ = (key, nonce, aad, ciphertext);
-            todo!("ChaCha20-Poly1305 decrypt")
+            let cipher =
+                ChaCha20Poly1305::new_from_slice(key).map_err(|_| CryptoError::KdfLength)?;
+            cipher
+                .decrypt(
+                    chacha20poly1305::Nonce::from_slice(nonce),
+                    Payload {
+                        msg: ciphertext,
+                        aad,
+                    },
+                )
+                .map_err(|_| CryptoError::AeadAuthFailure)
         }
     }
 }
@@ -70,5 +108,34 @@ pub fn verify_tag(expected: &[u8], actual: &[u8]) -> Result<()> {
         Ok(())
     } else {
         Err(CryptoError::AeadAuthFailure)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decrypt, encrypt};
+    use crate::agility::BulkAlgorithm;
+
+    #[test]
+    fn aes_gcm_round_trip() -> crate::Result<()> {
+        round_trip(BulkAlgorithm::Aes256Gcm)
+    }
+
+    #[test]
+    fn chacha20_poly1305_round_trip() -> crate::Result<()> {
+        round_trip(BulkAlgorithm::ChaCha20Poly1305)
+    }
+
+    fn round_trip(algorithm: BulkAlgorithm) -> crate::Result<()> {
+        let key = [7u8; 32];
+        let nonce = [9u8; 12];
+        let aad = b"freeq-bulk-test";
+        let plaintext = b"freeq packet payload";
+
+        let ciphertext = encrypt(&algorithm, &key, &nonce, aad, plaintext)?;
+        let decrypted = decrypt(&algorithm, &key, &nonce, aad, &ciphertext)?;
+
+        assert_eq!(decrypted, plaintext);
+        Ok(())
     }
 }

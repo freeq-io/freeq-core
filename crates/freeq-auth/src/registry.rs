@@ -86,6 +86,11 @@ impl PeerRegistry {
         Ok(())
     }
 
+    /// Look up a peer by name.
+    pub fn get_peer(&self, peer_name: &str) -> Option<&PeerEntry> {
+        self.peers_by_name.get(peer_name).map(|peer| &peer.entry)
+    }
+
     /// Look up a peer by fingerprint and return both their name and entry.
     pub fn lookup_name_and_peer(&self, fingerprint: &[u8]) -> Option<(&str, &PeerEntry)> {
         let fingerprint = <[u8; FINGERPRINT_LEN]>::try_from(fingerprint).ok()?;

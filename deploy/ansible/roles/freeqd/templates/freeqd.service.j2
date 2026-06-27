@@ -1,0 +1,32 @@
+[Unit]
+Description=FreeQ post-quantum overlay daemon
+Documentation=https://github.com/freeq-io/freeq-core
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ freeq_user }}
+Group={{ freeq_group }}
+ExecStart={{ freeq_binary_dest }} --config {{ freeq_config_path }}{% if freeq_systemd_exec_start_extra_args %} {{ freeq_systemd_exec_start_extra_args }}{% endif %}
+Restart=on-failure
+RestartSec={{ freeq_systemd_restart_sec }}
+LimitNOFILE={{ freeq_systemd_limit_nofile }}
+WorkingDirectory={{ freeq_state_dir }}
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths={{ freeq_install_root }} {{ freeq_state_dir }} {{ freeq_log_dir }}
+DeviceAllow=/dev/net/tun rw
+{% for key, value in freeq_environment.items() %}
+Environment="{{ key }}={{ value }}"
+{% endfor %}
+
+[Install]
+WantedBy=multi-user.target

@@ -1,7 +1,7 @@
 //! QUIC endpoint -- the local UDP socket that accepts incoming connections.
 
 use crate::{connection::PeerConnection, Result, TransportError};
-use quinn::{ClientConfig, Endpoint as QuinnEndpoint, ServerConfig, VarInt};
+use quinn::{ClientConfig, Endpoint as QuinnEndpoint, MtuDiscoveryConfig, ServerConfig, VarInt};
 
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
 use std::sync::Arc;
@@ -74,6 +74,8 @@ impl Endpoint {
             .with_no_client_auth()
             .with_single_cert(vec![cert_der], key_der.into())
             .map_err(|e| TransportError::Tls(e.to_string()))?;
+        let mut rustls_server_config = rustls_server_config;
+        rustls_server_config.max_early_data_size = 0;
 
         let mut server_config = ServerConfig::with_crypto(Arc::new(
             quinn::crypto::rustls::QuicServerConfig::try_from(rustls_server_config)
@@ -85,12 +87,13 @@ impl Endpoint {
 
     fn configure_client() -> Result<ClientConfig> {
         let provider = Arc::new(rustls::crypto::ring::default_provider());
-        let rustls_config = rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
+        let mut rustls_config = rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
             .with_safe_default_protocol_versions()
             .map_err(|e| TransportError::Tls(e.to_string()))?
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(SkipServerVerification(provider)))
             .with_no_client_auth();
+        rustls_config.enable_early_data = false;
 
         let mut client_config = ClientConfig::new(Arc::new(
             quinn::crypto::rustls::QuicClientConfig::try_from(rustls_config)
@@ -109,6 +112,9 @@ impl Endpoint {
                 .try_into()
                 .expect("timeout fits"),
         ));
+        config.initial_mtu(1200);
+        config.min_mtu(1200);
+        config.mtu_discovery_config(Some(MtuDiscoveryConfig::default()));
         config
     }
 }

@@ -28,6 +28,7 @@ rand_core        = { workspace = true }
 zeroize          = { workspace = true }
 secrecy          = { workspace = true }
 constant_time_eq = { workspace = true }
+subtle           = { workspace = true }
 
 # Serialization
 serde            = { workspace = true }

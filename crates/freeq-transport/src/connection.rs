@@ -45,6 +45,11 @@ impl PeerConnection {
             .map_err(|e| TransportError::ConnectionLost(e.to_string()))
     }
 
+    /// Remote socket address for this connection.
+    pub fn remote_addr(&self) -> std::net::SocketAddr {
+        self.connection.remote_address()
+    }
+
     /// Returns `true` if the connection is currently active.
     pub fn is_alive(&self) -> bool {
         self.connection.close_reason().is_none()

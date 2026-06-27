@@ -1,0 +1,21 @@
+[node]
+name = "{{ freeq_node_name }}"
+listen = "{{ freeq_node_listen }}"
+address = "{{ freeq_node_address }}"
+key_path = "{{ freeq_key_path }}"
+algorithm = "{{ freeq_node_algorithm }}"
+sign = "{{ freeq_node_sign }}"
+api_enabled = {{ freeq_api_enabled | ternary("true", "false") }}
+api_addr = "{{ freeq_api_addr }}"
+{% for peer in freeq_peers %}
+
+[[peer]]
+name = "{{ peer.name }}"
+{% if peer.endpoint is defined and peer.endpoint %}
+endpoint = "{{ peer.endpoint }}"
+{% endif %}
+public_key = "{{ peer.public_key }}"
+kem_key = "{{ peer.kem_key }}"
+allowed_ips = [{% for ip in peer.allowed_ips %}"{{ ip }}"{% if not loop.last %}, {% endif %}{% endfor %}]
+key_rotation_secs = {{ peer.key_rotation_secs | default(3600) | int }}
+{% endfor %}

@@ -20,6 +20,9 @@ freeq-tunnel    = { path = "../crates/freeq-tunnel" }
 freeq-auth      = { path = "../crates/freeq-auth" }
 freeq-config    = { path = "../crates/freeq-config" }
 freeq-api       = { path = "../crates/freeq-api" }
+bytes           = { workspace = true }
+ipnetwork       = { workspace = true }
+base64          = { workspace = true }
 
 tokio              = { workspace = true }
 tracing            = { workspace = true }

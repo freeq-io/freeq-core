@@ -26,8 +26,11 @@ pub mod error;
 pub mod kdf;
 pub mod kem;
 pub mod sign;
+pub mod types;
 
 pub use error::CryptoError;
+pub use kdf::combine_secrets;
+pub use types::FreeQKeyPair;
 
 /// Library-wide result type.
 pub type Result<T> = std::result::Result<T, CryptoError>;

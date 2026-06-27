@@ -1,6 +1,7 @@
 pub mod connection;
 pub mod endpoint;
 pub mod error;
+pub mod frame;
 pub mod peer;
 pub mod pool;
 pub mod session;

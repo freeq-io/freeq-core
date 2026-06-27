@@ -5,8 +5,10 @@ use axum::{
     Router,
 };
 
+use crate::ApiState;
+
 /// Build the Axum router with all API endpoints.
-pub fn build_router() -> Router {
+pub fn build_router(state: ApiState) -> Router {
     Router::new()
         .route("/v1/status", get(crate::handlers::status::get_status))
         .route("/v1/peers", get(crate::handlers::peers::list_peers))
@@ -25,4 +27,5 @@ pub fn build_router() -> Router {
             "/v1/algorithm",
             post(crate::handlers::algorithm::switch_algorithm),
         )
+        .with_state(state)
 }

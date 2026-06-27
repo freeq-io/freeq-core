@@ -21,6 +21,7 @@ pub struct InitiatorHandshake {
 
 /// State machine for the responding side of the handshake (Node B).
 pub struct ResponderHandshake {
+    peer_name: String,
     initiator_nonce: [u8; NONCE_LEN],
     responder_nonce: [u8; NONCE_LEN],
     responder_kem_secret: freeq_crypto::kem::HybridSecretKey,
@@ -200,12 +201,18 @@ impl ResponderHandshake {
 
         Ok((
             Self {
+                peer_name: peer_name.to_string(),
                 initiator_nonce: init.initiator_nonce,
                 responder_nonce,
                 responder_kem_secret,
             },
             response,
         ))
+    }
+
+    /// Return the authenticated initiator peer name.
+    pub fn peer_name(&self) -> &str {
+        &self.peer_name
     }
 
     /// Process Node A's KEM ciphertext (steps 5-8) and finalize.
