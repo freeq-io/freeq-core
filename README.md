@@ -34,7 +34,7 @@ FreeQ wraps all traffic between trusted endpoints in **hybrid post-quantum tunne
 
 ## Quick comparison
 
-|                        | FreeQ              | WireGuard     | Tailscale      |
+|                        | FreeQ              | LegacyVPN     | Mesh Overlay   |
 |------------------------|--------------------|---------------|----------------|
 | Post-quantum crypto    | ✅ FIPS 203/204/205 | ❌             | ❌              |
 | Open source            | ✅ AGPL v3          | ✅ GPLv2       | Partial        |
