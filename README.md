@@ -113,22 +113,33 @@ graph TD
 
 ## Roadmap
 
-**v0.1 — Alpha (current)**
-- [x] Workspace scaffold and crate architecture
-- [ ] ML-KEM-768 + X25519 hybrid KEM implementation
-- [ ] ML-DSA-65 mutual authentication
-- [ ] QUIC transport via quinn
-- [ ] TUN/TAP L3 overlay
-- [ ] Endpoint cloaking
-- [ ] Basic CLI (init, up, down, peer add/remove, status)
-- [ ] TOML configuration
+Status key: `[x]` implemented in the current repo, `[~]` partially implemented or scaffolded, `[ ]` not implemented yet.
 
-**v0.2 — Q3 2026**
-- [ ] io_uring data plane (Linux 5.19+)
-- [ ] Session resumption and 0-RTT
-- [ ] ML-KEM-1024 parameter set
+**v0.1 — Alpha (current, mostly implemented)**
+- [x] Workspace scaffold and crate architecture
+- [x] ML-KEM-768 + X25519 hybrid KEM implementation, including round-trip tests and hardened fallback handling
+- [x] ML-DSA-65 identity keys, peer registry, mutual-auth handshake state machine, and responder/initiator tests
+- [x] QUIC transport via `quinn`, including datagram send/receive, framing/reassembly, and loopback coverage
+- [x] TUN/TAP L3 overlay pipeline, including macOS `utun`, Linux `/dev/net/tun`, IPv4 routing, AEAD packet wrapping, and daemon packet I/O bridges
+- [x] Endpoint cloaking for signed packets from registered peers
+- [x] TOML configuration loading and validation
+- [x] Local REST API server with live `/v1/status`, `/v1/metrics`, and aggregate `/v1/tunnels` state
+- [x] `freeqd` startup path with identity generation/loading, tunnel service initialization, API state refresh, QUIC session negotiation, and tested in-memory dataplane forwarding over real loopback QUIC
+- [x] Ansible host provisioning layer for binary rollout, config templating, systemd, service user setup, and local health checks
+- [~] Basic CLI command surface exists, but command handlers still need to call the local API; `up`/`down` are not present yet
+- [~] Peer and algorithm API routes are declared, but peer add/remove/rotate and algorithm switching still return `501 Not Implemented`
+- [~] Host deployment is ready for validation, but real two-host Linux/macOS bring-up, interface address configuration, and production routing setup still need to be exercised
+- [~] Active transport/auth path lives in `freeq-auth` plus daemon integration; an older unexported `freeq-transport/src/handshake.rs` file still contains stale `todo!()` code and should be removed or reconciled
+
+**v0.2 — Q3 2026 (next hardening and management slice)**
+- [ ] io_uring data plane (Linux 5.19+); currently only noted as future dependency work
+- [ ] Session resumption; an inactive scaffold exists, while the current QUIC config intentionally disables 0-RTT
+- [~] ML-KEM-1024 parameter set selection is present in config/agility types and Cargo features, but the active KEM implementation is still ML-KEM-768-only
 - [ ] Kubernetes CNI plugin
-- [ ] FreeQ Cloud agent
+- [~] FreeQ Cloud agent; the sibling `freeQ-cloud` repo has a buildable scanner-oriented agent slice, but enrollment, local `freeq-api` polling, mTLS, backend sync, and management workflows remain unimplemented
+- [ ] Live QUIC datagram budget handling per connection
+- [ ] Packet buffer reuse, batching, and Linux multiqueue TUN performance work
+- [ ] Peer management API persistence and CLI/API integration
 
 **v0.3 — Q4 2026**
 - [ ] Windows (WinTUN)
