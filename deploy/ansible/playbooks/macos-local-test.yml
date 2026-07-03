@@ -1,0 +1,178 @@
+---
+- name: Build and validate FreeQ locally on macOS
+  hosts: local_nodes
+  gather_facts: true
+  vars:
+    freeq_source_dir: "{{ ansible_facts['user_dir'] }}/Documents/FreeQ/freeq-core"
+    freeq_test_root: "/private/tmp/freeq-ansible-local"
+    freeq_daemon_config_path: "{{ freeq_test_root }}/freeq.toml"
+    freeq_daemon_key_path: "{{ freeq_test_root }}/identity.key"
+    freeq_daemon_api_addr: "127.0.0.1:6799"
+    freeq_daemon_listen: "127.0.0.1:0"
+    freeq_daemon_address: "10.250.0.1/24"
+    freeq_daemon_runtime_seconds: 45
+
+  tasks:
+    - name: Confirm this local playbook is running on macOS
+      ansible.builtin.assert:
+        that:
+          - ansible_system == "Darwin"
+        fail_msg: >-
+          This playbook is intended for local macOS validation. Use
+          playbooks/site.yml for Linux/systemd deployment targets.
+
+    - name: Confirm freeq-core checkout exists
+      ansible.builtin.stat:
+        path: "{{ freeq_source_dir }}/Cargo.toml"
+      register: freeq_workspace_manifest
+
+    - name: Fail when freeq-core checkout is missing
+      ansible.builtin.assert:
+        that:
+          - freeq_workspace_manifest.stat.exists
+          - freeq_workspace_manifest.stat.isreg
+        fail_msg: "Could not find freeq-core Cargo.toml at {{ freeq_source_dir }}"
+
+    - name: Compile daemon and support crates
+      ansible.builtin.command:
+        argv:
+          - cargo
+          - build
+          - -p
+          - freeqd
+          - -p
+          - freeq
+          - -p
+          - freeq-auth
+          - -p
+          - freeq-transport
+          - -p
+          - freeq-tunnel
+      args:
+        chdir: "{{ freeq_source_dir }}"
+      register: freeq_build
+      changed_when: "'Compiling' in freeq_build.stderr"
+
+    - name: Run crypto security regression tests
+      ansible.builtin.command:
+        argv:
+          - cargo
+          - test
+          - -p
+          - freeq-crypto
+          - --test
+          - security_audits
+      args:
+        chdir: "{{ freeq_source_dir }}"
+      register: freeq_security_tests
+      changed_when: false
+
+    - name: Emulate node-to-node daemon dataplane over loopback QUIC
+      ansible.builtin.command:
+        argv:
+          - cargo
+          - test
+          - -p
+          - freeqd
+          - --bin
+          - freeqd
+          - tests::dataplane_runtime_forwards_packet_over_real_quic_transport
+          - --
+          - --nocapture
+      args:
+        chdir: "{{ freeq_source_dir }}"
+      register: freeq_loopback_test
+      changed_when: false
+
+    - name: Ensure local daemon smoke-test directory exists
+      ansible.builtin.file:
+        path: "{{ freeq_test_root }}"
+        state: directory
+        mode: "0700"
+
+    - name: Render local single-node daemon config
+      ansible.builtin.copy:
+        dest: "{{ freeq_daemon_config_path }}"
+        mode: "0600"
+        content: |
+          [node]
+          name = "macbook-local"
+          listen = "{{ freeq_daemon_listen }}"
+          address = "{{ freeq_daemon_address }}"
+          key_path = "{{ freeq_daemon_key_path }}"
+          algorithm = "ml-kem-768"
+          sign = "ml-dsa-65"
+          api_enabled = true
+          api_addr = "{{ freeq_daemon_api_addr }}"
+
+    - name: Launch freeqd foreground smoke test
+      block:
+        - name: Start freeqd with the local test config
+          ansible.builtin.command:
+            argv:
+              - "{{ freeq_source_dir }}/target/debug/freeqd"
+              - --config
+              - "{{ freeq_daemon_config_path }}"
+              - --foreground
+              - --log
+              - info
+          args:
+            chdir: "{{ freeq_source_dir }}"
+          async: "{{ freeq_daemon_runtime_seconds }}"
+          poll: 0
+          register: freeq_daemon_job
+
+        - name: Wait for freeqd status API
+          ansible.builtin.uri:
+            url: "http://{{ freeq_daemon_api_addr }}/v1/status"
+            return_content: true
+            status_code: 200
+          register: freeq_status_api
+          until: freeq_status_api.status == 200
+          retries: 15
+          delay: 1
+
+        - name: Print daemon status snapshot
+          ansible.builtin.debug:
+            msg: "{{ freeq_status_api.content | from_json }}"
+
+      rescue:
+        - name: Read failed daemon async job output
+          ansible.builtin.async_status:
+            jid: "{{ freeq_daemon_job.ansible_job_id }}"
+          register: freeq_failed_daemon
+          failed_when: false
+          when: freeq_daemon_job is defined
+
+        - name: Print daemon failure details
+          ansible.builtin.debug:
+            var: freeq_failed_daemon
+          when: freeq_failed_daemon is defined
+
+        - name: Fail daemon smoke test
+          ansible.builtin.fail:
+            msg: >-
+              freeqd did not expose the local status API. If the failure is a
+              macOS utun permission error, rerun this playbook with the needed
+              local privileges or use the loopback dataplane test result above
+              as the non-root node-to-node emulation.
+
+      always:
+        - name: Stop local freeqd smoke-test process
+          ansible.builtin.command:
+            argv:
+              - pkill
+              - -f
+              - "{{ freeq_source_dir }}/target/debug/freeqd --config {{ freeq_daemon_config_path }}"
+          register: freeq_stop_daemon
+          changed_when: freeq_stop_daemon.rc == 0
+          failed_when: freeq_stop_daemon.rc not in [0, 1]
+
+    - name: Print local validation summary
+      ansible.builtin.debug:
+        msg:
+          - "Build completed."
+          - "Security tests passed."
+          - "Loopback node-to-node daemon dataplane emulation passed."
+          - "freeqd status API smoke test passed on {{ freeq_daemon_api_addr }}."
+

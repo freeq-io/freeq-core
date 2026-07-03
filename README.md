@@ -78,12 +78,12 @@ freeq-core/
 ```mermaid
 graph TD
     subgraph CLI ["CLI & Management"]
-        A["freeq CLI"] -->|Local REST API| B["freeqd Daemon"]
+        A["freeq CLI"] -->|Local REST API| D["freeq-api"]
     end
 
     subgraph Daemon ["freeqd Daemon Crate Layer"]
         B --> C["freeq-config"]
-        B --> D["freeq-api"]
+        B["freeqd Daemon"] --> D
     end
 
     subgraph Core ["Core Engine Crates"]
@@ -93,9 +93,16 @@ graph TD
         H -->|"QUIC / quinn"| J["Secure Overlay Network"]
     end
 
+    subgraph Cloud ["FreeQ Cloud Boundary"]
+        K["freeq-agent"] -->|"HTTPS + mTLS"| L["FreeQ Cloud Backend"]
+        L --> M["Fleet Dashboard / Compliance"]
+        L -.->|planned export| N["SIEM / SOAR / NMS Export"]
+    end
+
     B --> E
     B --> G
     B --> I
+    K <-->|"Node-local status / metrics / control"| D
 ```
 
 ## Cryptographic dependencies
@@ -140,11 +147,13 @@ Status key: `[x]` implemented in the current repo, `[~]` partially implemented o
 - [ ] Live QUIC datagram budget handling per connection
 - [ ] Packet buffer reuse, batching, and Linux multiqueue TUN performance work
 - [ ] Peer management API persistence and CLI/API integration
+- [ ] FreeQ Cloud security export architecture: generic webhooks, syslog/CEF,
+  SIEM adapters, and conservative SOAR action boundary
 
 **v0.3 — Q4 2026**
 - [ ] Windows (WinTUN)
 - [ ] Mobile (iOS, Android via FFI)
-- [ ] FreeQ Cloud beta (fleet dashboard, compliance reports)
+- [ ] FreeQ Cloud beta (fleet dashboard, compliance reports, SIEM/SOAR export)
 
 **v1.0 — 2027**
 - [ ] Stable API — no breaking changes
@@ -193,7 +202,7 @@ FreeQ is built in the open and contributions are welcome. All contributors must 
 
 ## Business model
 
-FreeQ Core is and will always be free under AGPL v3. The commercial product is **FreeQ Cloud** — a paid management plane that connects to the local REST API on each node to provide fleet visibility, compliance reporting (CNSA 2.0, OMB M-23-02), network scanning, and remote operations.
+FreeQ Core is and will always be free under AGPL v3. The commercial product is **FreeQ Cloud** — a paid management plane that connects to the local REST API on each node to provide fleet visibility, compliance reporting (CNSA 2.0, OMB M-23-02), network scanning, security event export, and remote operations.
 
 Individuals, home labs, and self-hosters use FreeQ Core forever, for free.
 

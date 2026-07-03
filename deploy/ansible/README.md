@@ -81,6 +81,35 @@ Build locally as part of the play:
 ansible-playbook playbooks/site.yml -e freeq_build_local_binary=true
 ```
 
+## macOS Local Validation
+
+For local MacBook validation, use the dedicated loopback playbook instead of
+the Linux/systemd deployment role:
+
+```bash
+cd deploy/ansible
+ansible-playbook -i inventories/local/hosts.yml playbooks/macos-local-test.yml
+```
+
+This playbook:
+
+- builds the local Rust workspace components needed by `freeqd`
+- runs the crypto security regression tests
+- runs the daemon loopback dataplane test that emulates node-to-node traffic
+  over real local QUIC sockets
+- renders a temporary single-node config under `/private/tmp`
+- starts `freeqd` in the foreground long enough to verify `/v1/status`
+
+If Homebrew Ansible fails before running tasks with `Local RPC server did not
+start`, the installed Ansible controller is unhealthy. The FreeQ commands can
+still be validated directly:
+
+```bash
+cargo build -p freeqd -p freeq -p freeq-auth -p freeq-transport -p freeq-tunnel
+cargo test -p freeq-crypto --test security_audits
+cargo test -p freeqd --bin freeqd tests::dataplane_runtime_forwards_packet_over_real_quic_transport -- --nocapture
+```
+
 ## Important Variables
 
 - `freeq_binary_src`: local path to the `freeqd` binary copied to the target
