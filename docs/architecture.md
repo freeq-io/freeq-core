@@ -7,7 +7,7 @@
 │  APPLICATION LAYER — your services, APIs, microservices  │
 ├─────────────────────────────────────────────────────────┤
 │  FREEQ CLOUD (paid) — Fleet Dashboard · Scanner · NMS   │
-│                        SIEM/SOAR export boundary        │
+│                        SIEM/SOAR · ITSM · Provisioning  │
 ├─────────────────────────────────────────────────────────┤
 │  FREEQ CORE DAEMON (AGPL v3)                            │
 │  ┌──────────────────┐  ┌──────────────────────────────┐ │
@@ -58,7 +58,7 @@ freeq (CLI binary)
 
 FreeQ Core exposes node-local status, metrics, tunnel state, and future
 management operations through `freeq-api`. It should not contain
-vendor-specific SIEM or SOAR connectors.
+vendor-specific SIEM, SOAR, ITSM, or provisioning connectors.
 
 The planned integration boundary is:
 
@@ -73,9 +73,23 @@ freeqd
                 ├── Splunk HEC
                 ├── Microsoft Sentinel / Log Analytics
                 ├── Elastic / OpenSearch
-                └── QRadar / SOAR adapters
+                ├── QRadar / SOAR adapters
+                ├── ServiceNow / Jira / CMDB adapters
+                └── Ansible / Terraform / gateway provisioning hooks
 ```
 
 This keeps the daemon focused on cryptographic overlay protection while FreeQ
 Cloud handles aggregation, event normalization, delivery retries, tenant export
-configuration, and vendor-specific integration formats.
+configuration, ticketing workflows, provisioning orchestration, validation
+evidence, and vendor-specific integration formats.
+
+The intended Cloud workflow is closed-loop remediation:
+
+```text
+scanner finding
+    -> SOC alert
+        -> ticket or change request
+            -> approved gateway or policy deployment
+                -> validation through freeq-agent and freeq-api
+                    -> evidence attached back to the ticket
+```

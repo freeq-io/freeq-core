@@ -41,9 +41,8 @@ deploy/ansible/
 - Controller runs Ansible from this repository checkout.
 - Target hosts run Linux with systemd.
 - A release build of `freeqd` exists locally, or you enable local build.
-- Current daemon startup is still limited by the unfinished authenticated
-  session key negotiation path, so the service is expected to run in the
-  current degraded/status-serving mode until that path is completed.
+- Real host validation still needs to exercise two-node routing, host interface
+  addressing, and production firewall policy on actual Linux targets.
 
 ## Quick Start
 
@@ -109,6 +108,31 @@ cargo build -p freeqd -p freeq -p freeq-auth -p freeq-transport -p freeq-tunnel
 cargo test -p freeq-crypto --test security_audits
 cargo test -p freeqd --bin freeqd tests::dataplane_runtime_forwards_packet_over_real_quic_transport -- --nocapture
 ```
+
+## Remediation and Provisioning Role
+
+This Ansible layer is also the natural first provisioning hook for future
+FreeQ Cloud closed-loop remediation workflows.
+
+Today, operators run these playbooks directly. Later, FreeQ Cloud can use
+approved Ansible runs as one of several provisioning backends after a scanner
+finding has been triaged through SIEM/SOAR and ticketing systems such as
+ServiceNow or Jira Service Management.
+
+The intended future flow is:
+
+```text
+scanner finding
+    -> SOC alert
+        -> ticket / change request
+            -> approved Ansible deployment
+                -> freeqd status and tunnel validation
+                    -> evidence attached back to ticket
+```
+
+Provisioning automation should remain explicit and auditable. FreeQ Cloud
+should not silently mutate production routing or gateway policy without an
+authorized workflow, logged action, and post-deployment validation.
 
 ## Important Variables
 

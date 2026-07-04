@@ -96,7 +96,9 @@ graph TD
     subgraph Cloud ["FreeQ Cloud Boundary"]
         K["freeq-agent"] -->|"HTTPS + mTLS"| L["FreeQ Cloud Backend"]
         L --> M["Fleet Dashboard / Compliance"]
-        L -.->|planned export| N["SIEM / SOAR / NMS Export"]
+        L -.->|planned alerting| N["SIEM / SOAR / NMS Export"]
+        L -.->|planned workflow| O["ServiceNow / Jira / CMDB"]
+        L -.->|approved remediation| P["Ansible / Terraform / Gateway Provisioning"]
     end
 
     B --> E
@@ -147,13 +149,15 @@ Status key: `[x]` implemented in the current repo, `[~]` partially implemented o
 - [ ] Live QUIC datagram budget handling per connection
 - [ ] Packet buffer reuse, batching, and Linux multiqueue TUN performance work
 - [ ] Peer management API persistence and CLI/API integration
-- [ ] FreeQ Cloud security export architecture: generic webhooks, syslog/CEF,
-  SIEM adapters, and conservative SOAR action boundary
+- [ ] FreeQ Cloud closed-loop remediation architecture: generic webhooks,
+  syslog/CEF, SIEM adapters, ITSM/ticketing, provisioning hooks, and
+  conservative SOAR action boundary
 
 **v0.3 — Q4 2026**
 - [ ] Windows (WinTUN)
 - [ ] Mobile (iOS, Android via FFI)
-- [ ] FreeQ Cloud beta (fleet dashboard, compliance reports, SIEM/SOAR export)
+- [ ] FreeQ Cloud beta (fleet dashboard, compliance reports, SIEM/SOAR export,
+  ticketing, and provisioning workflows)
 
 **v1.0 — 2027**
 - [ ] Stable API — no breaking changes
@@ -202,7 +206,7 @@ FreeQ is built in the open and contributions are welcome. All contributors must 
 
 ## Business model
 
-FreeQ Core is and will always be free under AGPL v3. The commercial product is **FreeQ Cloud** — a paid management plane that connects to the local REST API on each node to provide fleet visibility, compliance reporting (CNSA 2.0, OMB M-23-02), network scanning, security event export, and remote operations.
+FreeQ Core is and will always be free under AGPL v3. The commercial product is **FreeQ Cloud** — a paid management plane that connects to the local REST API on each node to provide fleet visibility, compliance reporting (CNSA 2.0, OMB M-23-02), network scanning, security event export, closed-loop remediation workflows, and remote operations.
 
 Individuals, home labs, and self-hosters use FreeQ Core forever, for free.
 
