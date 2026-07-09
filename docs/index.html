@@ -1,107 +1,17 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FreeQ-Cloud | Next-Gen Post-Quantum Cryptographic Discovery & Node Protection</title>
-    <meta name="description" content="Map cryptographic risks and transition to quantum-safe architectures. FreeQ-Cloud automates CBOM generation and deploys hybrid FIPS 203/204 node shielding seamlessly.">
-    <meta name="keywords" content="Post-Quantum Cryptography, CBOM generation, cryptographic risk, TLS scanning, network discovery tool, FreeQ-IO, PQC compliance, CNSA 2.0">
-    
-    <style>
-        :root { --bg: #0B0F19; --text: #F3F4F6; --accent: #10B981; --muted: #9CA3AF; --card: #1F2937; --border: #374151; }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: var(--bg); color: var(--text); line-height: 1.6; margin: 0; padding: 0; }
-        header { max-width: 1200px; margin: 0 auto; padding: 2rem 1rem; display: flex; justify-content: space-between; align-items: center; }
-        .logo { font-size: 1.5rem; font-weight: 800; color: #fff; letter-spacing: -0.05em; }
-        .logo span { color: var(--accent); }
-        .hero { max-width: 900px; margin: 4rem auto; text-align: center; padding: 0 1rem; }
-        h1 { font-size: 3rem; font-weight: 800; line-height: 1.1; letter-spacing: -0.03em; margin-bottom: 1.5rem; }
-        .hero p { font-size: 1.25rem; color: var(--muted); max-width: 700px; margin: 0 auto 2.5rem; }
-        .cta-btn { background-color: var(--accent); color: #000; padding: 0.75rem 2rem; font-weight: 700; text-decoration: none; border-radius: 6px; font-size: 1rem; transition: transform 0.2s; display: inline-block; }
-        .cta-btn:hover { transform: translateY(-2px); }
-        
-        /* Generational Matrix Styling */
-        .matrix-section { max-width: 1000px; margin: 6rem auto; padding: 0 1rem; }
-        .matrix-section h2 { text-align: center; font-size: 2rem; margin-bottom: 2rem; color: #fff; }
-        .table-container { overflow-x: auto; background: var(--card); border: 1px solid var(--border); border-radius: 8px; }
-        table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.95rem; }
-        th, td { padding: 1.2rem; border-bottom: 1px solid var(--border); }
-        th { background-color: #111827; color: #fff; font-weight: 600; }
-        td:first-child { font-weight: 600; color: #fff; }
-        .highlight-col { color: var(--accent); font-weight: 700; background-color: rgba(16, 185, 129, 0.04); }
-        
-        footer { border-top: 1px solid #1F2937; text-align: center; padding: 2rem 1rem; color: var(--muted); font-size: 0.85rem; margin-top: 6rem; }
-        .badge { background: #1E3A8A; color: #93C5FD; padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.8rem; font-weight: 600; display: inline-block; margin-bottom: 1rem; }
-    </style>
-</head>
-<body>
-
-    <header>
-        <div class="logo">FreeQ<span>-Cloud</span></div>
-        <div>
-            <a href="https://github.com" style="color: var(--muted); text-decoration: none; font-size: 0.9rem;">View Open Source Core</a>
-        </div>
-    </header>
-
-    <main>
-        <section class="hero">
-            <span class="badge">The Evolution of Network Architecture</span>
-            <h1>Future-Proof Your Enterprise Infrastructure Against Quantum Risk</h1>
-            <p>Traditional overlay networks rely on classical elliptic curves that face total exposure from harvest-now, decrypt-later attacks. FreeQ introduces line-rate hybrid post-quantum encryption combined with continuous risk discovery.</p>
-            <a href="mailto:security@://getfreeq.com" class="cta-btn">Request Enterprise Beta Access</a>
-        </section>
-
-        <section class="matrix-section">
-            <h2>The Technical Generational Shift</h2>
-            <div class="table-container">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Capability</th>
-                            <th>Gen 1 (Legacy VPN)</th>
-                            <th>Gen 2 (Mesh Overlays)</th>
-                            <th class="highlight-col">Gen 3 (FreeQ Platform)</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr>
-                            <td><strong>Cryptographic Paradigm</strong></td>
-                            <td>High-Overhead Classical</td>
-                            <td>Static Elliptic Curves (ECC)</td>
-                            <td class="highlight-col">Hybrid Quantum-Safe (FIPS 203/204)</td>
-                        </tr>
-                        <tr>
-                            <td><strong>Crypto-Agility Lifecycle</strong></td>
-                            <td>Hardcoded / Re-install Required</td>
-                            <td>Fixed Protocols</td>
-                            <td class="highlight-col">Runtime Parameter Swaps (Zero Downtime)</td>
-                        </tr>
-                        <tr>
-                            <td><strong>Harvest-Now Defense</strong></td>
-                            <td>Vulnerable</td>
-                            <td>Vulnerable</td>
-                            <td class="highlight-col">Active Line-Rate Interception Shielding</td>
-                        </tr>
-                        <tr>
-                            <td><strong>Node Discoverability</strong></td>
-                            <td>Exposed Ports</td>
-                            <td>Exposed / Responds to Probes</td>
-                            <td class="highlight-col">Complete Endpoint Cloaking</td>
-                        </tr>
-                        <tr>
-                            <td><strong>Risk Inventory Engine</strong></td>
-                            <td>Manual Spreadsheets</td>
-                            <td>Third-Party Add-on Required</td>
-                            <td class="highlight-col">Automated Continuous CBOM Generation</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </section>
-    </main>
-
-    <footer>
-        <p>&copy; 2026 FreeQ-Cloud. All Rights Reserved. Empowering enterprise cryptographic agility natively.</p>
-    </footer>
-
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="FreeQ helps teams turn approved network scope into CBOM-style cryptographic evidence, PQC readiness insight, and controlled remediation workflow."
+    />
+    <title>FreeQ | CBOM Discovery and PQC Readiness</title>
+    <script type="module" crossorigin src="/assets/index-DmLsYzhZ.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BbB4FHI-.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
 </html>
