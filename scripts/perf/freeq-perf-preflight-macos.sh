@@ -5,6 +5,15 @@ REMOTE_SSH="${FREEQ_REMOTE_SSH:-}"
 REMOTE_SSH_PORT="${FREEQ_REMOTE_SSH_PORT:-22}"
 REMOTE_UDP="${FREEQ_REMOTE_UDP:-}"
 LOG_DIR="${FREEQ_PERF_DIR:-$HOME/.freeq/perf}"
+SSH_NONINTERACTIVE_OPTS=(
+  -o BatchMode=yes
+  -o PreferredAuthentications=publickey
+  -o PasswordAuthentication=no
+  -o KbdInteractiveAuthentication=no
+  -o NumberOfPasswordPrompts=0
+  -o StrictHostKeyChecking=accept-new
+  -o ConnectTimeout=8
+)
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/preflight-$(date -u +%Y%m%dT%H%M%SZ).log"
 
@@ -13,7 +22,7 @@ usage() {
 Run David-friendly macOS preflight checks for a FreeQ perf test.
 
 Environment:
-  FREEQ_REMOTE_SSH=user@host       optional SSH target to test
+  FREEQ_REMOTE_SSH=user@host       optional non-interactive SSH key target to test
   FREEQ_REMOTE_SSH_PORT=PORT       optional SSH port, default 22
   FREEQ_REMOTE_UDP=host:port       optional UDP target to probe best-effort
   FREEQ_PERF_DIR=PATH              default ~/.freeq/perf
@@ -116,10 +125,10 @@ fi
 if [ -n "$REMOTE_SSH" ]; then
   log ""
   log "Testing SSH reachability to $REMOTE_SSH on port $REMOTE_SSH_PORT..."
-  if ssh -p "$REMOTE_SSH_PORT" -o BatchMode=no -o ConnectTimeout=8 "$REMOTE_SSH" 'echo freeq-ssh-ok'; then
+  if ssh -p "$REMOTE_SSH_PORT" "${SSH_NONINTERACTIVE_OPTS[@]}" "$REMOTE_SSH" 'echo freeq-ssh-ok'; then
     pass "SSH reached $REMOTE_SSH on port $REMOTE_SSH_PORT"
   else
-    warn "SSH test failed. Check host, username, Remote Login, firewall, and port forwarding."
+    warn "SSH test failed. Check host, username, Remote Login, firewall, port forwarding, and key-based auth."
   fi
 fi
 

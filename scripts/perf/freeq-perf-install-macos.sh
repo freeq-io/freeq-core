@@ -9,6 +9,15 @@ OVERLAY_ADDRESS="${FREEQ_OVERLAY_ADDRESS:-10.66.0.2/24}"
 LISTEN_ADDR="${FREEQ_LISTEN_ADDR:-0.0.0.0:51820}"
 REMOTE_SSH="${FREEQ_REMOTE_SSH:-}"
 REMOTE_SSH_PORT="${FREEQ_REMOTE_SSH_PORT:-22}"
+SSH_NONINTERACTIVE_OPTS=(
+  -o BatchMode=yes
+  -o PreferredAuthentications=publickey
+  -o PasswordAuthentication=no
+  -o KbdInteractiveAuthentication=no
+  -o NumberOfPasswordPrompts=0
+  -o StrictHostKeyChecking=accept-new
+  -o ConnectTimeout=8
+)
 
 usage() {
   cat <<'EOF'
@@ -21,7 +30,7 @@ Environment overrides:
   FREEQ_NODE_NAME      default florida-mac
   FREEQ_OVERLAY_ADDRESS default 10.66.0.2/24
   FREEQ_LISTEN_ADDR    default 0.0.0.0:51820
-  FREEQ_REMOTE_SSH     optional user@host for Patrick's Mac direct SSH check
+  FREEQ_REMOTE_SSH     optional user@host for non-interactive SSH key check
   FREEQ_REMOTE_SSH_PORT optional SSH port for Patrick's Mac, default 22
 
 Example:
@@ -164,10 +173,10 @@ EOF
 
 if [ -n "$REMOTE_SSH" ]; then
   echo "Testing SSH reachability to $REMOTE_SSH on port $REMOTE_SSH_PORT..."
-  if ssh -p "$REMOTE_SSH_PORT" -o BatchMode=no -o ConnectTimeout=8 "$REMOTE_SSH" 'echo freeq-ssh-ok'; then
+  if ssh -p "$REMOTE_SSH_PORT" "${SSH_NONINTERACTIVE_OPTS[@]}" "$REMOTE_SSH" 'echo freeq-ssh-ok'; then
     echo "SSH check succeeded."
   else
-    echo "SSH check failed. This is not fatal; verify hostname, user, firewall, and Remote Login."
+    echo "SSH check failed. This is not fatal; verify hostname, user, firewall, Remote Login, and key-based auth."
   fi
 fi
 

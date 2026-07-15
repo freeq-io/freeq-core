@@ -89,10 +89,19 @@ time_ssh() {
   run_capture "$name" python3 -c '
 import subprocess, sys, time, statistics
 target, port = sys.argv[1], sys.argv[2]
+ssh_opts = [
+    "-o", "BatchMode=yes",
+    "-o", "PreferredAuthentications=publickey",
+    "-o", "PasswordAuthentication=no",
+    "-o", "KbdInteractiveAuthentication=no",
+    "-o", "NumberOfPasswordPrompts=0",
+    "-o", "StrictHostKeyChecking=accept-new",
+    "-o", "ConnectTimeout=8",
+]
 samples = []
 for i in range(5):
     start = time.perf_counter()
-    rc = subprocess.call(["ssh", "-p", port, "-o", "BatchMode=no", "-o", "ConnectTimeout=8", target, "true"])
+    rc = subprocess.call(["ssh", "-p", port, *ssh_opts, target, "true"])
     elapsed = (time.perf_counter() - start) * 1000
     samples.append(elapsed)
     print(f"sample={i+1} rc={rc} ms={elapsed:.1f}")
@@ -111,15 +120,24 @@ scp_test() {
   run_capture "$name" python3 -c '
 import subprocess, sys, time
 payload, target, port = sys.argv[1], sys.argv[2], sys.argv[3]
+ssh_opts = [
+    "-o", "BatchMode=yes",
+    "-o", "PreferredAuthentications=publickey",
+    "-o", "PasswordAuthentication=no",
+    "-o", "KbdInteractiveAuthentication=no",
+    "-o", "NumberOfPasswordPrompts=0",
+    "-o", "StrictHostKeyChecking=accept-new",
+    "-o", "ConnectTimeout=8",
+]
 remote = f"{target}:/tmp/freeq-perf-payload.bin"
 start = time.perf_counter()
-rc = subprocess.call(["scp", "-q", "-P", port, payload, remote])
+rc = subprocess.call(["scp", "-q", "-P", port, *ssh_opts, payload, remote])
 elapsed = time.perf_counter() - start
 mb = int(sys.argv[4])
 print(f"rc={rc}")
 print(f"seconds={elapsed:.3f}")
 print(f"mbps={(mb * 8) / elapsed:.2f}")
-subprocess.call(["ssh", "-p", port, target, "rm -f /tmp/freeq-perf-payload.bin"])
+subprocess.call(["ssh", "-p", port, *ssh_opts, target, "rm -f /tmp/freeq-perf-payload.bin"])
 ' "$payload" "$ssh_target" "$port" "$SCP_MB"
 }
 
