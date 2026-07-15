@@ -102,6 +102,7 @@ scripts/perf/freeq-perf-run.sh \
   --mode direct \
   --target REPLACE_WITH_PATRICK_HOST_OR_IP \
   --ssh-user patrickmccormick \
+  --ssh-port REPLACE_WITH_PATRICK_SSH_PORT \
   --label florida-to-patrick-direct
 ```
 

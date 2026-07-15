@@ -17,12 +17,26 @@ Then open a new Terminal window.
 
 ## Step 1: Install FreeQ Core
 
-Patrick should replace `PATRICK_HOST_OR_IP` before sending this command.
+Patrick should replace `PATRICK_HOST_OR_IP` before sending this command. If
+Patrick uses a non-standard forwarded SSH port, also replace `PATRICK_SSH_PORT`.
+
+Before installing, David can run this quick reachability check:
+
+```bash
+nc -vz PATRICK_HOST_OR_IP PATRICK_SSH_PORT
+```
+
+If Patrick forwards external port `65022` to his Mac's SSH port, use:
+
+```bash
+nc -vz PATRICK_HOST_OR_IP 65022
+```
 
 ```bash
 FREEQ_NODE_NAME=david-florida-mac \
 FREEQ_OVERLAY_ADDRESS=10.66.0.2/24 \
 FREEQ_REMOTE_SSH=patrickmccormick@PATRICK_HOST_OR_IP \
+FREEQ_REMOTE_SSH_PORT=PATRICK_SSH_PORT \
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/perf/freeq-perf-install-macos.sh)"
 ```
 
@@ -88,6 +102,18 @@ scripts/perf/freeq-perf-run.sh \
   --overlay-host 10.66.0.1 \
   --ssh-user patrickmccormick \
   --label david-to-patrick-freeq
+```
+
+For the direct baseline over a non-standard forwarded SSH port:
+
+```bash
+cd ~/freeq-core
+scripts/perf/freeq-perf-run.sh \
+  --mode direct \
+  --target PATRICK_HOST_OR_IP \
+  --ssh-user patrickmccormick \
+  --ssh-port PATRICK_SSH_PORT \
+  --label david-to-patrick-direct
 ```
 
 ## Step 7: Bundle Results
