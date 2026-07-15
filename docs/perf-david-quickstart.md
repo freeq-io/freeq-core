@@ -39,7 +39,7 @@ This creates:
 Send this file to Patrick over a trusted channel:
 
 ```text
-~/.freeq/perf/node-exchange.json
+~/.freeq/perf/node.env
 ```
 
 Do not send:

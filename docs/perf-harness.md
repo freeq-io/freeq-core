@@ -32,12 +32,6 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main
 Send this file back to Patrick over a trusted channel:
 
 ```text
-~/.freeq/perf/node-exchange.json
-```
-
-or:
-
-```text
 ~/.freeq/perf/node.env
 ```
 

@@ -127,7 +127,7 @@ Overlay address: $OVERLAY_ADDRESS
 Listen: $LISTEN_ADDR
 
 Send this file to Patrick over a trusted channel:
-  $PERF_DIR/node-exchange.json
+  $PERF_DIR/node.env
 
 Useful commands:
   cd "$INSTALL_DIR"
@@ -139,7 +139,7 @@ Useful commands:
 
 David next steps:
   1. Send Patrick this file:
-     $PERF_DIR/node-exchange.json
+     $PERF_DIR/node.env
   2. Save Patrick's node.env as:
      $HOME/Downloads/patrick-node.env
   3. Ask Patrick for his reachable host/IP and run:
