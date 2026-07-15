@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REMOTE_SSH="${FREEQ_REMOTE_SSH:-}"
+REMOTE_UDP="${FREEQ_REMOTE_UDP:-}"
+LOG_DIR="${FREEQ_PERF_DIR:-$HOME/.freeq/perf}"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/preflight-$(date -u +%Y%m%dT%H%M%SZ).log"
+
+usage() {
+  cat <<'EOF'
+Run David-friendly macOS preflight checks for a FreeQ perf test.
+
+Environment:
+  FREEQ_REMOTE_SSH=user@host       optional SSH target to test
+  FREEQ_REMOTE_UDP=host:port       optional UDP target to probe best-effort
+  FREEQ_PERF_DIR=PATH              default ~/.freeq/perf
+
+Examples:
+  FREEQ_REMOTE_SSH=patrickmccormick@example.com scripts/perf/freeq-perf-preflight-macos.sh
+  FREEQ_REMOTE_UDP=example.com:51820 scripts/perf/freeq-perf-preflight-macos.sh
+EOF
+}
+
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  usage
+  exit 0
+fi
+
+log() {
+  printf '%s\n' "$*" | tee -a "$LOG_FILE"
+}
+
+pass() {
+  log "PASS: $*"
+}
+
+warn() {
+  log "WARN: $*"
+}
+
+fail() {
+  log "FAIL: $*"
+}
+
+need() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+check_cmd() {
+  local cmd="$1"
+  local hint="$2"
+  if need "$cmd"; then
+    pass "$cmd found: $(command -v "$cmd")"
+  else
+    fail "$cmd missing. $hint"
+    FAILED=$((FAILED + 1))
+  fi
+}
+
+find_cargo() {
+  if need cargo; then
+    candidate="$(command -v cargo)"
+    if [ -x "$candidate" ] && "$candidate" --version >/dev/null 2>&1; then
+      echo "$candidate"
+      return 0
+    fi
+  fi
+  if [ -x "$HOME/.rustup/toolchains/stable-x86_64-apple-darwin/bin/cargo" ]; then
+    echo "$HOME/.rustup/toolchains/stable-x86_64-apple-darwin/bin/cargo"
+    return 0
+  fi
+  return 1
+}
+
+FAILED=0
+
+log "== FreeQ macOS perf preflight =="
+log "Started: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+log "Log: $LOG_FILE"
+log ""
+
+if [ "$(uname -s)" = "Darwin" ]; then
+  pass "macOS detected"
+else
+  fail "This helper is for macOS. Detected: $(uname -s)"
+  FAILED=$((FAILED + 1))
+fi
+
+check_cmd git "Install Xcode command line tools: xcode-select --install"
+CARGO_BIN="$(find_cargo || true)"
+if [ -n "$CARGO_BIN" ]; then
+  pass "cargo found: $CARGO_BIN"
+else
+  fail "cargo missing. Install Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+  FAILED=$((FAILED + 1))
+fi
+check_cmd ssh "SSH should be included with macOS."
+check_cmd curl "curl should be included with macOS."
+
+if need brew; then
+  pass "Homebrew found: $(command -v brew)"
+  for pkg in iperf3 jq; do
+    if brew list "$pkg" >/dev/null 2>&1; then
+      pass "Homebrew package installed: $pkg"
+    else
+      warn "Homebrew package missing: $pkg. Installer can add it with: brew install $pkg"
+    fi
+  done
+else
+  warn "Homebrew missing. iperf3/jq will not be auto-installed."
+fi
+
+if [ -n "$REMOTE_SSH" ]; then
+  log ""
+  log "Testing SSH reachability to $REMOTE_SSH..."
+  if ssh -o BatchMode=no -o ConnectTimeout=8 "$REMOTE_SSH" 'echo freeq-ssh-ok'; then
+    pass "SSH reached $REMOTE_SSH"
+  else
+    warn "SSH test failed. Check host, username, Remote Login, firewall, and port forwarding."
+  fi
+fi
+
+if [ -n "$REMOTE_UDP" ]; then
+  host="${REMOTE_UDP%:*}"
+  port="${REMOTE_UDP##*:}"
+  log ""
+  log "Best-effort UDP probe to $host:$port..."
+  if need nc; then
+    if nc -u -z -w 2 "$host" "$port" >/dev/null 2>&1; then
+      pass "UDP probe did not report failure"
+    else
+      warn "UDP probe did not confirm reachability. UDP probes are often inconclusive behind NAT."
+    fi
+  else
+    warn "nc not available; skipping UDP probe."
+  fi
+fi
+
+log ""
+if [ "$FAILED" -eq 0 ]; then
+  pass "Preflight complete"
+  exit 0
+fi
+
+fail "Preflight found $FAILED required issue(s). Fix those and rerun."
+exit 1

@@ -9,6 +9,7 @@ members = [
     "daemon",
     "cli",
     "tools/freeq-soak-test",
+    "tools/freeq-perf-identity",
 ]
 resolver = "2"
 

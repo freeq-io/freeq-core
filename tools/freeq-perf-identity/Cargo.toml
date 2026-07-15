@@ -1,0 +1,22 @@
+[package]
+name = "freeq-perf-identity"
+description = "Generate local FreeQ perf-test identity exchange files"
+
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "freeq-perf-identity"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+base64 = { workspace = true }
+clap = { workspace = true }
+freeq-crypto = { path = "../../crates/freeq-crypto" }
+rand = { workspace = true }
+serde_json = { workspace = true }
