@@ -12,6 +12,25 @@ should manage policy, correlation, workflow, integrations, reporting,
 rendezvous, and optional relay services, but it must not be required for the
 open-source core to be truly cloaked.
 
+## Commercial Shape
+
+The FreeQ product line should be advertised as a clean upgrade path:
+
+```text
+Start with FreeQ Core:
+  self-managed, inspectable, open-source, direct-node protection.
+
+Upgrade to FreeQ Cloud:
+  enrollment, approval, observability, compliance evidence, integrations,
+  rendezvous, optional relay, and fleet operations.
+```
+
+The peer file is the current poor-man's trust bootstrap in Core. It should be
+treated as an honest local provisioning artifact, not as the final user
+experience. FreeQ Cloud replaces that rough edge with managed enrollment and
+approval while preserving the same security boundary: no peer is trusted until
+its identity, route authority, and policy are approved.
+
 ## Boundary
 
 | Layer | Responsibility | Non-goal |

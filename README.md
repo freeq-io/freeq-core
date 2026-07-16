@@ -32,6 +32,26 @@ FreeQ wraps all traffic between trusted endpoints in **hybrid post-quantum tunne
 - **Forward-secret** — ephemeral KEM keypair per session. Long-term key compromise does not expose past traffic.
 - **Crypto-agile** — switch ML-KEM parameter sets (512/768/1024) at runtime without restarting nodes.
 
+## Cloak for nothing. Upgrade the plane when ready.
+
+FreeQ Core is not a teaser or a crippled agent. It is the free, open-source
+security foundation: self-managed nodes, peer trust bootstrap, hybrid
+post-quantum tunnels, local status, and the direct-node cloaking path.
+
+FreeQ Cloud is the paid management plane for teams that want the same security
+foundation with better operations:
+
+- fleet enrollment instead of manual peer-file exchange
+- approval workflows for pending peers and tunnel policy
+- rotation, revocation, posture, and compliance evidence
+- SIEM, SOAR, ITSM, CMDB, NMS, Ansible, and Terraform integrations
+- rendezvous and optional relay for enterprise deployment patterns
+- dashboards for cloaking status, tunnel health, probe trends, and remediation
+  work
+
+The doctrine is simple: **Core must remain useful and secure when Cloud is
+absent. Cloud makes provisioning, monitoring, and fleet management beautiful.**
+
 ## Quick comparison
 
 |                        | FreeQ              | LegacyVPN     | Mesh Overlay   |
@@ -206,9 +226,15 @@ FreeQ is built in the open and contributions are welcome. All contributors must 
 
 ## Business model
 
-FreeQ Core is and will always be free under AGPL v3. The commercial product is **FreeQ Cloud** — a paid management plane that connects to the local REST API on each node to provide fleet visibility, compliance reporting (CNSA 2.0, OMB M-23-02), network scanning, security event export, closed-loop remediation workflows, and remote operations.
+FreeQ Core is and will always be free under AGPL v3. Individuals, home labs,
+self-hosters, sovereign deployments, labs, and air-gapped-ish environments can
+use the self-managed core directly.
 
-Individuals, home labs, and self-hosters use FreeQ Core forever, for free.
+The commercial product is **FreeQ Cloud**: a paid management plane that
+connects to the local REST API on each node to provide fleet visibility,
+enrollment, approval workflows, compliance reporting (CNSA 2.0, OMB M-23-02),
+network scanning, security event export, closed-loop remediation workflows, and
+remote operations.
 
 ## License
 

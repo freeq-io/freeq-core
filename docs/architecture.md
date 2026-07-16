@@ -25,6 +25,33 @@
 └─────────────────────────────────────────────────────────┘
 ```
 
+## Product Doctrine: Core Cloaks, Cloud Manages
+
+FreeQ Core must be independently useful. A self-managed operator should be able
+to install FreeQ Core, bootstrap trust with a simple local artifact, start a
+node, and establish a protected direct tunnel without depending on a hosted
+control plane.
+
+FreeQ Cloud exists to replace the ugly parts of self-management with a polished
+management plane:
+
+- enrollment instead of manual peer-file exchange
+- pending-peer approval and revocation workflows
+- fleet posture, cloaking status, tunnel health, and key-rotation visibility
+- local evidence collection through `freeq-api`
+- SOC, ITSM, CMDB, NMS, and provisioning integrations
+- rendezvous and optional relay for enterprise network realities
+
+This is the intended product promise:
+
+```text
+FreeQ Core:  cloak for nothing, self-manage if you want.
+FreeQ Cloud: upgrade the plane for enrollment, observability, workflow, and scale.
+```
+
+Cloud may make FreeQ easier to operate, but it must not become mandatory for
+the direct-node security claim.
+
 ## Hybrid KEM Handshake
 
 | Step | Party    | Action |
