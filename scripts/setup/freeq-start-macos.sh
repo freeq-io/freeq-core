@@ -120,6 +120,7 @@ if [ "$CONFIGURE_INTERFACE" -eq 1 ]; then
     echo "Missing peer env: $PEER_ENV" >&2
     exit 1
   fi
+  scripts/setup/freeq-validate-peer-env.sh "$PEER_ENV" >/dev/null
 fi
 
 if [ -f "$PID_FILE" ]; then

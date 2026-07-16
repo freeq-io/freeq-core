@@ -39,6 +39,7 @@ SEND_DIR="$SETUP_DIR/01-send-this-file"
 RECEIVE_DIR="$SETUP_DIR/02-put-peer-file-here"
 RESULTS_DIR="$SETUP_DIR/03-perf-results"
 LOG_DIR="$SETUP_DIR/04-logs"
+DRY_RUN=0
 
 usage() {
   cat <<'EOF'
@@ -58,13 +59,19 @@ Environment overrides:
 
 Example:
   bash scripts/setup/freeq-setup-macos.sh
+
+Options:
+  --dry-run            print planned setup values without installing or writing files
 EOF
 }
 
-if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-  usage
-  exit 0
-fi
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1; shift ;;
+    --help|-h) usage; exit 0 ;;
+    *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
+  esac
+done
 
 need() {
   command -v "$1" >/dev/null 2>&1
@@ -363,6 +370,32 @@ echo "Visible setup folder: $SETUP_DIR"
 echo "Profile config: $CONFIG_FILE"
 echo "Node: $NODE_NAME ($OVERLAY_ADDRESS)"
 echo
+
+if [ "$DRY_RUN" -eq 1 ]; then
+  cat <<EOF
+Dry run only. No files were written and no commands were run.
+
+Planned values:
+  Node name: $NODE_NAME
+  Overlay address: $OVERLAY_ADDRESS
+  Listen address: $LISTEN_ADDR
+  Public endpoint to share: ${PUBLIC_ENDPOINT:-not set}
+  Install dir: $INSTALL_DIR
+  Visible setup folder: $SETUP_DIR
+  Profile config: $CONFIG_FILE
+  Internal identity folder: $PERF_DIR
+  Send folder: $SEND_DIR
+  Peer drop folder: $RECEIVE_DIR
+
+Setup would:
+  1. Check/install dependencies.
+  2. Clone or update FreeQ Core.
+  3. Build release binaries.
+  4. Generate local identity files.
+  5. Publish the peer.env file into the visible setup folder.
+EOF
+  exit 0
+fi
 
 if ! need git; then
   echo "git is required. Install Xcode command line tools first:"

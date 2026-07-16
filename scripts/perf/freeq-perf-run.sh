@@ -104,6 +104,7 @@ if [ -z "$PEER_ENV" ] && { [ "$MODE" != "direct" ] || [ -z "$TARGET_HOST" ]; }; 
   PEER_ENV="$(find_peer_env)"
 fi
 if [ -f "$PEER_ENV" ]; then
+  scripts/setup/freeq-validate-peer-env.sh "$PEER_ENV" >/dev/null
   unset FREEQ_PUBLIC_ENDPOINT
   # shellcheck disable=SC1090
   . "$PEER_ENV"

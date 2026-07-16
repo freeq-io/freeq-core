@@ -119,6 +119,7 @@ if [ ! -f "$PEER_ENV" ]; then
   echo "Missing peer env file: $PEER_ENV" >&2
   exit 1
 fi
+scripts/setup/freeq-validate-peer-env.sh "$PEER_ENV" >/dev/null
 
 # shellcheck disable=SC1090
 . "$LOCAL_ENV"

@@ -21,6 +21,13 @@ Then open a new Terminal window.
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/setup/freeq-setup-macos.sh)"
 ```
 
+To preview setup without installing, building, or writing files, add
+`--dry-run`:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/setup/freeq-setup-macos.sh)" -- --dry-run
+```
+
 The installer asks a few setup questions. Press Return to accept the defaults.
 The local node name defaults to the Mac hostname. The installer writes a visible
 setup folder:
@@ -69,6 +76,13 @@ No peer endpoint is typed on the receiving Mac.
 
 If the sender left `FREEQ_PUBLIC_ENDPOINT` blank, ask them to rerun setup with
 their reachable UDP endpoint and resend their `.env` file.
+
+You can validate the received file before rendering:
+
+```bash
+cd ~/freeq-core
+scripts/setup/freeq-validate-peer-env.sh ~/FreeQ/02-put-peer-file-here/*.env
+```
 
 If direct SSH benchmarks are needed, also set:
 
