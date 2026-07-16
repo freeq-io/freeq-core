@@ -11,9 +11,36 @@ pub struct Endpoint {
     endpoint: QuinnEndpoint,
 }
 
+/// Transport binding policy for the local endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EndpointBindMode {
+    /// Bind Quinn directly to the configured UDP socket.
+    DirectQuic,
+    /// Require a pre-QUIC admission gate before Quinn observes packets.
+    StrictCloaked,
+}
+
 impl Endpoint {
     /// Bind a new QUIC endpoint to `addr` (typically 0.0.0.0:51820).
     pub async fn bind(addr: std::net::SocketAddr) -> Result<Self> {
+        Self::bind_with_mode(addr, EndpointBindMode::DirectQuic).await
+    }
+
+    /// Bind a new endpoint with an explicit transport binding policy.
+    ///
+    /// Strict cloaking must not bind Quinn directly to the public UDP socket.
+    /// Until the pre-QUIC admission gate owns that socket, strict mode refuses
+    /// the direct Quinn bind path instead of silently weakening cloaking.
+    pub async fn bind_with_mode(
+        addr: std::net::SocketAddr,
+        mode: EndpointBindMode,
+    ) -> Result<Self> {
+        if !direct_quic_bind_allowed(mode) {
+            return Err(TransportError::Bind(
+                "strict cloaking requires the pre-QUIC UDP admission gate".into(),
+            ));
+        }
+
         let server_config = Self::configure_server()?;
         let mut endpoint = QuinnEndpoint::server(server_config, addr)
             .map_err(|e| TransportError::Bind(e.to_string()))?;
@@ -119,6 +146,10 @@ impl Endpoint {
     }
 }
 
+fn direct_quic_bind_allowed(mode: EndpointBindMode) -> bool {
+    matches!(mode, EndpointBindMode::DirectQuic)
+}
+
 #[derive(Debug)]
 struct SkipServerVerification(Arc<rustls::crypto::CryptoProvider>);
 
@@ -164,5 +195,20 @@ impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
         self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{direct_quic_bind_allowed, EndpointBindMode};
+
+    #[test]
+    fn direct_quic_bind_policy_allows_default_mode() {
+        assert!(direct_quic_bind_allowed(EndpointBindMode::DirectQuic));
+    }
+
+    #[test]
+    fn direct_quic_bind_policy_blocks_strict_cloaked_mode() {
+        assert!(!direct_quic_bind_allowed(EndpointBindMode::StrictCloaked));
     }
 }
