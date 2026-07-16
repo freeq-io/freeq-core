@@ -6,6 +6,9 @@ echo "[FreeQ Pre-Commit Guard] Evaluating project health..."
 echo "Running cargo fmt check..."
 cargo fmt -- --check
 
+echo "Running setup flow harness..."
+scripts/test-setup-flow.sh
+
 echo "Running cargo clippy audit analysis..."
 cargo clippy --all-targets --all-features -- -D warnings
 
