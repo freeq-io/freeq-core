@@ -14,10 +14,16 @@ const COMBINE_CONTEXT_LEN: usize = HYBRID_COMBINER_INFO.len() + 64;
 pub mod labels {
     /// Primary handshake KDF label.
     pub const HANDSHAKE: &[u8] = b"freeq v1 handshake";
+    /// Label for immediately rekeying the hybrid handshake secret before traffic use.
+    pub const POST_HANDSHAKE_REKEY: &[u8] = b"freeq v1 post-handshake rekey";
     /// Label for deriving the inbound traffic key.
     pub const INBOUND: &[u8] = b"freeq v1 inbound";
     /// Label for deriving the outbound traffic key.
     pub const OUTBOUND: &[u8] = b"freeq v1 outbound";
+    /// Label for initiator key-confirmation proof.
+    pub const KEY_CONFIRM_INITIATOR: &[u8] = b"freeq v1 key confirm initiator";
+    /// Label for responder key-confirmation proof.
+    pub const KEY_CONFIRM_RESPONDER: &[u8] = b"freeq v1 key confirm responder";
 }
 
 /// Derive a 32-byte key from `ikm` using HKDF-SHA256.

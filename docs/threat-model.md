@@ -35,6 +35,18 @@ FreeQ's primary threat model is the HNDL attack:
 
 FreeQ's ML-KEM-768 key encapsulation is not broken by Shor's algorithm. Traffic encrypted today will remain secure against future quantum adversaries.
 
+## Classical Transport Bootstrap
+
+The QUIC/TLS layer is treated only as a carrier for FreeQ handshake messages.
+It is not a source of tunnel trust. The daemon must not install a usable tunnel
+session until the inner FreeQ handshake has authenticated ML-DSA identities,
+derived hybrid ML-KEM/X25519 material, rekeyed that material for traffic, and
+verified a peer key-confirmation proof.
+
+This means an attacker who records or interferes with the classical transport
+handshake can cause denial of service, but must not gain FreeQ tunnel payload
+confidentiality if ML-KEM remains secure.
+
 ## Out-of-Scope Threats
 
 - Physical access to a node

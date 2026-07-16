@@ -34,6 +34,7 @@ const DATAPLANE_CHANNEL_CAPACITY: usize = 256;
 const HANDSHAKE_INIT_PACKET_ID: u64 = 0;
 const HANDSHAKE_RESPONSE_PACKET_ID: u64 = 1;
 const HANDSHAKE_KEM_PACKET_ID: u64 = 2;
+const HANDSHAKE_CONFIRM_PACKET_ID: u64 = 3;
 
 /// freeqd — FreeQ post-quantum overlay network daemon.
 #[derive(Parser, Debug)]
@@ -694,6 +695,14 @@ async fn establish_outbound_session(
     };
     send_handshake_message(&connection, HANDSHAKE_KEM_PACKET_ID, kem_msg).await?;
     let keys = handshake.finalize()?;
+    send_handshake_message(
+        &connection,
+        HANDSHAKE_CONFIRM_PACKET_ID,
+        freeq_auth::handshake::encode_key_confirmation(&keys),
+    )
+    .await?;
+    let responder_confirmation = recv_handshake_message(&connection).await?;
+    freeq_auth::handshake::verify_key_confirmation(&keys, responder_confirmation.as_ref())?;
 
     Ok(ActivePeerSession {
         connection,
@@ -724,6 +733,14 @@ async fn accept_inbound_session(
     send_handshake_message(&connection, HANDSHAKE_RESPONSE_PACKET_ID, response).await?;
     let kem_msg = recv_handshake_message(&connection).await?;
     let keys = responder_state.process_kem(kem_msg.as_ref())?;
+    let initiator_confirmation = recv_handshake_message(&connection).await?;
+    freeq_auth::handshake::verify_key_confirmation(&keys, initiator_confirmation.as_ref())?;
+    send_handshake_message(
+        &connection,
+        HANDSHAKE_CONFIRM_PACKET_ID,
+        freeq_auth::handshake::encode_key_confirmation(&keys),
+    )
+    .await?;
 
     Ok((
         peer_name,

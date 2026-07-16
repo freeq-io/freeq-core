@@ -24,5 +24,6 @@ zeroize     = { workspace = true }
 ipnetwork   = { workspace = true }
 sha2        = { workspace = true }
 rand        = { workspace = true }
+subtle      = { workspace = true }
 
 [dev-dependencies]

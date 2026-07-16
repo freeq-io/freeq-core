@@ -3,12 +3,16 @@
 use crate::Result;
 use rand::RngCore;
 use sha2::Digest as _;
+use subtle::ConstantTimeEq as _;
 
 const HANDSHAKE_VERSION: u8 = 1;
 const INIT_MESSAGE: u8 = 1;
 const RESPONSE_MESSAGE: u8 = 2;
 const KEM_MESSAGE: u8 = 3;
+const CONFIRM_INITIATOR_MESSAGE: u8 = 4;
+const CONFIRM_RESPONDER_MESSAGE: u8 = 5;
 const NONCE_LEN: usize = 32;
+const CONFIRM_LEN: usize = 32;
 const FINGERPRINT_LEN: usize = crate::registry::FINGERPRINT_LEN;
 
 /// State machine for the initiating side of the handshake (Node A).
@@ -34,6 +38,10 @@ pub struct SessionKeys {
     pub outbound: [u8; 32],
     /// 32-byte inbound bulk encryption key.
     pub inbound: [u8; 32],
+    confirmation_send_type: u8,
+    confirmation_expect_type: u8,
+    confirmation_send: [u8; CONFIRM_LEN],
+    confirmation_expect: [u8; CONFIRM_LEN],
 }
 
 impl InitiatorHandshake {
@@ -249,6 +257,48 @@ impl ResponderHandshake {
 
         derive_session_keys(shared.session_key, &session_nonce, Role::Responder)
     }
+}
+
+/// Encode this side's post-handshake key-confirmation proof.
+///
+/// The daemon must exchange and verify this message before installing tunnel
+/// traffic keys. It proves both peers derived the same ML-KEM-backed rekey
+/// material, so the classical QUIC layer never becomes the trust boundary.
+pub fn encode_key_confirmation(keys: &SessionKeys) -> Vec<u8> {
+    let mut msg = Vec::with_capacity(2 + CONFIRM_LEN);
+    msg.push(HANDSHAKE_VERSION);
+    msg.push(keys.confirmation_send_type);
+    msg.extend_from_slice(&keys.confirmation_send);
+    msg
+}
+
+/// Verify the remote peer's post-handshake key-confirmation proof.
+pub fn verify_key_confirmation(keys: &SessionKeys, msg: &[u8]) -> Result<()> {
+    if msg.len() != 2 + CONFIRM_LEN {
+        return Err(crate::AuthError::HandshakeFailed {
+            step: 8,
+            reason: "key confirmation message has invalid length".into(),
+        });
+    }
+    if msg[0] != HANDSHAKE_VERSION {
+        return Err(crate::AuthError::HandshakeFailed {
+            step: 8,
+            reason: "key confirmation message has unsupported version".into(),
+        });
+    }
+    if msg[1] != keys.confirmation_expect_type {
+        return Err(crate::AuthError::HandshakeFailed {
+            step: 8,
+            reason: "key confirmation message has unexpected type".into(),
+        });
+    }
+    if msg[2..].ct_eq(&keys.confirmation_expect).unwrap_u8() != 1 {
+        return Err(crate::AuthError::HandshakeFailed {
+            step: 8,
+            reason: "key confirmation proof does not match".into(),
+        });
+    }
+    Ok(())
 }
 
 struct ParsedInitMessage<'a> {
@@ -528,10 +578,12 @@ fn handshake_nonce(
 }
 
 fn derive_session_keys(
-    session_key: [u8; 32],
+    mut session_key: [u8; 32],
     handshake_nonce: &[u8],
     role: Role,
 ) -> Result<SessionKeys> {
+    use zeroize::Zeroize;
+
     let outbound_label = match role {
         Role::Initiator => freeq_crypto::kdf::labels::OUTBOUND,
         Role::Responder => freeq_crypto::kdf::labels::INBOUND,
@@ -540,24 +592,55 @@ fn derive_session_keys(
         Role::Initiator => freeq_crypto::kdf::labels::INBOUND,
         Role::Responder => freeq_crypto::kdf::labels::OUTBOUND,
     };
+    let send_confirm_label = match role {
+        Role::Initiator => freeq_crypto::kdf::labels::KEY_CONFIRM_INITIATOR,
+        Role::Responder => freeq_crypto::kdf::labels::KEY_CONFIRM_RESPONDER,
+    };
+    let expect_confirm_label = match role {
+        Role::Initiator => freeq_crypto::kdf::labels::KEY_CONFIRM_RESPONDER,
+        Role::Responder => freeq_crypto::kdf::labels::KEY_CONFIRM_INITIATOR,
+    };
+    let confirmation_send_type = match role {
+        Role::Initiator => CONFIRM_INITIATOR_MESSAGE,
+        Role::Responder => CONFIRM_RESPONDER_MESSAGE,
+    };
+    let confirmation_expect_type = match role {
+        Role::Initiator => CONFIRM_RESPONDER_MESSAGE,
+        Role::Responder => CONFIRM_INITIATOR_MESSAGE,
+    };
+
+    let mut rekey_seed = freeq_crypto::kdf::hkdf_sha256(
+        Some(handshake_nonce),
+        &session_key,
+        freeq_crypto::kdf::labels::POST_HANDSHAKE_REKEY,
+    )?;
+
+    let outbound =
+        freeq_crypto::kdf::hkdf_sha256(Some(handshake_nonce), &rekey_seed, outbound_label)?;
+    let inbound =
+        freeq_crypto::kdf::hkdf_sha256(Some(handshake_nonce), &rekey_seed, inbound_label)?;
+    let confirmation_send =
+        freeq_crypto::kdf::hkdf_sha256(Some(handshake_nonce), &rekey_seed, send_confirm_label)?;
+    let confirmation_expect =
+        freeq_crypto::kdf::hkdf_sha256(Some(handshake_nonce), &rekey_seed, expect_confirm_label)?;
+    session_key.zeroize();
+    rekey_seed.zeroize();
 
     Ok(SessionKeys {
-        outbound: freeq_crypto::kdf::hkdf_sha256(
-            Some(handshake_nonce),
-            &session_key,
-            outbound_label,
-        )?,
-        inbound: freeq_crypto::kdf::hkdf_sha256(
-            Some(handshake_nonce),
-            &session_key,
-            inbound_label,
-        )?,
+        outbound,
+        inbound,
+        confirmation_send_type,
+        confirmation_expect_type,
+        confirmation_send,
+        confirmation_expect,
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{InitiatorHandshake, ResponderHandshake};
+    use super::{
+        encode_key_confirmation, verify_key_confirmation, InitiatorHandshake, ResponderHandshake,
+    };
 
     fn sample_peer(
         name: &str,
@@ -727,5 +810,88 @@ mod tests {
 
         assert_eq!(initiator_keys.outbound, responder_keys.inbound);
         assert_eq!(initiator_keys.inbound, responder_keys.outbound);
+    }
+
+    #[test]
+    fn handshake_key_confirmation_round_trips() {
+        let (
+            initiator_key,
+            _initiator_public,
+            initiator_peer,
+            _initiator_kem_secret,
+            initiator_kem_public,
+        ) = sample_peer("initiator");
+        let (responder_key, responder_public, responder_peer, responder_kem_secret, _) =
+            sample_peer("responder");
+        let mut registry = crate::registry::PeerRegistry::new();
+        registry.add_peer(initiator_peer).expect("add initiator");
+        registry.add_peer(responder_peer).expect("add responder");
+
+        let (initiator_state, init_msg) = InitiatorHandshake::new(
+            &initiator_key,
+            &initiator_kem_public.to_bytes(),
+            responder_public,
+        )
+        .expect("build init");
+        let (responder_state, response) = ResponderHandshake::process_init(
+            &responder_key,
+            responder_kem_secret,
+            &registry,
+            &init_msg,
+        )
+        .expect("process init");
+        let (initiator_state, kem_msg) = initiator_state
+            .process_response(&response, &mut rand::thread_rng())
+            .expect("process response");
+        let initiator_keys = initiator_state.finalize().expect("initiator finalize");
+        let responder_keys = responder_state.process_kem(&kem_msg).expect("process kem");
+
+        let initiator_confirm = encode_key_confirmation(&initiator_keys);
+        let responder_confirm = encode_key_confirmation(&responder_keys);
+
+        verify_key_confirmation(&responder_keys, &initiator_confirm)
+            .expect("responder verifies initiator");
+        verify_key_confirmation(&initiator_keys, &responder_confirm)
+            .expect("initiator verifies responder");
+    }
+
+    #[test]
+    fn key_confirmation_rejects_tampered_proof() {
+        let (
+            initiator_key,
+            _initiator_public,
+            initiator_peer,
+            _initiator_kem_secret,
+            initiator_kem_public,
+        ) = sample_peer("initiator");
+        let (responder_key, responder_public, responder_peer, responder_kem_secret, _) =
+            sample_peer("responder");
+        let mut registry = crate::registry::PeerRegistry::new();
+        registry.add_peer(initiator_peer).expect("add initiator");
+        registry.add_peer(responder_peer).expect("add responder");
+
+        let (initiator_state, init_msg) = InitiatorHandshake::new(
+            &initiator_key,
+            &initiator_kem_public.to_bytes(),
+            responder_public,
+        )
+        .expect("build init");
+        let (responder_state, response) = ResponderHandshake::process_init(
+            &responder_key,
+            responder_kem_secret,
+            &registry,
+            &init_msg,
+        )
+        .expect("process init");
+        let (initiator_state, kem_msg) = initiator_state
+            .process_response(&response, &mut rand::thread_rng())
+            .expect("process response");
+        let initiator_keys = initiator_state.finalize().expect("initiator finalize");
+        let responder_keys = responder_state.process_kem(&kem_msg).expect("process kem");
+        let mut tampered = encode_key_confirmation(&initiator_keys);
+        let last = tampered.last_mut().expect("confirmation byte");
+        *last ^= 0x01;
+
+        assert!(verify_key_confirmation(&responder_keys, &tampered).is_err());
     }
 }
