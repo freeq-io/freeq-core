@@ -451,6 +451,10 @@ async fn run_accept_loop(shared: DataplaneShared, packet_egress: PacketEgress) {
                 {
                     Ok(session) => session,
                     Err(err) => {
+                        if is_silent_inbound_probe(&err) {
+                            tracing::trace!("silently dropped unauthenticated inbound probe");
+                            continue;
+                        }
                         shared
                             .api_state
                             .record_error(freeq_api::ErrorKind::Transport, err.to_string())
@@ -482,6 +486,19 @@ async fn run_accept_loop(shared: DataplaneShared, packet_egress: PacketEgress) {
             }
         }
     }
+}
+
+fn is_silent_inbound_probe(err: &anyhow::Error) -> bool {
+    matches!(
+        err.downcast_ref::<freeq_auth::AuthError>(),
+        Some(freeq_auth::AuthError::Cloaked)
+    ) || matches!(
+        err.downcast_ref::<freeq_transport::TransportError>(),
+        Some(
+            freeq_transport::TransportError::Timeout
+                | freeq_transport::TransportError::ConnectionLost(_)
+        )
+    )
 }
 
 #[allow(dead_code)]
@@ -908,8 +925,8 @@ fn set_private_key_permissions(path: &std::path::Path) -> Result<()> {
 mod tests {
     use super::{
         build_api_server, build_peer_registry, collect_startup_blockers, init_api_state,
-        init_identity, init_tunnel_service, init_tunnel_service_with_keys, parse_listen_addr,
-        parse_peer_socket_addrs, refresh_api_state, spawn_dataplane_runtime,
+        init_identity, init_tunnel_service, init_tunnel_service_with_keys, is_silent_inbound_probe,
+        parse_listen_addr, parse_peer_socket_addrs, refresh_api_state, spawn_dataplane_runtime,
         spawn_packet_io_runtime, DataplaneShared, PacketIo, DATAPLANE_CHANNEL_CAPACITY,
     };
     use base64::Engine as _;
@@ -952,6 +969,26 @@ mod tests {
         let blockers = collect_startup_blockers();
 
         assert!(blockers.is_empty());
+    }
+
+    #[test]
+    fn silent_inbound_probe_classifier_covers_cloaked_and_probe_timeouts() {
+        assert!(is_silent_inbound_probe(
+            &freeq_auth::AuthError::Cloaked.into()
+        ));
+        assert!(is_silent_inbound_probe(
+            &freeq_transport::TransportError::Timeout.into()
+        ));
+        assert!(is_silent_inbound_probe(
+            &freeq_transport::TransportError::ConnectionLost("probe closed".into()).into()
+        ));
+        assert!(!is_silent_inbound_probe(
+            &freeq_auth::AuthError::HandshakeFailed {
+                step: 8,
+                reason: "confirmation failed".into(),
+            }
+            .into()
+        ));
     }
 
     #[test]

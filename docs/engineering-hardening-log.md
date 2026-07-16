@@ -331,6 +331,27 @@ Files:
 
 - `crates/freeq-tunnel/src/iface.rs`
 
+### 18. Application-layer cloaking was tightened
+
+Problem:
+
+- The responder mapped malformed or bad-signature init messages to explicit
+  handshake failures even though unauthenticated traffic should be silent.
+- The daemon recorded unauthenticated inbound probes as transport failures,
+  which polluted telemetry and made scans look like operational errors.
+
+Fix:
+
+- Mapped malformed init messages, unknown fingerprints, and bad initiator
+  signatures to `AuthError::Cloaked`
+- Dropped cloaked inbound probes without API error records or warning logs
+- Added regression coverage for malformed and tampered initiator messages
+
+Files:
+
+- `crates/freeq-auth/src/handshake.rs`
+- `daemon/src/main.rs`
+
 ## Tests Added or Strengthened
 
 The following areas now have direct test coverage that did not exist or was not
@@ -407,6 +428,31 @@ Main files:
 - `deploy/ansible/`
 - `crates/freeq-tunnel/src/iface.rs`
 
+### 4. Full transport-level cloaking still requires a pre-QUIC gate
+
+Current state:
+
+- FreeQ now silently drops unauthenticated traffic at the inner handshake layer
+- `freeq-transport` still binds Quinn directly, so the QUIC stack can respond
+  before FreeQ identity verification runs
+- This is not sufficient for a strict "no response to non-FreeQ probes"
+  federal/defense/finance/critical-infrastructure posture
+
+Required fix:
+
+- Add a pre-QUIC UDP admission gate that validates a compact FreeQ-authenticated
+  first datagram before forwarding traffic into Quinn
+- Ensure non-FreeQ datagrams are dropped without a QUIC response, API error
+  record, or warning-level log
+- Add an integration test that sends random UDP and generic QUIC Initial probes
+  and asserts no observable FreeQ response path is created
+
+Main files:
+
+- `crates/freeq-transport/src/endpoint.rs`
+- `crates/freeq-auth/src/cloaking.rs`
+- `daemon/src/main.rs`
+
 ## Suggested Next Issues
 
 These make sense as explicit repository issues because they are concrete,
@@ -417,6 +463,7 @@ bounded, and actionable:
 3. Add batched send/receive and evaluate Linux multiqueue design
 4. Validate Ansible deployment against a real Linux host
 5. Add host-level integration test documentation for macOS `utun` and Linux TUN
+6. Add pre-QUIC UDP admission gate for true transport-level cloaking
 
 ## Suggested Use
 

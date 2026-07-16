@@ -28,7 +28,7 @@ Every encrypted packet sent today over these protocols is a future liability.
 FreeQ wraps all traffic between trusted endpoints in **hybrid post-quantum tunnels** using NIST-finalized standards. Every connection is:
 
 - **Double-encrypted** — X25519 (classical) + ML-KEM-768 (FIPS 203, post-quantum). Security holds if *either* algorithm remains unbroken.
-- **Mutually authenticated** — ML-DSA-65 (FIPS 204) identity keys. Endpoints silently drop all packets from unauthenticated peers — no SYN-ACK, no banner, no ICMP response.
+- **Mutually authenticated** — ML-DSA-65 (FIPS 204) identity keys. FreeQ does not install a tunnel session or send a FreeQ handshake response unless the peer proves a registered identity. Full transport-level UDP cloaking requires the planned pre-QUIC admission gate.
 - **Forward-secret** — ephemeral KEM keypair per session. Long-term key compromise does not expose past traffic.
 - **Crypto-agile** — switch ML-KEM parameter sets (512/768/1024) at runtime without restarting nodes.
 

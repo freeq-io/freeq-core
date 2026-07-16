@@ -25,7 +25,7 @@
 └─────────────────────────────────────────────────────────┘
 ```
 
-## Hybrid KEM Handshake (8 Steps)
+## Hybrid KEM Handshake
 
 | Step | Party    | Action |
 |------|----------|--------|
@@ -36,7 +36,9 @@
 | 5    | A → B    | ML-KEM-768 encapsulation: generate shared secret + ciphertext |
 | 6    | Both     | X25519 ECDH key exchange in parallel with step 5 |
 | 7    | Both     | `session_key = HKDF-SHA256(kem_secret ∥ ecdh_secret, nonce, info)` |
-| 8    | Both     | AES-256-GCM bulk encryption begins. Ephemeral keys zeroized. |
+| 8    | Both     | Derive post-handshake rekey seed and role-specific traffic keys |
+| 9    | Both     | Exchange and verify key-confirmation proofs |
+| 10   | Both     | AES-256-GCM bulk encryption begins. Ephemeral keys zeroized. |
 
 ## Crate Dependency Graph
 

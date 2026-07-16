@@ -1,8 +1,8 @@
 //! Endpoint cloaking — silent drop of unauthenticated packets.
 //!
 //! This module implements the core security invariant: *no response is
-//! ever sent to an unauthenticated sender*. The node is invisible at the
-//! network level until a peer presents a valid ML-DSA-65 signature.
+//! ever sent to an unauthenticated sender*. Full network-level invisibility
+//! requires this check to run before the transport emits a response.
 
 use crate::{registry::PeerRegistry, Result};
 
@@ -14,8 +14,9 @@ const SIGNATURE_LEN_FIELD_LEN: usize = 2;
 /// Returns `Ok(())` if the packet is from a registered, authenticated peer.
 /// Returns `Err(AuthError::Cloaked)` if it should be silently dropped.
 ///
-/// This function must be called *before* any response is issued — including
-/// ICMP errors, QUIC handshake responses, or TLS client hellos.
+/// This function must be called before any FreeQ protocol response is issued.
+/// A strict network-cloaking deployment must also place an equivalent check
+/// before QUIC/TLS can emit transport responses.
 pub fn check_inbound(
     registry: &PeerRegistry,
     _src_addr: std::net::SocketAddr,

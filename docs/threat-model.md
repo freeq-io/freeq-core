@@ -8,13 +8,14 @@
 | Nation-state (classical) | Harvest-now-decrypt-later | ML-KEM-768 post-quantum KEM |
 | Quantum adversary (Shor) | Break X25519, RSA | ML-KEM-768 (not broken by Shor) |
 | Active MITM | Intercept and modify packets | ML-DSA-65 mutual authentication |
-| Port scanner | Discover network endpoints | Endpoint cloaking (silent drop) |
-| Unauthenticated peer | Send crafted packets | ML-DSA-65 cloaking — zero response |
+| Port scanner | Discover network endpoints | Application-layer cloaking; full transport cloaking requires pre-QUIC admission |
+| Unauthenticated peer | Send crafted packets | ML-DSA-65 cloaking: no FreeQ response, no tunnel session |
 
 ## What FreeQ Protects
 
 - **Data in transit** between enrolled FreeQ nodes
-- **Node visibility** — cloaked nodes are invisible to unauthenticated probes
+- **FreeQ service visibility** — unauthenticated probes do not receive a FreeQ
+  response or create a tunnel session
 - **Forward secrecy** — past sessions not exposed by long-term key compromise
 
 ## What FreeQ Does NOT Protect
@@ -46,6 +47,12 @@ verified a peer key-confirmation proof.
 This means an attacker who records or interferes with the classical transport
 handshake can cause denial of service, but must not gain FreeQ tunnel payload
 confidentiality if ML-KEM remains secure.
+
+Current implementation note: because `freeq-transport` binds Quinn directly,
+generic QUIC probes can still elicit transport-level QUIC behavior before the
+inner FreeQ handshake runs. Full network cloaking for federal, defense,
+finance, and critical infrastructure targets requires a pre-QUIC authenticated
+UDP gate that drops non-FreeQ datagrams before Quinn sees them.
 
 ## Out-of-Scope Threats
 

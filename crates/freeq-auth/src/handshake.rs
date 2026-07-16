@@ -172,8 +172,7 @@ impl ResponderHandshake {
         registry: &crate::registry::PeerRegistry,
         msg: &[u8],
     ) -> Result<(Self, Vec<u8>)> {
-        let init = parse_init_message(msg)
-            .map_err(|reason| crate::AuthError::HandshakeFailed { step: 1, reason })?;
+        let init = parse_init_message(msg).map_err(|_| crate::AuthError::Cloaked)?;
 
         let (peer_name, _) = registry
             .lookup_name_and_peer(&init.initiator_fingerprint)
@@ -185,10 +184,7 @@ impl ResponderHandshake {
                 &challenge_init(&init.initiator_nonce, &init.initiator_kem_pubkey),
                 init.signature,
             )
-            .map_err(|e| crate::AuthError::HandshakeFailed {
-                step: 2,
-                reason: e.to_string(),
-            })?;
+            .map_err(|_| crate::AuthError::Cloaked)?;
 
         let responder_nonce = random_nonce();
         let responder_kem_pubkey = responder_kem_secret.public_key()?.to_bytes();
@@ -700,7 +696,7 @@ mod tests {
     }
 
     #[test]
-    fn responder_rejects_tampered_initiator_signature() {
+    fn responder_cloaks_tampered_initiator_signature() {
         let (
             initiator_key,
             _initiator_public,
@@ -729,10 +725,23 @@ mod tests {
             &init_msg,
         );
 
-        assert!(matches!(
-            result,
-            Err(crate::AuthError::HandshakeFailed { step: 2, .. })
-        ));
+        assert!(matches!(result, Err(crate::AuthError::Cloaked)));
+    }
+
+    #[test]
+    fn responder_cloaks_malformed_initiator_message() {
+        let (responder_key, _responder_public, _, responder_kem_secret, _) =
+            sample_peer("responder");
+        let registry = crate::registry::PeerRegistry::new();
+
+        let result = ResponderHandshake::process_init(
+            &responder_key,
+            responder_kem_secret,
+            &registry,
+            b"not a freeq handshake",
+        );
+
+        assert!(matches!(result, Err(crate::AuthError::Cloaked)));
     }
 
     #[test]
