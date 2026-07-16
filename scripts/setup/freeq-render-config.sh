@@ -7,6 +7,7 @@ OUTPUT_CONFIG="${FREEQ_CONFIG_OUT:-$HOME/.freeq/perf/freeq.toml}"
 SETUP_DIR="${FREEQ_SETUP_DIR:-$HOME/FreeQ}"
 CONFIG_FILE="${FREEQ_SETUP_CONFIG:-$SETUP_DIR/freeq-setup.conf}"
 RECEIVE_DIR="$SETUP_DIR/02-put-peer-file-here"
+LISTEN_ONLY=0
 
 if [ -f "$CONFIG_FILE" ]; then
   # shellcheck disable=SC1090
@@ -24,6 +25,7 @@ Options:
   --local-env PATH       internal local identity file; normally omit
   --peer-env PATH        peer.env from the other tester; auto-detected from ~/FreeQ if omitted
   --output PATH          output freeq.toml path
+  --listen-only          render a valid local listener config with no peer blocks
 EOF
 }
 
@@ -32,6 +34,7 @@ while [ "$#" -gt 0 ]; do
     --local-env) LOCAL_ENV="$2"; shift 2 ;;
     --peer-env) PEER_ENV="$2"; shift 2 ;;
     --output) OUTPUT_CONFIG="$2"; shift 2 ;;
+    --listen-only) LISTEN_ONLY=1; shift ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
   esac
@@ -101,7 +104,7 @@ find_peer_env() {
   exit 1
 }
 
-if [ -z "$PEER_ENV" ]; then
+if [ "$LISTEN_ONLY" -eq 0 ] && [ -z "$PEER_ENV" ]; then
   PEER_ENV="$(find_peer_env)"
   echo "Using peer env: $PEER_ENV"
 fi
@@ -115,11 +118,13 @@ if [ ! -f "$LOCAL_ENV" ]; then
   echo "Missing local env file: $LOCAL_ENV" >&2
   exit 1
 fi
-if [ ! -f "$PEER_ENV" ]; then
+if [ "$LISTEN_ONLY" -eq 0 ] && [ ! -f "$PEER_ENV" ]; then
   echo "Missing peer env file: $PEER_ENV" >&2
   exit 1
 fi
-scripts/setup/freeq-validate-peer-env.sh "$PEER_ENV" >/dev/null
+if [ "$LISTEN_ONLY" -eq 0 ]; then
+  scripts/setup/freeq-validate-peer-env.sh "$PEER_ENV" >/dev/null
+fi
 
 # shellcheck disable=SC1090
 . "$LOCAL_ENV"
@@ -131,6 +136,34 @@ if [ ! -f "$LOCAL_IDENTITY_KEY_PATH" ]; then
   echo "Missing local identity key: $LOCAL_IDENTITY_KEY_PATH" >&2
   echo "Did you accidentally pass a peer.env as --local-env?" >&2
   exit 1
+fi
+
+mkdir -p "$(dirname "$OUTPUT_CONFIG")"
+cat > "$OUTPUT_CONFIG" <<EOF
+[node]
+name = "$LOCAL_NODE_NAME"
+listen = "$LOCAL_NODE_LISTEN"
+address = "$LOCAL_NODE_ADDRESS"
+key_path = "$LOCAL_IDENTITY_KEY_PATH"
+algorithm = "ml-kem-768"
+sign = "ml-dsa-65"
+api_enabled = true
+api_addr = "127.0.0.1:6789"
+EOF
+
+if [ "$LISTEN_ONLY" -eq 1 ]; then
+  cat <<EOF
+
+Rendered listen-only FreeQ config:
+  $OUTPUT_CONFIG
+
+Start freeqd with:
+  sudo target/release/freeqd --config "$OUTPUT_CONFIG" --foreground
+
+This config contains no peer blocks yet. Rerender without --listen-only after
+the other node operator sends their peer.env file.
+EOF
+  exit 0
 fi
 
 unset FREEQ_PUBLIC_ENDPOINT
@@ -163,17 +196,7 @@ if [ "$LOCAL_NODE_ADDRESS" = "$PEER_NODE_ADDRESS" ]; then
   exit 1
 fi
 
-mkdir -p "$(dirname "$OUTPUT_CONFIG")"
-cat > "$OUTPUT_CONFIG" <<EOF
-[node]
-name = "$LOCAL_NODE_NAME"
-listen = "$LOCAL_NODE_LISTEN"
-address = "$LOCAL_NODE_ADDRESS"
-key_path = "$LOCAL_IDENTITY_KEY_PATH"
-algorithm = "ml-kem-768"
-sign = "ml-dsa-65"
-api_enabled = true
-api_addr = "127.0.0.1:6789"
+cat >> "$OUTPUT_CONFIG" <<EOF
 
 [[peer]]
 name = "$PEER_NODE_NAME"

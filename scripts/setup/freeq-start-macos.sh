@@ -11,6 +11,7 @@ RECEIVE_DIR="$SETUP_DIR/02-put-peer-file-here"
 LOG_FILE="$LOG_DIR/freeqd.log"
 PID_FILE="$LOG_DIR/freeqd.pid"
 CONFIGURE_INTERFACE=1
+RESTART=0
 
 if [ -f "$CONFIG_FILE" ]; then
   # shellcheck disable=SC1090
@@ -26,6 +27,7 @@ Options:
   --local-env PATH       internal local identity file; normally omit
   --peer-env PATH        peer.env from the other tester; auto-detected from ~/FreeQ if omitted
   --no-interface         start daemon but skip ifconfig/route helper
+  --restart              stop an existing freeqd pid from this setup before starting
 
 Examples:
   scripts/setup/freeq-start-macos.sh
@@ -38,6 +40,7 @@ while [ "$#" -gt 0 ]; do
     --local-env) LOCAL_ENV="$2"; shift 2 ;;
     --peer-env) PEER_ENV="$2"; shift 2 ;;
     --no-interface) CONFIGURE_INTERFACE=0; shift ;;
+    --restart) RESTART=1; shift ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
   esac
@@ -126,15 +129,36 @@ fi
 if [ -f "$PID_FILE" ]; then
   old_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
   if [ -n "$old_pid" ] && kill -0 "$old_pid" >/dev/null 2>&1; then
-    echo "freeqd already appears to be running as pid $old_pid"
-    echo "Stop it with: sudo kill $old_pid"
-    exit 1
+    if [ "$RESTART" -eq 1 ]; then
+      echo "Checking sudo access..."
+      sudo -v
+      echo "Stopping existing freeqd pid $old_pid..."
+      sudo kill "$old_pid"
+      for _ in $(seq 1 20); do
+        if ! kill -0 "$old_pid" >/dev/null 2>&1; then
+          break
+        fi
+        sleep 0.25
+      done
+      if kill -0 "$old_pid" >/dev/null 2>&1; then
+        echo "Existing freeqd pid $old_pid did not stop." >&2
+        echo "Stop it manually with: sudo kill $old_pid" >&2
+        exit 1
+      fi
+      rm -f "$PID_FILE"
+    else
+      echo "freeqd already appears to be running as pid $old_pid"
+      echo "Stop it with: sudo kill $old_pid"
+      exit 1
+    fi
   fi
 fi
 
 : > "$LOG_FILE"
-echo "Checking sudo access..."
-sudo -v
+if [ "$RESTART" -eq 0 ]; then
+  echo "Checking sudo access..."
+  sudo -v
+fi
 
 echo "Starting freeqd..."
 sudo target/release/freeqd --config "$CONFIG" --foreground > "$LOG_FILE" 2>&1 &

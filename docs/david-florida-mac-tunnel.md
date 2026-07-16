@@ -164,7 +164,11 @@ David puts Patrick's file here:
   ~/FreeQ/02-put-peer-file-here/patrick-mac-peer.env
 ```
 
-If a helper cannot find the expected peer file, it prints the exact visible folder to use and exits before starting anything.
+If the expected peer file has not arrived yet, the helper prints the exact
+visible folder to use and starts that Mac in listen-only mode with a valid
+zero-peer config. That lets the node come up and keep its local API available
+while the file exchange finishes. After the peer file arrives, rerun the same
+helper to restart from listen-only mode into the full two-node tunnel config.
 
 If you need to run the lower-level steps manually:
 

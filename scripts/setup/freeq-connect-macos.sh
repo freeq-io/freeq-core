@@ -23,6 +23,7 @@ admin password:
 Options:
   --peer-env PATH        peer env file; otherwise auto-detect in ~/FreeQ/02-put-peer-file-here
   --no-interface         start freeqd but skip ifconfig/route setup
+  --restart              stop an existing freeqd pid from this setup before starting
   --help, -h             show this help
 
 This script does not need, ask for, or use the other person's SSH password.
@@ -39,6 +40,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --no-interface)
       START_ARGS+=("--no-interface")
+      shift
+      ;;
+    --restart)
+      START_ARGS+=("--restart")
       shift
       ;;
     --help|-h)

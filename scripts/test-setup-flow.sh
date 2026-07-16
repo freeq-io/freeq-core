@@ -76,6 +76,15 @@ scripts/setup/freeq-render-config.sh > "$TMP_ROOT/render.out"
 assert_file_contains "$TMP_ROOT/freeq.toml" 'name = "peer-mac"'
 assert_file_contains "$TMP_ROOT/freeq.toml" 'endpoint = "peer.example.test:51820"'
 
+echo "== setup flow: listen-only config renders without peer file =="
+FREEQ_LOCAL_ENV="$TMP_ROOT/local/node.env" \
+FREEQ_CONFIG_OUT="$TMP_ROOT/listen-only.toml" \
+scripts/setup/freeq-render-config.sh --listen-only > "$TMP_ROOT/listen-only-render.out"
+assert_file_contains "$TMP_ROOT/listen-only.toml" 'name = "local-mac"'
+assert_file_contains "$TMP_ROOT/listen-only.toml" 'listen = "0.0.0.0:51820"'
+assert_no_match '^\[\[peer\]\]' "$TMP_ROOT/listen-only.toml"
+assert_file_contains "$TMP_ROOT/listen-only-render.out" "Rendered listen-only FreeQ config"
+
 echo "== setup flow: incomplete peer file fails clearly =="
 mkdir -p "$TMP_ROOT/bad-peer" "$TMP_ROOT/bad-setup/02-put-peer-file-here"
 target/release/freeq-perf-identity \

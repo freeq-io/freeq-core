@@ -95,14 +95,7 @@ find_peer_env() {
     return 0
   fi
 
-  echo "Missing David's peer file." >&2
-  echo "Put it here:" >&2
-  echo "  $expected" >&2
-  echo
-  echo "Send David Patrick's peer file from:" >&2
-  echo "  $SEND_DIR/$EXPECTED_LOCAL_NODE-peer.env" >&2
-  echo "Then rerun this script after David sends his peer file back." >&2
-  exit 1
+  return 1
 }
 
 echo "FreeQ field start: Patrick for David"
@@ -124,9 +117,24 @@ if [ ! -f "$CONFIG_FILE" ]; then
     scripts/setup/freeq-setup-macos.sh
 fi
 
-PEER_ENV="$(find_peer_env)"
-echo "Using David peer file:"
-echo "  $PEER_ENV"
+if PEER_ENV="$(find_peer_env)"; then
+  echo "Using David peer file:"
+  echo "  $PEER_ENV"
+  echo
+  scripts/setup/freeq-connect-macos.sh --restart --peer-env "$PEER_ENV" "${START_ARGS[@]}"
+  exit 0
+fi
+
+echo "David's peer file is not here yet."
+echo "Starting Patrick in listen-only mode now, so this node is up while you wait."
+echo
+echo "Send David Patrick's peer file from:"
+echo "  $SEND_DIR/$EXPECTED_LOCAL_NODE-peer.env"
+echo
+echo "When David sends his peer file back, put it here:"
+echo "  $RECEIVE_DIR/$EXPECTED_PEER-peer.env"
+echo "Then rerun this script to render the full two-node tunnel config."
 echo
 
-scripts/setup/freeq-connect-macos.sh --peer-env "$PEER_ENV" "${START_ARGS[@]}"
+scripts/setup/freeq-render-config.sh --listen-only
+scripts/setup/freeq-start-macos.sh --no-interface
