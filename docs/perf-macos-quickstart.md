@@ -35,7 +35,8 @@ setup folder:
 ```
 
 Edit `~/FreeQ/freeq-setup.conf` if you need to override the generated node
-name, overlay address, listen address, peer endpoint, or peer SSH settings.
+name, overlay address, listen address, this Mac's public endpoint, or peer SSH
+settings.
 
 If a dependency is missing, the installer prints the install command and may ask
 whether to run it. Answer `y` to let setup continue, or `n` to install it
@@ -57,9 +58,16 @@ When the other tester sends their `.env` file, put it here:
 
 Do not send `identity.key`. You do not need to browse hidden folders.
 
-## Step 3: Set Peer Endpoint
+## Step 3: Endpoint Handling
 
-Open:
+The peer name comes from the `.env` file you receive. You do not need to know
+or type it.
+
+If each tester entered this Mac's reachable UDP endpoint during setup, the
+endpoint is already inside the `.env` file they sent you. No extra endpoint step
+is needed.
+
+If the sender left that blank, open:
 
 ```text
 ~/FreeQ/freeq-setup.conf
@@ -71,6 +79,9 @@ Set:
 FREEQ_PEER_ENDPOINT='PEER_HOST_OR_IP:51820'
 ```
 
+This is an override for older or incomplete peer files. New setup files should
+usually carry `FREEQ_PUBLIC_ENDPOINT` automatically.
+
 If direct SSH benchmarks are needed, also set:
 
 ```bash
@@ -80,8 +91,8 @@ FREEQ_PEER_SSH_PORT='22'
 
 ## Step 4: Render And Start
 
-After the peer file is in the drop folder and `FREEQ_PEER_ENDPOINT` is set, you
-can rerun the setup script and answer yes when it offers to render and start:
+After the peer file is in the drop folder, you can rerun the setup script and
+answer yes when it offers to render and start:
 
 ```bash
 cd ~/freeq-core
@@ -109,8 +120,9 @@ cd ~/freeq-core
 scripts/perf/freeq-perf-run.sh --mode freeq
 ```
 
-Direct baseline, after `FREEQ_PEER_ENDPOINT`, `FREEQ_PEER_SSH_USER`, and
-`FREEQ_PEER_SSH_PORT` are set in `freeq-setup.conf`:
+Direct baseline, after the peer endpoint is available from the peer file or
+`FREEQ_PEER_ENDPOINT`, and `FREEQ_PEER_SSH_USER` and `FREEQ_PEER_SSH_PORT` are
+set in `freeq-setup.conf`:
 
 ```bash
 cd ~/freeq-core

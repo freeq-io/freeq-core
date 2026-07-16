@@ -38,10 +38,13 @@ The file to send to the other tester is created in:
 ~/FreeQ/01-send-this-file
 ```
 
+Each generated peer file includes the node name, overlay address, public keys,
+and, when provided during setup, that node's reachable UDP endpoint. The
+receiving tester should not need to know or type the peer node name.
+
 ## Render Configs
 
-After `FREEQ_PEER_ENDPOINT` is set in `~/FreeQ/freeq-setup.conf` and the
-peer `.env` file is in the visible drop folder, run:
+After the peer `.env` file is in the visible drop folder, run:
 
 ```bash
 cd ~/freeq-core
@@ -49,7 +52,9 @@ scripts/setup/freeq-render-config.sh
 ```
 
 The setup script can also be rerun at this point; it will detect the peer file
-and endpoint, then offer to render and start FreeQ.
+and then offer to render and start FreeQ. If the peer file is older or does not
+include `FREEQ_PUBLIC_ENDPOINT`, set `FREEQ_PEER_ENDPOINT` in
+`~/FreeQ/freeq-setup.conf` as a manual override.
 
 ## Start FreeQ
 
@@ -68,8 +73,9 @@ Start an `iperf3` server on the receiving Mac:
 iperf3 -s
 ```
 
-Then on the sending Mac, after `FREEQ_PEER_ENDPOINT`, `FREEQ_PEER_SSH_USER`, and
-`FREEQ_PEER_SSH_PORT` are set in `~/FreeQ/freeq-setup.conf`:
+Then on the sending Mac, after the peer endpoint is available from the peer file
+or `FREEQ_PEER_ENDPOINT`, and `FREEQ_PEER_SSH_USER` and `FREEQ_PEER_SSH_PORT`
+are set in `~/FreeQ/freeq-setup.conf`:
 
 ```bash
 cd ~/freeq-core

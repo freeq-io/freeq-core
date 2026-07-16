@@ -18,6 +18,9 @@ struct Args {
     #[arg(long, default_value = "0.0.0.0:51820")]
     listen: String,
 
+    #[arg(long, default_value = "")]
+    public_endpoint: String,
+
     #[arg(long, default_value = ".freeq-perf")]
     output_dir: PathBuf,
 
@@ -77,6 +80,7 @@ fn main() -> Result<()> {
         "node_name": args.node_name.clone(),
         "overlay_address": args.overlay_address.clone(),
         "listen": args.listen.clone(),
+        "public_endpoint": args.public_endpoint.clone(),
         "public_key": public_key_b64,
         "kem_key": kem_key_b64
     });
@@ -87,10 +91,11 @@ fn main() -> Result<()> {
     .context("failed to write node-exchange.json")?;
 
     let env_file = format!(
-        "# Local node file. Keep this on this Mac; send peer.env instead.\nFREEQ_NODE_NAME='{}'\nFREEQ_NODE_ADDRESS='{}'\nFREEQ_NODE_LISTEN='{}'\nFREEQ_IDENTITY_KEY_PATH='{}'\nFREEQ_PUBLIC_KEY_B64='{}'\nFREEQ_KEM_KEY_B64='{}'\n",
+        "# Local node file. Keep this on this Mac; send peer.env instead.\nFREEQ_NODE_NAME='{}'\nFREEQ_NODE_ADDRESS='{}'\nFREEQ_NODE_LISTEN='{}'\nFREEQ_PUBLIC_ENDPOINT='{}'\nFREEQ_IDENTITY_KEY_PATH='{}'\nFREEQ_PUBLIC_KEY_B64='{}'\nFREEQ_KEM_KEY_B64='{}'\n",
         shell_quote_value(&args.node_name),
         shell_quote_value(&args.overlay_address),
         shell_quote_value(&args.listen),
+        shell_quote_value(&args.public_endpoint),
         shell_quote_value(&identity_path_text),
         public_key_b64,
         kem_key_b64
@@ -98,10 +103,11 @@ fn main() -> Result<()> {
     fs::write(args.output_dir.join("node.env"), env_file).context("failed to write node.env")?;
 
     let peer_env_file = format!(
-        "# Public peer exchange file. Safe to send to the other tester.\nFREEQ_NODE_NAME='{}'\nFREEQ_NODE_ADDRESS='{}'\nFREEQ_NODE_LISTEN='{}'\nFREEQ_PUBLIC_KEY_B64='{}'\nFREEQ_KEM_KEY_B64='{}'\n",
+        "# Public peer exchange file. Safe to send to the other tester.\nFREEQ_NODE_NAME='{}'\nFREEQ_NODE_ADDRESS='{}'\nFREEQ_NODE_LISTEN='{}'\nFREEQ_PUBLIC_ENDPOINT='{}'\nFREEQ_PUBLIC_KEY_B64='{}'\nFREEQ_KEM_KEY_B64='{}'\n",
         shell_quote_value(&args.node_name),
         shell_quote_value(&args.overlay_address),
         shell_quote_value(&args.listen),
+        shell_quote_value(&args.public_endpoint),
         public_key_b64,
         kem_key_b64
     );

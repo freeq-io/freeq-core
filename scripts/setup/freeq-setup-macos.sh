@@ -31,6 +31,7 @@ fi
 NODE_NAME="${FREEQ_NODE_NAME:-${DEFAULT_NODE_NAME:-freeq-mac}}"
 OVERLAY_ADDRESS="${FREEQ_OVERLAY_ADDRESS:-$(default_overlay_address "$NODE_NAME")}"
 LISTEN_ADDR="${FREEQ_LISTEN_ADDR:-0.0.0.0:51820}"
+PUBLIC_ENDPOINT="${FREEQ_PUBLIC_ENDPOINT:-}"
 PEER_ENDPOINT="${FREEQ_PEER_ENDPOINT:-}"
 PEER_SSH_USER="${FREEQ_PEER_SSH_USER:-}"
 PEER_SSH_PORT="${FREEQ_PEER_SSH_PORT:-22}"
@@ -51,6 +52,7 @@ Environment overrides:
   FREEQ_NODE_NAME      default sanitized local hostname
   FREEQ_OVERLAY_ADDRESS default generated from local hostname
   FREEQ_LISTEN_ADDR    default 0.0.0.0:51820
+  FREEQ_PUBLIC_ENDPOINT reachable HOST:PORT this Mac shares in its peer file
   FREEQ_SETUP_DIR      default ~/FreeQ
   FREEQ_SETUP_CONFIG   default ~/FreeQ/freeq-setup.conf
   FREEQ_ASSUME_DEFAULTS=1 skips interactive prompts
@@ -100,8 +102,27 @@ existing_identity_matches() {
 }
 
 write_peer_env_from_node_env() {
-  awk '/^FREEQ_NODE_NAME=|^FREEQ_NODE_ADDRESS=|^FREEQ_NODE_LISTEN=|^FREEQ_PUBLIC_KEY_B64=|^FREEQ_KEM_KEY_B64=/' \
+  awk '/^FREEQ_NODE_NAME=|^FREEQ_NODE_ADDRESS=|^FREEQ_NODE_LISTEN=|^FREEQ_PUBLIC_ENDPOINT=|^FREEQ_PUBLIC_KEY_B64=|^FREEQ_KEM_KEY_B64=/' \
     "$PERF_DIR/node.env" > "$PERF_DIR/peer.env"
+}
+
+refresh_existing_identity_files() {
+  # shellcheck disable=SC1090
+  . "$PERF_DIR/node.env"
+  local identity_key_path="${FREEQ_IDENTITY_KEY_PATH:-}"
+  local public_key_b64="${FREEQ_PUBLIC_KEY_B64:-}"
+  local kem_key_b64="${FREEQ_KEM_KEY_B64:-}"
+  cat > "$PERF_DIR/node.env" <<EOF
+# Local node file. Keep this on this Mac; send peer.env instead.
+FREEQ_NODE_NAME=$(quote_shell "$NODE_NAME")
+FREEQ_NODE_ADDRESS=$(quote_shell "$OVERLAY_ADDRESS")
+FREEQ_NODE_LISTEN=$(quote_shell "$LISTEN_ADDR")
+FREEQ_PUBLIC_ENDPOINT=$(quote_shell "$PUBLIC_ENDPOINT")
+FREEQ_IDENTITY_KEY_PATH=$(quote_shell "$identity_key_path")
+FREEQ_PUBLIC_KEY_B64=$(quote_shell "$public_key_b64")
+FREEQ_KEM_KEY_B64=$(quote_shell "$kem_key_b64")
+EOF
+  write_peer_env_from_node_env
 }
 
 backup_perf_identity() {
@@ -143,7 +164,8 @@ run_guided_setup() {
   NODE_NAME="$(prompt_value "Local node name" "$NODE_NAME")"
   OVERLAY_ADDRESS="$(prompt_value "Local overlay address" "$OVERLAY_ADDRESS")"
   LISTEN_ADDR="$(prompt_value "Local listen address" "$LISTEN_ADDR")"
-  PEER_ENDPOINT="$(prompt_value "Peer reachable UDP endpoint, or leave blank for later" "$PEER_ENDPOINT")"
+  PUBLIC_ENDPOINT="$(prompt_value "This Mac's reachable UDP endpoint to share, or leave blank" "$PUBLIC_ENDPOINT")"
+  PEER_ENDPOINT="$(prompt_value "Peer UDP endpoint override, or leave blank to read from their file" "$PEER_ENDPOINT")"
   PEER_SSH_USER="$(prompt_value "Peer SSH user for optional benchmarks, or leave blank" "$PEER_SSH_USER")"
   if [ -n "$PEER_SSH_USER" ]; then
     PEER_SSH_PORT="$(prompt_value "Peer SSH port for optional benchmarks" "$PEER_SSH_PORT")"
@@ -151,17 +173,16 @@ run_guided_setup() {
   echo
 }
 
-maybe_prompt_peer_endpoint() {
-  if [ -n "$PEER_ENDPOINT" ] || [ "${FREEQ_ASSUME_DEFAULTS:-}" = "1" ] || [ ! -t 0 ]; then
+maybe_warn_missing_peer_endpoint() {
+  if [ -n "$PEER_ENDPOINT" ] || [ "${FREEQ_ASSUME_DEFAULTS:-}" = "1" ]; then
     return 0
   fi
   local peer_count
   peer_count="$(count_received_peer_envs)"
   if [ "$peer_count" -eq 1 ]; then
-    echo "A peer file is present, but FREEQ_PEER_ENDPOINT is not set."
-    echo "Enter the peer's reachable UDP endpoint, for example host.example.com:51820."
-    PEER_ENDPOINT="$(prompt_value "Peer reachable UDP endpoint" "$PEER_ENDPOINT")"
-    write_config
+    echo "A peer file is present. If it includes FREEQ_PUBLIC_ENDPOINT, setup will use it automatically."
+    echo "If that file is older and has no endpoint, set FREEQ_PEER_ENDPOINT in:"
+    echo "  $CONFIG_FILE"
   fi
 }
 
@@ -175,7 +196,12 @@ FREEQ_NODE_NAME=$(quote_shell "$NODE_NAME")
 FREEQ_OVERLAY_ADDRESS=$(quote_shell "$OVERLAY_ADDRESS")
 FREEQ_LISTEN_ADDR=$(quote_shell "$LISTEN_ADDR")
 
-# Fill this in before rendering config, or pass --peer-endpoint HOST:PORT.
+# This Mac's reachable UDP endpoint to include in the peer file you send.
+# Example: FREEQ_PUBLIC_ENDPOINT='<this-mac-host-or-ip>:51820'
+FREEQ_PUBLIC_ENDPOINT=$(quote_shell "$PUBLIC_ENDPOINT")
+
+# Optional override for the other node's endpoint. Normally this is read from
+# the peer.env file the other tester sends you.
 # Example: FREEQ_PEER_ENDPOINT='<peer-host-or-ip>:51820'
 FREEQ_PEER_ENDPOINT=$(quote_shell "$PEER_ENDPOINT")
 FREEQ_PEER_SSH_USER=$(quote_shell "$PEER_SSH_USER")
@@ -195,7 +221,9 @@ This visible folder is the only folder you need to use.
 2. When the other tester sends you their peer.env file, put it here:
    $RECEIVE_DIR
 
-3. Ask the other tester for their reachable UDP host or IP, put it in:
+3. The setup reads the peer name and endpoint from that peer.env file.
+   If their file is older and does not contain FREEQ_PUBLIC_ENDPOINT, put
+   their reachable UDP endpoint in:
    $CONFIG_FILE
 
 4. Then run:
@@ -241,7 +269,7 @@ offer_configure_and_start() {
   fi
   local peer_count
   peer_count="$(count_received_peer_envs)"
-  if [ "$peer_count" -eq 0 ] || [ -z "$PEER_ENDPOINT" ]; then
+  if [ "$peer_count" -eq 0 ]; then
     return 0
   fi
   if [ "$peer_count" -gt 1 ]; then
@@ -250,7 +278,7 @@ offer_configure_and_start() {
   fi
 
   local answer
-  printf 'Peer file and endpoint are present. Render config and start FreeQ now? [y/N]: ' >&2
+  printf 'Peer file is present. Render config and start FreeQ now? [y/N]: ' >&2
   IFS= read -r answer || answer=""
   case "$answer" in
     y|Y|yes|YES)
@@ -398,7 +426,7 @@ mkdir -p "$PERF_DIR"
 if existing_identity_matches; then
   echo "Existing matching setup identity found; preserving:"
   echo "  $PERF_DIR/node.env"
-  write_peer_env_from_node_env
+  refresh_existing_identity_files
   echo "Refreshed public exchange file:"
   echo "  $PERF_DIR/peer.env"
 else
@@ -410,10 +438,11 @@ else
     --node-name "$NODE_NAME" \
     --overlay-address "$OVERLAY_ADDRESS" \
     --listen "$LISTEN_ADDR" \
+    --public-endpoint "$PUBLIC_ENDPOINT" \
     --output-dir "$PERF_DIR"
 fi
 publish_visible_exchange
-maybe_prompt_peer_endpoint
+maybe_warn_missing_peer_endpoint
 
 cat > "$PERF_DIR/install-summary.txt" <<EOF
 FreeQ setup complete.
@@ -424,6 +453,7 @@ Profile config: $CONFIG_FILE
 Node name: $NODE_NAME
 Overlay address: $OVERLAY_ADDRESS
 Listen: $LISTEN_ADDR
+Public endpoint shared in peer file: ${PUBLIC_ENDPOINT:-not set}
 
 Send this file to the other tester over a trusted channel:
   $SEND_DIR/$NODE_NAME-peer.env
@@ -447,17 +477,18 @@ Next steps:
      $SEND_DIR/$NODE_NAME-peer.env
   2. Put the other tester's peer.env file in:
      $RECEIVE_DIR
-  3. Set FREEQ_PEER_ENDPOINT in:
-     $CONFIG_FILE
-  4. Render and start:
+  3. Render and start:
      cd "$INSTALL_DIR"
      scripts/setup/freeq-render-config.sh
      scripts/setup/freeq-start-macos.sh
-  5. Run the overlay leg:
+     If their peer.env file is older and has no FREEQ_PUBLIC_ENDPOINT,
+     set FREEQ_PEER_ENDPOINT in:
+     $CONFIG_FILE
+  4. Run the overlay leg:
      scripts/perf/freeq-perf-run.sh \\
        --mode freeq \\
        --label "$NODE_NAME-to-peer-freeq"
-  6. Bundle results:
+  5. Bundle results:
      scripts/perf/freeq-perf-bundle-results.sh "$NODE_NAME-to-peer"
 EOF
 

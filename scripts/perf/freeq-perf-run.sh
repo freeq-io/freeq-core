@@ -37,7 +37,7 @@ Examples:
   scripts/perf/freeq-perf-run.sh --mode direct
 
 Options:
-  --target HOST          direct public/private host or DNS name; defaults to FREEQ_PEER_ENDPOINT host
+  --target HOST          direct public/private host or DNS name; defaults to peer endpoint host
   --ssh-user USER        SSH user for direct/overlay SSH checks; defaults to FREEQ_PEER_SSH_USER or current user
   --ssh-port PORT        SSH port for direct mode, default 22
   --overlay-host HOST    FreeQ overlay IP/host for freeq mode; defaults to peer.env overlay IP
@@ -101,15 +101,20 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if [ -z "$PEER_ENV" ]; then
+if [ -z "$PEER_ENV" ] && { [ "$MODE" != "direct" ] || { [ -z "$TARGET_HOST" ] && [ -z "$PEER_ENDPOINT" ]; }; }; then
   PEER_ENV="$(find_peer_env)"
 fi
 if [ -f "$PEER_ENV" ]; then
+  unset FREEQ_PUBLIC_ENDPOINT
   # shellcheck disable=SC1090
   . "$PEER_ENV"
   PEER_OVERLAY_HOST="${FREEQ_NODE_ADDRESS%%/*}"
+  PEER_PUBLIC_ENDPOINT="${FREEQ_PUBLIC_ENDPOINT:-}"
   if [ -z "$OVERLAY_HOST" ]; then
     OVERLAY_HOST="$PEER_OVERLAY_HOST"
+  fi
+  if [ -z "$PEER_ENDPOINT" ] && [ -n "$PEER_PUBLIC_ENDPOINT" ]; then
+    PEER_ENDPOINT="$PEER_PUBLIC_ENDPOINT"
   fi
 fi
 if [ -z "$TARGET_HOST" ] && [ -n "$PEER_ENDPOINT" ]; then
@@ -121,7 +126,7 @@ if [ "$MODE" != "direct" ] && [ "$MODE" != "freeq" ] && [ "$MODE" != "both" ]; t
   exit 1
 fi
 if [ "$MODE" != "freeq" ] && [ -z "$TARGET_HOST" ]; then
-  echo "--target is required for direct/both mode unless FREEQ_PEER_ENDPOINT is set in $CONFIG_FILE" >&2
+  echo "--target is required for direct/both mode unless the peer file includes FREEQ_PUBLIC_ENDPOINT or FREEQ_PEER_ENDPOINT is set in $CONFIG_FILE" >&2
   exit 1
 fi
 if [ "$MODE" != "direct" ] && [ -z "$OVERLAY_HOST" ]; then
