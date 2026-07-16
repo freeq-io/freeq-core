@@ -12,7 +12,7 @@ struct Args {
     #[arg(long)]
     node_name: String,
 
-    #[arg(long, default_value = "10.66.0.2/24")]
+    #[arg(long)]
     overlay_address: String,
 
     #[arg(long, default_value = "0.0.0.0:51820")]
@@ -40,7 +40,6 @@ fn main() -> Result<()> {
         args.output_dir.join("node.env"),
         args.output_dir.join("peer.env"),
         args.output_dir.join("node-exchange.json"),
-        args.output_dir.join("peer-snippet.toml"),
     ];
     if !args.force {
         for path in &output_paths {
@@ -109,19 +108,10 @@ fn main() -> Result<()> {
     fs::write(args.output_dir.join("peer.env"), peer_env_file)
         .context("failed to write peer.env")?;
 
-    let allowed_ip = host_route(&args.overlay_address);
-    let snippet = format!(
-        "[[peer]]\nname = \"{}\"\nendpoint = \"REPLACE_WITH_REACHABLE_HOST_OR_IP:51820\"\npublic_key = \"{}\"\nkem_key = \"{}\"\nallowed_ips = [\"{}\"]\nkey_rotation_secs = 3600\n",
-        args.node_name, public_key_b64, kem_key_b64, allowed_ip
-    );
-    fs::write(args.output_dir.join("peer-snippet.toml"), snippet)
-        .context("failed to write peer-snippet.toml")?;
-
     println!("FreeQ perf identity generated:");
     println!("  {}", args.output_dir.join("node-exchange.json").display());
     println!("  {}", args.output_dir.join("node.env").display());
     println!("  {}", args.output_dir.join("peer.env").display());
-    println!("  {}", args.output_dir.join("peer-snippet.toml").display());
     println!();
     println!("Send peer.env to the other tester over a trusted channel.");
     println!("Do not send identity.key.");
@@ -130,9 +120,4 @@ fn main() -> Result<()> {
 
 fn shell_quote_value(value: &str) -> String {
     value.replace('\'', "'\\''")
-}
-
-fn host_route(cidr: &str) -> String {
-    let host = cidr.split('/').next().unwrap_or(cidr);
-    format!("{host}/32")
 }

@@ -179,7 +179,7 @@ Status key: `[x]` implemented in the current repo, `[~]` partially implemented o
 ## Deployment Automation
 
 FreeQ now ships with a first-party Ansible layer in
-[deploy/ansible](/Users/patrickmccormick/Documents/FreeQ/freeq-core/deploy/ansible/README.md).
+[deploy/ansible](deploy/ansible/README.md).
 It is designed for host orchestration, not as the long-term network control
 plane:
 

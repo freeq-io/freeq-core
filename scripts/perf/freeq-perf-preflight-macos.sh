@@ -19,7 +19,7 @@ LOG_FILE="$LOG_DIR/preflight-$(date -u +%Y%m%dT%H%M%SZ).log"
 
 usage() {
   cat <<'EOF'
-Run David-friendly macOS preflight checks for a FreeQ perf test.
+Run macOS preflight checks for a FreeQ perf test.
 
 Environment:
   FREEQ_REMOTE_SSH=user@host       optional non-interactive SSH key target to test
@@ -28,7 +28,7 @@ Environment:
   FREEQ_PERF_LOG_DIR=PATH          default ~/FreeQ-Perf/04-logs
 
 Examples:
-  FREEQ_REMOTE_SSH=patrickmccormick@example.com scripts/perf/freeq-perf-preflight-macos.sh
+  FREEQ_REMOTE_SSH=user@example.com scripts/perf/freeq-perf-preflight-macos.sh
   FREEQ_REMOTE_UDP=example.com:51820 scripts/perf/freeq-perf-preflight-macos.sh
 EOF
 }

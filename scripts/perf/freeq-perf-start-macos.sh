@@ -6,10 +6,16 @@ LOCAL_ENV="${FREEQ_LOCAL_ENV:-$HOME/.freeq/perf/node.env}"
 PEER_ENV="${FREEQ_PEER_ENV:-}"
 LOG_DIR="${FREEQ_PERF_DIR:-$HOME/.freeq/perf}"
 VISIBLE_DIR="${FREEQ_PERF_VISIBLE_DIR:-$HOME/FreeQ-Perf}"
+CONFIG_FILE="${FREEQ_PERF_CONFIG:-$VISIBLE_DIR/freeq-perf.conf}"
 RECEIVE_DIR="$VISIBLE_DIR/02-put-peer-file-here"
 LOG_FILE="$LOG_DIR/freeqd.log"
 PID_FILE="$LOG_DIR/freeqd.pid"
 CONFIGURE_INTERFACE=1
+
+if [ -f "$CONFIG_FILE" ]; then
+  # shellcheck disable=SC1090
+  . "$CONFIG_FILE"
+fi
 
 usage() {
   cat <<'EOF'
@@ -90,9 +96,9 @@ if [ ! -f "$CONFIG" ]; then
   echo "Missing config: $CONFIG" >&2
   exit 1
 fi
-if grep -Eq 'REPLACE|PLACEHOLDER|HOST_OR_IP|ACTUAL_|PATRICK_HOST|FLORIDA_HOST|YOUR_HOST|PEER_HOST' "$CONFIG"; then
+if grep -Eq 'REPLACE|PLACEHOLDER|HOST_OR_IP|ACTUAL_|YOUR_HOST|PEER_HOST|peer-host|<|>' "$CONFIG"; then
   echo "Config still contains a placeholder endpoint:" >&2
-  grep -En 'endpoint *=|REPLACE|HOST_OR_IP|ACTUAL_|PATRICK_HOST|FLORIDA_HOST' "$CONFIG" >&2 || true
+  grep -En 'endpoint *=|REPLACE|HOST_OR_IP|ACTUAL_|YOUR_HOST|PEER_HOST|peer-host|<|>' "$CONFIG" >&2 || true
   echo "Rerun freeq-perf-render-config.sh with a real --peer-endpoint before starting." >&2
   exit 1
 fi

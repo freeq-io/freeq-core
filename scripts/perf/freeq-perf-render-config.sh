@@ -3,23 +3,29 @@ set -euo pipefail
 
 LOCAL_ENV="${FREEQ_LOCAL_ENV:-$HOME/.freeq/perf/node.env}"
 PEER_ENV="${FREEQ_PEER_ENV:-}"
-PEER_ENDPOINT="${FREEQ_PEER_ENDPOINT:-}"
 OUTPUT_CONFIG="${FREEQ_CONFIG_OUT:-$HOME/.freeq/perf/freeq.toml}"
 VISIBLE_DIR="${FREEQ_PERF_VISIBLE_DIR:-$HOME/FreeQ-Perf}"
+CONFIG_FILE="${FREEQ_PERF_CONFIG:-$VISIBLE_DIR/freeq-perf.conf}"
 RECEIVE_DIR="$VISIBLE_DIR/02-put-peer-file-here"
+
+if [ -f "$CONFIG_FILE" ]; then
+  # shellcheck disable=SC1090
+  . "$CONFIG_FILE"
+fi
+
+PEER_ENDPOINT="${FREEQ_PEER_ENDPOINT:-}"
 
 usage() {
   cat <<'EOF'
 Render a two-node freeq.toml from local node.env and peer peer.env files.
 
 Example:
-  scripts/perf/freeq-perf-render-config.sh \
-    --peer-endpoint 203.0.113.10:51820
+  scripts/perf/freeq-perf-render-config.sh
 
 Options:
   --local-env PATH       internal local identity file; normally omit
   --peer-env PATH        peer.env from the other tester; auto-detected from ~/FreeQ-Perf if omitted
-  --peer-endpoint HOST:PORT reachable UDP endpoint for the peer
+  --peer-endpoint HOST:PORT reachable UDP endpoint for the peer; defaults to FREEQ_PEER_ENDPOINT in ~/FreeQ-Perf/freeq-perf.conf
   --output PATH          output freeq.toml path
 EOF
 }
@@ -38,9 +44,9 @@ done
 validate_endpoint() {
   local endpoint="$1"
   case "$endpoint" in
-    *REPLACE*|*PLACEHOLDER*|*HOST_OR_IP*|*ACTUAL_*|*PATRICK_HOST*|*FLORIDA_HOST*|*YOUR_HOST*|*PEER_HOST*)
+    *REPLACE*|*PLACEHOLDER*|*HOST_OR_IP*|*ACTUAL_*|*YOUR_HOST*|*PEER_HOST*|*peer-host*|*"<"*|*">"*)
       echo "Refusing placeholder peer endpoint: $endpoint" >&2
-      echo "Use a real reachable host or IP, for example: 203.0.113.10:51820" >&2
+      echo "Use a real reachable host or IP, for example: <peer-host-or-ip>:51820" >&2
       exit 1
       ;;
   esac
@@ -105,6 +111,13 @@ if [ -z "$PEER_ENV" ]; then
 fi
 
 if [ -z "$LOCAL_ENV" ] || [ -z "$PEER_ENDPOINT" ]; then
+  if [ -z "$PEER_ENDPOINT" ]; then
+    echo "Missing peer endpoint." >&2
+    echo "Set FREEQ_PEER_ENDPOINT in the visible profile config:" >&2
+    echo "  $CONFIG_FILE" >&2
+    echo "Or rerun with: --peer-endpoint HOST:PORT" >&2
+    exit 1
+  fi
   usage
   exit 1
 fi
@@ -146,7 +159,7 @@ if [ "$LOCAL_NODE_NAME" = "$PEER_NODE_NAME" ]; then
 fi
 if [ "$LOCAL_NODE_ADDRESS" = "$PEER_NODE_ADDRESS" ]; then
   echo "Local and peer env files both use overlay address '$LOCAL_NODE_ADDRESS'." >&2
-  echo "Each tester needs a unique overlay address, such as 10.66.0.1/24 and 10.66.0.2/24." >&2
+  echo "Each tester needs a unique overlay address in the test overlay network." >&2
   exit 1
 fi
 

@@ -5,118 +5,81 @@ internet traffic with traffic carried through a FreeQ overlay.
 
 The first useful test matrix is:
 
-1. Direct `iperf3` TCP between Macs.
+1. Direct `iperf3` TCP between two Macs.
 2. `iperf3` over the FreeQ overlay.
 3. Direct `scp`/SSH file transfer.
 4. `scp`/SSH through the FreeQ overlay.
 5. SSH connection setup latency direct and through the overlay.
 
-## Florida Mac Install
+## macOS Setup
 
-For David, use the short field guide:
-
-```text
-docs/perf-david-quickstart.md
-```
-
-On the Florida Mac, the easiest path is to run the installer directly from
-GitHub. It clones or updates the repo for him:
-
-```bash
-FREEQ_NODE_NAME=david-florida-mac \
-FREEQ_OVERLAY_ADDRESS=10.66.0.2/24 \
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/perf/freeq-perf-install-macos.sh)"
-```
-
-Send this file back to Patrick over a trusted channel:
+Use the generic macOS quickstart on each Mac:
 
 ```text
-~/FreeQ-Perf/01-send-this-file/david-florida-mac-peer.env
+docs/perf-macos-quickstart.md
 ```
 
-## Patrick Mac Setup
-
-On Patrick's Mac, use the same visible-folder installer flow with Patrick's
-overlay address:
-
-```bash
-cd /Users/patrickmccormick/Documents/FreeQ/freeq-core
-FREEQ_NODE_NAME=patrick-mac \
-FREEQ_OVERLAY_ADDRESS=10.66.0.1/24 \
-scripts/perf/freeq-perf-install-macos.sh
-```
-
-Send Patrick's visible peer exchange file to the Florida tester:
+The setup is profile-driven. Machine-specific values live in:
 
 ```text
-~/FreeQ-Perf/01-send-this-file/patrick-mac-peer.env
+~/FreeQ-Perf/freeq-perf.conf
 ```
 
-## Render Configs
-
-Each side renders a config using its local identity, the other side's `peer.env`,
-and the other side's reachable UDP endpoint. Put the received `peer.env` file in:
+The installer derives `FREEQ_NODE_NAME` from the local hostname unless the
+profile overrides it. The received peer file goes in:
 
 ```text
 ~/FreeQ-Perf/02-put-peer-file-here
 ```
 
-On the Florida Mac:
+The file to send to the other tester is created in:
+
+```text
+~/FreeQ-Perf/01-send-this-file
+```
+
+## Render Configs
+
+After `FREEQ_PEER_ENDPOINT` is set in `~/FreeQ-Perf/freeq-perf.conf` and the
+peer `.env` file is in the visible drop folder, run:
 
 ```bash
 cd ~/freeq-core
-scripts/perf/freeq-perf-render-config.sh \
-  --peer-endpoint ACTUAL_PATRICK_HOST_OR_IP:51820
-```
-
-On Patrick's Mac:
-
-```bash
-cd /Users/patrickmccormick/Documents/FreeQ/freeq-core
-scripts/perf/freeq-perf-render-config.sh \
-  --peer-endpoint ACTUAL_FLORIDA_HOST_OR_IP:51820
+scripts/perf/freeq-perf-render-config.sh
 ```
 
 ## Start FreeQ
 
-Both Macs need UDP `51820` reachable, or a different shared port if configured.
-For the first test, run in foreground so logs are visible:
+Both Macs need UDP `51820` reachable, or a different listen port if configured.
 
 ```bash
+cd ~/freeq-core
 scripts/perf/freeq-perf-start-macos.sh
 ```
 
 ## Run Direct Baseline
 
-Start an `iperf3` server on Patrick's Mac:
+Start an `iperf3` server on the receiving Mac:
 
 ```bash
 iperf3 -s
 ```
 
-Then on the Florida Mac:
+Then on the sending Mac, after `FREEQ_PEER_ENDPOINT`, `FREEQ_PEER_SSH_USER`, and
+`FREEQ_PEER_SSH_PORT` are set in `~/FreeQ-Perf/freeq-perf.conf`:
 
 ```bash
 cd ~/freeq-core
-scripts/perf/freeq-perf-run.sh \
-  --mode direct \
-  --target ACTUAL_PATRICK_HOST_OR_IP \
-  --ssh-user patrickmccormick \
-  --ssh-port ACTUAL_PATRICK_SSH_PORT \
-  --label florida-to-patrick-direct
+scripts/perf/freeq-perf-run.sh --mode direct
 ```
 
 ## Run FreeQ Overlay Leg
 
-With `freeqd` running on both Macs, run:
+With `freeqd` running on both Macs:
 
 ```bash
 cd ~/freeq-core
-scripts/perf/freeq-perf-run.sh \
-  --mode freeq \
-  --overlay-host 10.66.0.1 \
-  --ssh-user patrickmccormick \
-  --label florida-to-patrick-freeq
+scripts/perf/freeq-perf-run.sh --mode freeq
 ```
 
 Use `--mode both` only after both direct and overlay paths are known to work.

@@ -2,14 +2,26 @@
 set -euo pipefail
 
 TARGET_HOST=""
-SSH_USER="${USER:-}"
+VISIBLE_DIR="${FREEQ_PERF_VISIBLE_DIR:-$HOME/FreeQ-Perf}"
+CONFIG_FILE="${FREEQ_PERF_CONFIG:-$VISIBLE_DIR/freeq-perf.conf}"
+RECEIVE_DIR="$VISIBLE_DIR/02-put-peer-file-here"
+
+if [ -f "$CONFIG_FILE" ]; then
+  # shellcheck disable=SC1090
+  . "$CONFIG_FILE"
+fi
+
+SSH_USER="${FREEQ_PEER_SSH_USER:-${USER:-}}"
 SSH_PORT="${FREEQ_SSH_PORT:-22}"
+SSH_PORT="${FREEQ_PEER_SSH_PORT:-$SSH_PORT}"
 MODE="direct"
 OVERLAY_HOST=""
 LABEL="$(date -u +%Y%m%dT%H%M%SZ)"
 RESULT_ROOT="${FREEQ_PERF_RESULT_ROOT:-perf-results}"
 IPERF_SECONDS="${FREEQ_IPERF_SECONDS:-20}"
 SCP_MB="${FREEQ_SCP_MB:-32}"
+PEER_ENV="${FREEQ_PEER_ENV:-}"
+PEER_ENDPOINT="${FREEQ_PEER_ENDPOINT:-}"
 
 usage() {
   cat <<'EOF'
@@ -21,17 +33,59 @@ Modes:
   both    Run direct and FreeQ overlay legs.
 
 Examples:
-  scripts/perf/freeq-perf-run.sh --target 203.0.113.10 --ssh-user patrickmccormick
-  scripts/perf/freeq-perf-run.sh --target 203.0.113.10 --ssh-port 65022 --overlay-host 10.66.0.1 --mode both
+  scripts/perf/freeq-perf-run.sh --mode freeq
+  scripts/perf/freeq-perf-run.sh --mode direct
 
 Options:
-  --target HOST          direct public/private host or DNS name
-  --ssh-user USER        SSH user for direct/overlay SSH checks
+  --target HOST          direct public/private host or DNS name; defaults to FREEQ_PEER_ENDPOINT host
+  --ssh-user USER        SSH user for direct/overlay SSH checks; defaults to FREEQ_PEER_SSH_USER or current user
   --ssh-port PORT        SSH port for direct mode, default 22
-  --overlay-host HOST    FreeQ overlay IP/host for freeq mode
+  --overlay-host HOST    FreeQ overlay IP/host for freeq mode; defaults to peer.env overlay IP
   --mode MODE            direct, freeq, or both
   --label LABEL          result directory label
 EOF
+}
+
+find_peer_env() {
+  local candidates=()
+  local path
+  for path in "$RECEIVE_DIR"/*.env; do
+    if [ -f "$path" ]; then
+      candidates+=("$path")
+    fi
+  done
+  if [ "${#candidates[@]}" -eq 1 ]; then
+    printf '%s\n' "${candidates[0]}"
+    return 0
+  fi
+  if [ "${#candidates[@]}" -gt 1 ]; then
+    echo "Found multiple peer env files in the visible drop folder:" >&2
+    printf '  %s\n' "${candidates[@]}" >&2
+    echo "Leave only the intended peer.env in: $RECEIVE_DIR" >&2
+    exit 1
+  fi
+
+  for path in "$HOME"/Downloads/*peer.env "$HOME"/Downloads/*-peer.env; do
+    if [ -f "$path" ]; then
+      candidates+=("$path")
+    fi
+  done
+  if [ "${#candidates[@]}" -eq 1 ]; then
+    printf '%s\n' "${candidates[0]}"
+    return 0
+  fi
+  if [ "${#candidates[@]}" -eq 0 ]; then
+    echo "Missing peer env file." >&2
+    echo "Put the other tester's peer.env file in this visible folder:" >&2
+    echo "  $RECEIVE_DIR" >&2
+    exit 1
+  fi
+
+  echo "Found multiple possible peer env files in Downloads:" >&2
+  printf '  %s\n' "${candidates[@]}" >&2
+  echo "Move the intended file into: $RECEIVE_DIR" >&2
+  echo "Or set FREEQ_PEER_ENV in: $CONFIG_FILE" >&2
+  exit 1
 }
 
 while [ "$#" -gt 0 ]; do
@@ -47,16 +101,31 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+if [ -z "$PEER_ENV" ]; then
+  PEER_ENV="$(find_peer_env)"
+fi
+if [ -f "$PEER_ENV" ]; then
+  # shellcheck disable=SC1090
+  . "$PEER_ENV"
+  PEER_OVERLAY_HOST="${FREEQ_NODE_ADDRESS%%/*}"
+  if [ -z "$OVERLAY_HOST" ]; then
+    OVERLAY_HOST="$PEER_OVERLAY_HOST"
+  fi
+fi
+if [ -z "$TARGET_HOST" ] && [ -n "$PEER_ENDPOINT" ]; then
+  TARGET_HOST="${PEER_ENDPOINT%:*}"
+fi
+
 if [ "$MODE" != "direct" ] && [ "$MODE" != "freeq" ] && [ "$MODE" != "both" ]; then
   echo "--mode must be direct, freeq, or both" >&2
   exit 1
 fi
 if [ "$MODE" != "freeq" ] && [ -z "$TARGET_HOST" ]; then
-  echo "--target is required for direct/both mode" >&2
+  echo "--target is required for direct/both mode unless FREEQ_PEER_ENDPOINT is set in $CONFIG_FILE" >&2
   exit 1
 fi
 if [ "$MODE" != "direct" ] && [ -z "$OVERLAY_HOST" ]; then
-  echo "--overlay-host is required for freeq/both mode" >&2
+  echo "--overlay-host is required for freeq/both mode unless a peer.env file is available in $RECEIVE_DIR" >&2
   exit 1
 fi
 

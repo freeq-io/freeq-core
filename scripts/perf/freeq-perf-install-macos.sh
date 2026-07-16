@@ -5,15 +5,36 @@ default_node_name() {
   hostname -s 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | sed 's/^-*//;s/-*$//'
 }
 
+default_overlay_address() {
+  local name="$1"
+  local checksum
+  checksum="$(printf '%s' "$name" | cksum | awk '{print $1}')"
+  printf '10.66.0.%s/24\n' "$((checksum % 200 + 20))"
+}
+
+quote_shell() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
 REPO_URL="${FREEQ_REPO_URL:-https://github.com/freeq-io/freeq-core.git}"
 INSTALL_DIR="${FREEQ_INSTALL_DIR:-$HOME/freeq-core}"
 BRANCH="${FREEQ_BRANCH:-main}"
 DEFAULT_NODE_NAME="$(default_node_name)"
-NODE_NAME="${FREEQ_NODE_NAME:-${DEFAULT_NODE_NAME:-freeq-mac}}"
-OVERLAY_ADDRESS="${FREEQ_OVERLAY_ADDRESS:-10.66.0.2/24}"
-LISTEN_ADDR="${FREEQ_LISTEN_ADDR:-0.0.0.0:51820}"
-PERF_DIR="${FREEQ_PERF_DIR:-$HOME/.freeq/perf}"
 VISIBLE_DIR="${FREEQ_PERF_VISIBLE_DIR:-$HOME/FreeQ-Perf}"
+CONFIG_FILE="${FREEQ_PERF_CONFIG:-$VISIBLE_DIR/freeq-perf.conf}"
+
+if [ -f "$CONFIG_FILE" ]; then
+  # shellcheck disable=SC1090
+  . "$CONFIG_FILE"
+fi
+
+NODE_NAME="${FREEQ_NODE_NAME:-${DEFAULT_NODE_NAME:-freeq-mac}}"
+OVERLAY_ADDRESS="${FREEQ_OVERLAY_ADDRESS:-$(default_overlay_address "$NODE_NAME")}"
+LISTEN_ADDR="${FREEQ_LISTEN_ADDR:-0.0.0.0:51820}"
+PEER_ENDPOINT="${FREEQ_PEER_ENDPOINT:-}"
+PEER_SSH_USER="${FREEQ_PEER_SSH_USER:-}"
+PEER_SSH_PORT="${FREEQ_PEER_SSH_PORT:-22}"
+PERF_DIR="${FREEQ_PERF_DIR:-$HOME/.freeq/perf}"
 SEND_DIR="$VISIBLE_DIR/01-send-this-file"
 RECEIVE_DIR="$VISIBLE_DIR/02-put-peer-file-here"
 RESULTS_DIR="$VISIBLE_DIR/03-results"
@@ -27,12 +48,12 @@ Environment overrides:
   FREEQ_INSTALL_DIR    default ~/freeq-core
   FREEQ_BRANCH         default main
   FREEQ_NODE_NAME      default sanitized local hostname
-  FREEQ_OVERLAY_ADDRESS default 10.66.0.2/24
+  FREEQ_OVERLAY_ADDRESS default generated from local hostname
   FREEQ_LISTEN_ADDR    default 0.0.0.0:51820
   FREEQ_PERF_VISIBLE_DIR default ~/FreeQ-Perf
+  FREEQ_PERF_CONFIG    default ~/FreeQ-Perf/freeq-perf.conf
 
 Example:
-  FREEQ_NODE_NAME=florida-mac \
   bash scripts/perf/freeq-perf-install-macos.sh
 EOF
 }
@@ -74,6 +95,24 @@ backup_perf_identity() {
   echo "  $backup_dir"
 }
 
+write_config() {
+  mkdir -p "$VISIBLE_DIR"
+  cat > "$CONFIG_FILE" <<EOF
+# FreeQ perf profile.
+# Edit this visible file for machine-specific setup values.
+
+FREEQ_NODE_NAME=$(quote_shell "$NODE_NAME")
+FREEQ_OVERLAY_ADDRESS=$(quote_shell "$OVERLAY_ADDRESS")
+FREEQ_LISTEN_ADDR=$(quote_shell "$LISTEN_ADDR")
+
+# Fill this in before rendering config, or pass --peer-endpoint HOST:PORT.
+# Example: FREEQ_PEER_ENDPOINT='<peer-host-or-ip>:51820'
+FREEQ_PEER_ENDPOINT=$(quote_shell "$PEER_ENDPOINT")
+FREEQ_PEER_SSH_USER=$(quote_shell "$PEER_SSH_USER")
+FREEQ_PEER_SSH_PORT=$(quote_shell "$PEER_SSH_PORT")
+EOF
+}
+
 write_visible_readme() {
   cat > "$VISIBLE_DIR/README.txt" <<EOF
 FreeQ Perf Setup
@@ -86,12 +125,15 @@ This visible folder is the only folder you need to use.
 2. When the other tester sends you their peer.env file, put it here:
    $RECEIVE_DIR
 
-3. Ask the other tester for their reachable UDP host or IP, then run:
+3. Ask the other tester for their reachable UDP host or IP, put it in:
+   $CONFIG_FILE
+
+4. Then run:
    cd "$INSTALL_DIR"
-   scripts/perf/freeq-perf-render-config.sh --peer-endpoint THEIR_HOST_OR_IP:51820
+   scripts/perf/freeq-perf-render-config.sh
    scripts/perf/freeq-perf-start-macos.sh
 
-4. Result bundles will be written here:
+5. Result bundles will be written here:
    $RESULTS_DIR
 
 Do not send identity.key.
@@ -101,6 +143,7 @@ EOF
 
 publish_visible_exchange() {
   mkdir -p "$SEND_DIR" "$RECEIVE_DIR" "$RESULTS_DIR"
+  write_config
   cp "$PERF_DIR/peer.env" "$SEND_DIR/$NODE_NAME-peer.env"
   cat > "$RECEIVE_DIR/PUT-PEER-FILE-HERE.txt" <<EOF
 Put the other tester's peer.env file in this folder.
@@ -130,6 +173,7 @@ echo "== FreeQ macOS perf install =="
 echo "Repo: $REPO_URL"
 echo "Install dir: $INSTALL_DIR"
 echo "Visible setup folder: $VISIBLE_DIR"
+echo "Profile config: $CONFIG_FILE"
 echo "Node: $NODE_NAME ($OVERLAY_ADDRESS)"
 echo
 
@@ -209,6 +253,7 @@ FreeQ perf install complete.
 
 Repo: $INSTALL_DIR
 Visible setup folder: $VISIBLE_DIR
+Profile config: $CONFIG_FILE
 Node name: $NODE_NAME
 Overlay address: $OVERLAY_ADDRESS
 Listen: $LISTEN_ADDR
@@ -230,24 +275,23 @@ Useful commands:
   scripts/perf/freeq-perf-run.sh --help
   scripts/perf/freeq-perf-bundle-results.sh
 
-David next steps:
-  1. Send Patrick:
+Next steps:
+  1. Send the other tester:
      $SEND_DIR/$NODE_NAME-peer.env
-  2. Put Patrick's peer.env file in:
+  2. Put the other tester's peer.env file in:
      $RECEIVE_DIR
-  3. Ask Patrick for his reachable UDP host/IP and run:
+  3. Set FREEQ_PEER_ENDPOINT in:
+     $CONFIG_FILE
+  4. Render and start:
      cd "$INSTALL_DIR"
-     scripts/perf/freeq-perf-render-config.sh --peer-endpoint ACTUAL_PATRICK_HOST_OR_IP:51820
-  4. Start FreeQ:
+     scripts/perf/freeq-perf-render-config.sh
      scripts/perf/freeq-perf-start-macos.sh
   5. Run the overlay leg:
      scripts/perf/freeq-perf-run.sh \\
        --mode freeq \\
-       --overlay-host 10.66.0.1 \\
-       --ssh-user patrickmccormick \\
-       --label david-to-patrick-freeq
+       --label "$NODE_NAME-to-peer-freeq"
   6. Bundle results:
-     scripts/perf/freeq-perf-bundle-results.sh david-to-patrick
+     scripts/perf/freeq-perf-bundle-results.sh "$NODE_NAME-to-peer"
 EOF
 
 echo
