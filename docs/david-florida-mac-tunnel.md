@@ -133,6 +133,14 @@ Run this on both Macs after each side has exactly one peer `.env` file in `~/Fre
 
 ```bash
 cd ~/freeq-core
+scripts/setup/freeq-connect-macos.sh
+```
+
+The connect script validates the peer file, renders the config, starts `freeqd`, and configures the Mac `utun` interface.
+
+If you need to run the lower-level steps manually:
+
+```bash
 scripts/setup/freeq-render-config.sh
 scripts/setup/freeq-start-macos.sh
 ```
