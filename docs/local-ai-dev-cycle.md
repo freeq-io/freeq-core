@@ -13,6 +13,39 @@ Rules for each item:
 - Run the listed verification commands.
 - Report exact files changed and exact commands run.
 
+## Runner
+
+Use `scripts/run-local-ai-stripes.sh` to prepare or run this queue.
+
+First check whether a local model process is already running:
+
+```bash
+scripts/run-local-ai-stripes.sh --check-processes
+```
+
+Prepare prompt files without launching a model:
+
+```bash
+scripts/run-local-ai-stripes.sh --prepare --from 1 --to 10
+```
+
+Run one stripe through a local model command that reads from stdin:
+
+```bash
+LOCAL_AI_CMD='ollama run llama3.1:8b' scripts/run-local-ai-stripes.sh --run --from 2 --to 2
+```
+
+Run the remaining stripes one at a time:
+
+```bash
+LOCAL_AI_CMD='ollama run llama3.1:8b' scripts/run-local-ai-stripes.sh --run --from 2 --to 10
+```
+
+The runner stops if it detects an existing local AI process, unless
+`ALLOW_EXISTING_LOCAL_AI=1` is set. In `--run` mode, it also stops after any
+stripe that leaves the Git worktree dirty so the change can be reviewed before
+the next stripe starts.
+
 ## 1. Pre-Commit Setup Harness
 
 Status: done in `scripts/git-pre-commit.sh`.

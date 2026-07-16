@@ -8,3 +8,4 @@
 identity.key
 freeq.toml
 .env
+.local-ai/
