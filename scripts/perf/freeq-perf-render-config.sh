@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-LOCAL_ENV=""
-PEER_ENV=""
-PEER_ENDPOINT=""
+LOCAL_ENV="${FREEQ_LOCAL_ENV:-$HOME/.freeq/perf/node.env}"
+PEER_ENV="${FREEQ_PEER_ENV:-}"
+PEER_ENDPOINT="${FREEQ_PEER_ENDPOINT:-}"
 OUTPUT_CONFIG="${FREEQ_CONFIG_OUT:-$HOME/.freeq/perf/freeq.toml}"
+VISIBLE_DIR="${FREEQ_PERF_VISIBLE_DIR:-$HOME/FreeQ-Perf}"
+RECEIVE_DIR="$VISIBLE_DIR/02-put-peer-file-here"
 
 usage() {
   cat <<'EOF'
@@ -12,13 +14,11 @@ Render a two-node freeq.toml from local node.env and peer peer.env files.
 
 Example:
   scripts/perf/freeq-perf-render-config.sh \
-    --local-env ~/.freeq/perf/node.env \
-    --peer-env ~/Downloads/patrick-peer.env \
     --peer-endpoint 203.0.113.10:51820
 
 Options:
-  --local-env PATH       local node.env from freeq-perf-identity
-  --peer-env PATH        peer.env from the other tester
+  --local-env PATH       internal local identity file; normally omit
+  --peer-env PATH        peer.env from the other tester; auto-detected from ~/FreeQ-Perf if omitted
   --peer-endpoint HOST:PORT reachable UDP endpoint for the peer
   --output PATH          output freeq.toml path
 EOF
@@ -56,7 +56,55 @@ validate_endpoint() {
   fi
 }
 
-if [ -z "$LOCAL_ENV" ] || [ -z "$PEER_ENV" ] || [ -z "$PEER_ENDPOINT" ]; then
+find_peer_env() {
+  local candidates=()
+  local path
+  for path in "$RECEIVE_DIR"/*.env; do
+    if [ -f "$path" ]; then
+      candidates+=("$path")
+    fi
+  done
+  if [ "${#candidates[@]}" -eq 1 ]; then
+    printf '%s\n' "${candidates[0]}"
+    return 0
+  fi
+  if [ "${#candidates[@]}" -gt 1 ]; then
+    echo "Found multiple peer env files in the visible drop folder:" >&2
+    printf '  %s\n' "${candidates[@]}" >&2
+    echo "Leave only the intended peer.env in: $RECEIVE_DIR" >&2
+    exit 1
+  fi
+
+  for path in "$HOME"/Downloads/*peer.env "$HOME"/Downloads/*-peer.env; do
+    if [ -f "$path" ]; then
+      candidates+=("$path")
+    fi
+  done
+  if [ "${#candidates[@]}" -eq 1 ]; then
+    printf '%s\n' "${candidates[0]}"
+    return 0
+  fi
+  if [ "${#candidates[@]}" -eq 0 ]; then
+    echo "Missing peer env file." >&2
+    echo "Put the other tester's peer.env file in this visible folder:" >&2
+    echo "  $RECEIVE_DIR" >&2
+    echo "Then rerun this command." >&2
+    exit 1
+  fi
+
+  echo "Found multiple possible peer env files in Downloads:" >&2
+  printf '  %s\n' "${candidates[@]}" >&2
+  echo "Move the intended file into: $RECEIVE_DIR" >&2
+  echo "Or pass the intended one with --peer-env PATH." >&2
+  exit 1
+}
+
+if [ -z "$PEER_ENV" ]; then
+  PEER_ENV="$(find_peer_env)"
+  echo "Using peer env: $PEER_ENV"
+fi
+
+if [ -z "$LOCAL_ENV" ] || [ -z "$PEER_ENDPOINT" ]; then
   usage
   exit 1
 fi
@@ -93,7 +141,7 @@ PEER_ALLOWED_IP="${PEER_NODE_ADDRESS%%/*}/32"
 
 if [ "$LOCAL_NODE_NAME" = "$PEER_NODE_NAME" ]; then
   echo "Local and peer env files both describe node '$LOCAL_NODE_NAME'." >&2
-  echo "Use your own ~/.freeq/perf/node.env for --local-env and the other tester's peer.env for --peer-env." >&2
+  echo "Use the installer-generated local identity for --local-env and the other tester's peer.env for --peer-env." >&2
   exit 1
 fi
 if [ "$LOCAL_NODE_ADDRESS" = "$PEER_NODE_ADDRESS" ]; then

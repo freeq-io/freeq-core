@@ -4,7 +4,7 @@ set -euo pipefail
 REMOTE_SSH="${FREEQ_REMOTE_SSH:-}"
 REMOTE_SSH_PORT="${FREEQ_REMOTE_SSH_PORT:-22}"
 REMOTE_UDP="${FREEQ_REMOTE_UDP:-}"
-LOG_DIR="${FREEQ_PERF_DIR:-$HOME/.freeq/perf}"
+LOG_DIR="${FREEQ_PERF_LOG_DIR:-${FREEQ_PERF_DIR:-${FREEQ_PERF_VISIBLE_DIR:-$HOME/FreeQ-Perf}/04-logs}}"
 SSH_NONINTERACTIVE_OPTS=(
   -o BatchMode=yes
   -o PreferredAuthentications=publickey
@@ -25,7 +25,7 @@ Environment:
   FREEQ_REMOTE_SSH=user@host       optional non-interactive SSH key target to test
   FREEQ_REMOTE_SSH_PORT=PORT       optional SSH port, default 22
   FREEQ_REMOTE_UDP=host:port       optional UDP target to probe best-effort
-  FREEQ_PERF_DIR=PATH              default ~/.freeq/perf
+  FREEQ_PERF_LOG_DIR=PATH          default ~/FreeQ-Perf/04-logs
 
 Examples:
   FREEQ_REMOTE_SSH=patrickmccormick@example.com scripts/perf/freeq-perf-preflight-macos.sh

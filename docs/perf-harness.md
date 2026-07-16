@@ -31,39 +31,41 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main
 Send this file back to Patrick over a trusted channel:
 
 ```text
-~/.freeq/perf/peer.env
+~/FreeQ-Perf/01-send-this-file/david-florida-mac-peer.env
 ```
 
 ## Patrick Mac Setup
 
-On Patrick's Mac, run the same identity generation with Patrick's overlay
-address:
+On Patrick's Mac, use the same visible-folder installer flow with Patrick's
+overlay address:
 
 ```bash
 cd /Users/patrickmccormick/Documents/FreeQ/freeq-core
-cargo build --release -p freeqd -p freeq-perf-identity
-target/release/freeq-perf-identity \
-  --node-name patrick-mac \
-  --overlay-address 10.66.0.1/24 \
-  --listen 0.0.0.0:51820 \
-  --output-dir ~/.freeq/perf
+FREEQ_NODE_NAME=patrick-mac \
+FREEQ_OVERLAY_ADDRESS=10.66.0.1/24 \
+scripts/perf/freeq-perf-install-macos.sh
 ```
 
-Send Patrick's `~/.freeq/perf/peer.env` to the Florida tester.
+Send Patrick's visible peer exchange file to the Florida tester:
+
+```text
+~/FreeQ-Perf/01-send-this-file/patrick-mac-peer.env
+```
 
 ## Render Configs
 
-Each side renders a config using the local `node.env`, the other side's
-`peer.env`, and the other side's reachable UDP
-endpoint.
+Each side renders a config using its local identity, the other side's `peer.env`,
+and the other side's reachable UDP endpoint. Put the received `peer.env` file in:
+
+```text
+~/FreeQ-Perf/02-put-peer-file-here
+```
 
 On the Florida Mac:
 
 ```bash
 cd ~/freeq-core
 scripts/perf/freeq-perf-render-config.sh \
-  --local-env ~/.freeq/perf/node.env \
-  --peer-env ~/Downloads/patrick-peer.env \
   --peer-endpoint ACTUAL_PATRICK_HOST_OR_IP:51820
 ```
 
@@ -72,8 +74,6 @@ On Patrick's Mac:
 ```bash
 cd /Users/patrickmccormick/Documents/FreeQ/freeq-core
 scripts/perf/freeq-perf-render-config.sh \
-  --local-env ~/.freeq/perf/node.env \
-  --peer-env ~/Downloads/florida-peer.env \
   --peer-endpoint ACTUAL_FLORIDA_HOST_OR_IP:51820
 ```
 
@@ -83,7 +83,7 @@ Both Macs need UDP `51820` reachable, or a different shared port if configured.
 For the first test, run in foreground so logs are visible:
 
 ```bash
-scripts/perf/freeq-perf-start-macos.sh --peer-env ~/Downloads/peer.env
+scripts/perf/freeq-perf-start-macos.sh
 ```
 
 ## Run Direct Baseline

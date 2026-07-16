@@ -5,6 +5,8 @@ CONFIG="${FREEQ_CONFIG:-$HOME/.freeq/perf/freeq.toml}"
 LOCAL_ENV="${FREEQ_LOCAL_ENV:-$HOME/.freeq/perf/node.env}"
 PEER_ENV="${FREEQ_PEER_ENV:-}"
 LOG_DIR="${FREEQ_PERF_DIR:-$HOME/.freeq/perf}"
+VISIBLE_DIR="${FREEQ_PERF_VISIBLE_DIR:-$HOME/FreeQ-Perf}"
+RECEIVE_DIR="$VISIBLE_DIR/02-put-peer-file-here"
 LOG_FILE="$LOG_DIR/freeqd.log"
 PID_FILE="$LOG_DIR/freeqd.pid"
 CONFIGURE_INTERFACE=1
@@ -14,14 +16,13 @@ usage() {
 Start freeqd for a macOS two-node perf test and configure the assigned utun.
 
 Options:
-  --config PATH          default ~/.freeq/perf/freeq.toml
-  --local-env PATH       default ~/.freeq/perf/node.env
-  --peer-env PATH        peer.env from the other tester
+  --config PATH          internal generated config path; normally omit
+  --local-env PATH       internal local identity file; normally omit
+  --peer-env PATH        peer.env from the other tester; auto-detected from ~/FreeQ-Perf if omitted
   --no-interface         start daemon but skip ifconfig/route helper
 
 Examples:
-  scripts/perf/freeq-perf-start-macos.sh --peer-env ~/Downloads/patrick-peer.env
-  FREEQ_PEER_ENV=~/Downloads/patrick-peer.env scripts/perf/freeq-perf-start-macos.sh
+  scripts/perf/freeq-perf-start-macos.sh
 EOF
 }
 
@@ -35,6 +36,49 @@ while [ "$#" -gt 0 ]; do
     *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
   esac
 done
+
+find_peer_env() {
+  local candidates=()
+  local path
+  for path in "$RECEIVE_DIR"/*.env; do
+    if [ -f "$path" ]; then
+      candidates+=("$path")
+    fi
+  done
+  if [ "${#candidates[@]}" -eq 1 ]; then
+    printf '%s\n' "${candidates[0]}"
+    return 0
+  fi
+  if [ "${#candidates[@]}" -gt 1 ]; then
+    echo "Found multiple peer env files in the visible drop folder:" >&2
+    printf '  %s\n' "${candidates[@]}" >&2
+    echo "Leave only the intended peer.env in: $RECEIVE_DIR" >&2
+    exit 1
+  fi
+
+  for path in "$HOME"/Downloads/*peer.env "$HOME"/Downloads/*-peer.env; do
+    if [ -f "$path" ]; then
+      candidates+=("$path")
+    fi
+  done
+  if [ "${#candidates[@]}" -eq 1 ]; then
+    printf '%s\n' "${candidates[0]}"
+    return 0
+  fi
+  if [ "${#candidates[@]}" -eq 0 ]; then
+    echo "Missing peer env file." >&2
+    echo "Put the other tester's peer.env file in this visible folder:" >&2
+    echo "  $RECEIVE_DIR" >&2
+    echo "Then rerun this command." >&2
+    exit 1
+  fi
+
+  echo "Found multiple possible peer env files in Downloads:" >&2
+  printf '  %s\n' "${candidates[@]}" >&2
+  echo "Move the intended file into: $RECEIVE_DIR" >&2
+  echo "Or pass the intended one with --peer-env PATH." >&2
+  exit 1
+}
 
 mkdir -p "$LOG_DIR"
 
@@ -55,6 +99,21 @@ fi
 if [ ! -x "target/release/freeqd" ]; then
   echo "Missing target/release/freeqd. Run: cargo build --release -p freeqd" >&2
   exit 1
+fi
+
+if [ "$CONFIGURE_INTERFACE" -eq 1 ]; then
+  if [ -z "$PEER_ENV" ]; then
+    PEER_ENV="$(find_peer_env)"
+    echo "Using peer env: $PEER_ENV"
+  fi
+  if [ ! -f "$LOCAL_ENV" ]; then
+    echo "Missing local env: $LOCAL_ENV" >&2
+    exit 1
+  fi
+  if [ ! -f "$PEER_ENV" ]; then
+    echo "Missing peer env: $PEER_ENV" >&2
+    exit 1
+  fi
 fi
 
 if [ -f "$PID_FILE" ]; then
@@ -117,19 +176,6 @@ fi
 echo "Detected interface: $interface"
 
 if [ "$CONFIGURE_INTERFACE" -eq 1 ]; then
-  if [ -z "$PEER_ENV" ]; then
-    echo "--peer-env is required to configure interface. Daemon is running; configure manually or restart with --peer-env."
-    exit 0
-  fi
-  if [ ! -f "$LOCAL_ENV" ]; then
-    echo "Missing local env: $LOCAL_ENV" >&2
-    exit 1
-  fi
-  if [ ! -f "$PEER_ENV" ]; then
-    echo "Missing peer env: $PEER_ENV" >&2
-    exit 1
-  fi
-
   # shellcheck disable=SC1090
   . "$LOCAL_ENV"
   local_ip="${FREEQ_NODE_ADDRESS%%/*}"

@@ -27,9 +27,10 @@ This creates:
 
 ```text
 ~/freeq-core
-~/.freeq/perf/node-exchange.json
-~/.freeq/perf/node.env
-~/.freeq/perf/peer.env
+~/FreeQ-Perf
+~/FreeQ-Perf/01-send-this-file
+~/FreeQ-Perf/02-put-peer-file-here
+~/FreeQ-Perf/03-results
 ```
 
 ## Step 2: Send Patrick One File
@@ -37,22 +38,20 @@ This creates:
 Send this file to Patrick over a trusted channel:
 
 ```text
-~/.freeq/perf/peer.env
+~/FreeQ-Perf/01-send-this-file/david-florida-mac-peer.env
 ```
 
-Do not send:
+Do not open or send hidden `.freeq` files. The installer keeps private state
+there, but the visible `~/FreeQ-Perf` folder is the only folder David needs.
 
-```text
-~/.freeq/perf/node.env
-~/.freeq/perf/identity.key
-```
+Never send `identity.key`.
 
 ## Step 3: Save Patrick's File
 
-Patrick sends back his `peer.env`. Save it as:
+Patrick sends back his `peer.env`. Put it in this visible folder:
 
 ```text
-~/Downloads/patrick-peer.env
+~/FreeQ-Perf/02-put-peer-file-here
 ```
 
 ## Step 4: Render David's FreeQ Config
@@ -62,8 +61,6 @@ Patrick should provide his reachable UDP host or IP.
 ```bash
 cd ~/freeq-core
 scripts/perf/freeq-perf-render-config.sh \
-  --local-env ~/.freeq/perf/node.env \
-  --peer-env ~/Downloads/patrick-peer.env \
   --peer-endpoint ACTUAL_PATRICK_HOST_OR_IP:51820
 ```
 
@@ -71,7 +68,7 @@ scripts/perf/freeq-perf-render-config.sh \
 
 ```bash
 cd ~/freeq-core
-scripts/perf/freeq-perf-start-macos.sh --peer-env ~/Downloads/patrick-peer.env
+scripts/perf/freeq-perf-start-macos.sh
 ```
 
 Leave that Terminal window open.
@@ -109,6 +106,11 @@ scripts/perf/freeq-perf-bundle-results.sh david-to-patrick
 ```
 
 Send Patrick the archive printed by the command.
+It will be created in:
+
+```text
+~/FreeQ-Perf/03-results
+```
 
 ## If Something Fails
 
@@ -122,5 +124,5 @@ scripts/perf/freeq-perf-preflight-macos.sh
 Then send Patrick:
 
 ```text
-~/.freeq/perf/preflight-*.log
+~/FreeQ-Perf/04-logs/preflight-*.log
 ```
