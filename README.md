@@ -216,6 +216,12 @@ FreeQ Core is licensed under **AGPL v3**. See [LICENSE](LICENSE).
 
 The `freeq-api` crate is licensed under **Apache 2.0** — this is the integration boundary between the AGPL core and the proprietary FreeQ Cloud agent.
 
+The formal Core/Cloud enterprise path is captured in
+[docs/enterprise-telemetry-cloud-path.md](docs/enterprise-telemetry-cloud-path.md):
+Core owns the local security claim and out-of-band evidence; Cloud owns
+fleet-scale management, SOC/ITSM/NMS integrations, rendezvous, optional relay,
+and compliance workflow.
+
 ---
 
 *FreeQ — Quantum-safe networking, in the open.*

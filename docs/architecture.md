@@ -85,6 +85,11 @@ Cloud handles aggregation, event normalization, delivery retries, tenant export
 configuration, ticketing workflows, provisioning orchestration, validation
 evidence, and vendor-specific integration formats.
 
+The operating principle for this boundary is documented in
+`docs/enterprise-telemetry-cloud-path.md`: FreeQ Core must disappear on the
+wire and emit local evidence; FreeQ Cloud manages fleet-scale correlation,
+workflow, integrations, rendezvous, and optional relay services.
+
 The intended Cloud workflow is closed-loop remediation:
 
 ```text
