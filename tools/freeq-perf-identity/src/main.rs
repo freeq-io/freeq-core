@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use base64::Engine as _;
 use clap::Parser;
 
@@ -20,6 +20,9 @@ struct Args {
 
     #[arg(long, default_value = ".freeq-perf")]
     output_dir: PathBuf,
+
+    #[arg(long)]
+    force: bool,
 }
 
 fn main() -> Result<()> {
@@ -32,6 +35,24 @@ fn main() -> Result<()> {
     })?;
 
     let identity_path = args.output_dir.join("identity.key");
+    let output_paths = [
+        identity_path.clone(),
+        args.output_dir.join("node.env"),
+        args.output_dir.join("peer.env"),
+        args.output_dir.join("node-exchange.json"),
+        args.output_dir.join("peer-snippet.toml"),
+    ];
+    if !args.force {
+        for path in &output_paths {
+            if path.exists() {
+                bail!(
+                    "{} already exists; move it aside or rerun with --force",
+                    path.display()
+                );
+            }
+        }
+    }
+
     let mut rng = rand::thread_rng();
     let (identity, public_key) = freeq_crypto::sign::IdentityKeypair::generate(&mut rng)
         .context("failed to generate FreeQ identity keypair")?;
@@ -57,7 +78,6 @@ fn main() -> Result<()> {
         "node_name": args.node_name.clone(),
         "overlay_address": args.overlay_address.clone(),
         "listen": args.listen.clone(),
-        "identity_key_path": identity_path_text,
         "public_key": public_key_b64,
         "kem_key": kem_key_b64
     });
@@ -68,7 +88,7 @@ fn main() -> Result<()> {
     .context("failed to write node-exchange.json")?;
 
     let env_file = format!(
-        "FREEQ_NODE_NAME='{}'\nFREEQ_NODE_ADDRESS='{}'\nFREEQ_NODE_LISTEN='{}'\nFREEQ_IDENTITY_KEY_PATH='{}'\nFREEQ_PUBLIC_KEY_B64='{}'\nFREEQ_KEM_KEY_B64='{}'\n",
+        "# Local node file. Keep this on this Mac; send peer.env instead.\nFREEQ_NODE_NAME='{}'\nFREEQ_NODE_ADDRESS='{}'\nFREEQ_NODE_LISTEN='{}'\nFREEQ_IDENTITY_KEY_PATH='{}'\nFREEQ_PUBLIC_KEY_B64='{}'\nFREEQ_KEM_KEY_B64='{}'\n",
         shell_quote_value(&args.node_name),
         shell_quote_value(&args.overlay_address),
         shell_quote_value(&args.listen),
@@ -77,6 +97,17 @@ fn main() -> Result<()> {
         kem_key_b64
     );
     fs::write(args.output_dir.join("node.env"), env_file).context("failed to write node.env")?;
+
+    let peer_env_file = format!(
+        "# Public peer exchange file. Safe to send to the other tester.\nFREEQ_NODE_NAME='{}'\nFREEQ_NODE_ADDRESS='{}'\nFREEQ_NODE_LISTEN='{}'\nFREEQ_PUBLIC_KEY_B64='{}'\nFREEQ_KEM_KEY_B64='{}'\n",
+        shell_quote_value(&args.node_name),
+        shell_quote_value(&args.overlay_address),
+        shell_quote_value(&args.listen),
+        public_key_b64,
+        kem_key_b64
+    );
+    fs::write(args.output_dir.join("peer.env"), peer_env_file)
+        .context("failed to write peer.env")?;
 
     let allowed_ip = host_route(&args.overlay_address);
     let snippet = format!(
@@ -89,9 +120,11 @@ fn main() -> Result<()> {
     println!("FreeQ perf identity generated:");
     println!("  {}", args.output_dir.join("node-exchange.json").display());
     println!("  {}", args.output_dir.join("node.env").display());
+    println!("  {}", args.output_dir.join("peer.env").display());
     println!("  {}", args.output_dir.join("peer-snippet.toml").display());
     println!();
-    println!("Send node-exchange.json or node.env to the other tester over a trusted channel.");
+    println!("Send peer.env to the other tester over a trusted channel.");
+    println!("Do not send identity.key.");
     Ok(())
 }
 

@@ -17,26 +17,9 @@ Then open a new Terminal window.
 
 ## Step 1: Install FreeQ Core
 
-Patrick should replace `PATRICK_HOST_OR_IP` before sending this command. If
-Patrick uses a non-standard forwarded SSH port, also replace `PATRICK_SSH_PORT`.
-
-Before installing, David can run this quick reachability check:
-
-```bash
-nc -vz PATRICK_HOST_OR_IP PATRICK_SSH_PORT
-```
-
-If Patrick forwards external port `65022` to his Mac's SSH port, use:
-
-```bash
-nc -vz PATRICK_HOST_OR_IP 65022
-```
-
 ```bash
 FREEQ_NODE_NAME=david-florida-mac \
 FREEQ_OVERLAY_ADDRESS=10.66.0.2/24 \
-FREEQ_REMOTE_SSH=patrickmccormick@PATRICK_HOST_OR_IP \
-FREEQ_REMOTE_SSH_PORT=PATRICK_SSH_PORT \
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/perf/freeq-perf-install-macos.sh)"
 ```
 
@@ -46,6 +29,7 @@ This creates:
 ~/freeq-core
 ~/.freeq/perf/node-exchange.json
 ~/.freeq/perf/node.env
+~/.freeq/perf/peer.env
 ```
 
 ## Step 2: Send Patrick One File
@@ -53,40 +37,41 @@ This creates:
 Send this file to Patrick over a trusted channel:
 
 ```text
-~/.freeq/perf/node.env
+~/.freeq/perf/peer.env
 ```
 
 Do not send:
 
 ```text
+~/.freeq/perf/node.env
 ~/.freeq/perf/identity.key
 ```
 
 ## Step 3: Save Patrick's File
 
-Patrick sends back his `node.env`. Save it as:
+Patrick sends back his `peer.env`. Save it as:
 
 ```text
-~/Downloads/patrick-node.env
+~/Downloads/patrick-peer.env
 ```
 
 ## Step 4: Render David's FreeQ Config
 
-Patrick should provide `PATRICK_HOST_OR_IP`.
+Patrick should provide his reachable UDP host or IP.
 
 ```bash
 cd ~/freeq-core
 scripts/perf/freeq-perf-render-config.sh \
   --local-env ~/.freeq/perf/node.env \
-  --peer-env ~/Downloads/patrick-node.env \
-  --peer-endpoint PATRICK_HOST_OR_IP:51820
+  --peer-env ~/Downloads/patrick-peer.env \
+  --peer-endpoint ACTUAL_PATRICK_HOST_OR_IP:51820
 ```
 
 ## Step 5: Start FreeQ
 
 ```bash
 cd ~/freeq-core
-scripts/perf/freeq-perf-start-macos.sh --peer-env ~/Downloads/patrick-node.env
+scripts/perf/freeq-perf-start-macos.sh --peer-env ~/Downloads/patrick-peer.env
 ```
 
 Leave that Terminal window open.
@@ -110,9 +95,9 @@ For the direct baseline over a non-standard forwarded SSH port:
 cd ~/freeq-core
 scripts/perf/freeq-perf-run.sh \
   --mode direct \
-  --target PATRICK_HOST_OR_IP \
+  --target ACTUAL_PATRICK_HOST_OR_IP \
   --ssh-user patrickmccormick \
-  --ssh-port PATRICK_SSH_PORT \
+  --ssh-port ACTUAL_PATRICK_SSH_PORT \
   --label david-to-patrick-direct
 ```
 

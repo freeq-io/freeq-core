@@ -16,12 +16,12 @@ Start freeqd for a macOS two-node perf test and configure the assigned utun.
 Options:
   --config PATH          default ~/.freeq/perf/freeq.toml
   --local-env PATH       default ~/.freeq/perf/node.env
-  --peer-env PATH        peer node.env from the other tester
+  --peer-env PATH        peer.env from the other tester
   --no-interface         start daemon but skip ifconfig/route helper
 
 Examples:
-  scripts/perf/freeq-perf-start-macos.sh --peer-env ~/Downloads/patrick-node.env
-  FREEQ_PEER_ENV=~/Downloads/patrick-node.env scripts/perf/freeq-perf-start-macos.sh
+  scripts/perf/freeq-perf-start-macos.sh --peer-env ~/Downloads/patrick-peer.env
+  FREEQ_PEER_ENV=~/Downloads/patrick-peer.env scripts/perf/freeq-perf-start-macos.sh
 EOF
 }
 
@@ -44,6 +44,12 @@ if [ "$(uname -s)" != "Darwin" ]; then
 fi
 if [ ! -f "$CONFIG" ]; then
   echo "Missing config: $CONFIG" >&2
+  exit 1
+fi
+if grep -Eq 'REPLACE|PLACEHOLDER|HOST_OR_IP|ACTUAL_|PATRICK_HOST|FLORIDA_HOST|YOUR_HOST|PEER_HOST' "$CONFIG"; then
+  echo "Config still contains a placeholder endpoint:" >&2
+  grep -En 'endpoint *=|REPLACE|HOST_OR_IP|ACTUAL_|PATRICK_HOST|FLORIDA_HOST' "$CONFIG" >&2 || true
+  echo "Rerun freeq-perf-render-config.sh with a real --peer-endpoint before starting." >&2
   exit 1
 fi
 if [ ! -x "target/release/freeqd" ]; then

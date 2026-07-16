@@ -1,23 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+default_node_name() {
+  hostname -s 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | sed 's/^-*//;s/-*$//'
+}
+
 REPO_URL="${FREEQ_REPO_URL:-https://github.com/freeq-io/freeq-core.git}"
 INSTALL_DIR="${FREEQ_INSTALL_DIR:-$HOME/freeq-core}"
 BRANCH="${FREEQ_BRANCH:-main}"
-NODE_NAME="${FREEQ_NODE_NAME:-florida-mac}"
+DEFAULT_NODE_NAME="$(default_node_name)"
+NODE_NAME="${FREEQ_NODE_NAME:-${DEFAULT_NODE_NAME:-freeq-mac}}"
 OVERLAY_ADDRESS="${FREEQ_OVERLAY_ADDRESS:-10.66.0.2/24}"
 LISTEN_ADDR="${FREEQ_LISTEN_ADDR:-0.0.0.0:51820}"
-REMOTE_SSH="${FREEQ_REMOTE_SSH:-}"
-REMOTE_SSH_PORT="${FREEQ_REMOTE_SSH_PORT:-22}"
-SSH_NONINTERACTIVE_OPTS=(
-  -o BatchMode=yes
-  -o PreferredAuthentications=publickey
-  -o PasswordAuthentication=no
-  -o KbdInteractiveAuthentication=no
-  -o NumberOfPasswordPrompts=0
-  -o StrictHostKeyChecking=accept-new
-  -o ConnectTimeout=8
-)
 
 usage() {
   cat <<'EOF'
@@ -27,14 +21,11 @@ Environment overrides:
   FREEQ_REPO_URL       default https://github.com/freeq-io/freeq-core.git
   FREEQ_INSTALL_DIR    default ~/freeq-core
   FREEQ_BRANCH         default main
-  FREEQ_NODE_NAME      default florida-mac
+  FREEQ_NODE_NAME      default sanitized local hostname
   FREEQ_OVERLAY_ADDRESS default 10.66.0.2/24
   FREEQ_LISTEN_ADDR    default 0.0.0.0:51820
-  FREEQ_REMOTE_SSH     optional user@host for non-interactive SSH key check
-  FREEQ_REMOTE_SSH_PORT optional SSH port for Patrick's Mac, default 22
 
 Example:
-  FREEQ_REMOTE_SSH=patrickmccormick@203.0.113.10 \
   FREEQ_NODE_NAME=florida-mac \
   bash scripts/perf/freeq-perf-install-macos.sh
 EOF
@@ -47,6 +38,34 @@ fi
 
 need() {
   command -v "$1" >/dev/null 2>&1
+}
+
+existing_identity_matches() {
+  if [ ! -f "$PERF_DIR/node.env" ]; then
+    return 1
+  fi
+  # shellcheck disable=SC1090
+  . "$PERF_DIR/node.env"
+  [ "${FREEQ_NODE_NAME:-}" = "$NODE_NAME" ] && [ "${FREEQ_NODE_ADDRESS:-}" = "$OVERLAY_ADDRESS" ] && [ -f "${FREEQ_IDENTITY_KEY_PATH:-}" ]
+}
+
+write_peer_env_from_node_env() {
+  awk '/^FREEQ_NODE_NAME=|^FREEQ_NODE_ADDRESS=|^FREEQ_NODE_LISTEN=|^FREEQ_PUBLIC_KEY_B64=|^FREEQ_KEM_KEY_B64=/' \
+    "$PERF_DIR/node.env" > "$PERF_DIR/peer.env"
+}
+
+backup_perf_identity() {
+  local timestamp
+  timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  local backup_dir="$PERF_DIR/backups/$timestamp"
+  mkdir -p "$backup_dir"
+  for file in identity.key node.env peer.env node-exchange.json peer-snippet.toml freeq.toml; do
+    if [ -e "$PERF_DIR/$file" ]; then
+      mv "$PERF_DIR/$file" "$backup_dir/$file"
+    fi
+  done
+  echo "Backed up existing perf identity/config files to:"
+  echo "  $backup_dir"
 }
 
 find_cargo() {
@@ -109,7 +128,7 @@ fi
 cd "$INSTALL_DIR"
 
 echo "Running local preflight checks..."
-FREEQ_REMOTE_SSH="$REMOTE_SSH" FREEQ_REMOTE_SSH_PORT="$REMOTE_SSH_PORT" scripts/perf/freeq-perf-preflight-macos.sh || {
+scripts/perf/freeq-perf-preflight-macos.sh || {
   echo
   echo "Preflight found an issue. You can still inspect the log under ~/.freeq/perf,"
   echo "fix the listed item, and rerun this installer."
@@ -122,12 +141,25 @@ echo "Building FreeQ release binaries..."
 PERF_DIR="$HOME/.freeq/perf"
 mkdir -p "$PERF_DIR"
 
-echo "Generating local perf identity bundle..."
-target/release/freeq-perf-identity \
-  --node-name "$NODE_NAME" \
-  --overlay-address "$OVERLAY_ADDRESS" \
-  --listen "$LISTEN_ADDR" \
-  --output-dir "$PERF_DIR"
+if existing_identity_matches; then
+  echo "Existing matching perf identity found; preserving:"
+  echo "  $PERF_DIR/node.env"
+  if [ ! -f "$PERF_DIR/peer.env" ]; then
+    write_peer_env_from_node_env
+    echo "Created public exchange file:"
+    echo "  $PERF_DIR/peer.env"
+  fi
+else
+  if [ -e "$PERF_DIR/identity.key" ] || [ -e "$PERF_DIR/node.env" ] || [ -e "$PERF_DIR/peer.env" ] || [ -e "$PERF_DIR/node-exchange.json" ] || [ -e "$PERF_DIR/peer-snippet.toml" ]; then
+    backup_perf_identity
+  fi
+  echo "Generating local perf identity bundle..."
+  target/release/freeq-perf-identity \
+    --node-name "$NODE_NAME" \
+    --overlay-address "$OVERLAY_ADDRESS" \
+    --listen "$LISTEN_ADDR" \
+    --output-dir "$PERF_DIR"
+fi
 
 cat > "$PERF_DIR/install-summary.txt" <<EOF
 FreeQ perf install complete.
@@ -137,8 +169,14 @@ Node name: $NODE_NAME
 Overlay address: $OVERLAY_ADDRESS
 Listen: $LISTEN_ADDR
 
-Send this file to Patrick over a trusted channel:
+Send this file to the other tester over a trusted channel:
+  $PERF_DIR/peer.env
+
+Keep this file local:
   $PERF_DIR/node.env
+
+Never send this private key:
+  $PERF_DIR/identity.key
 
 Useful commands:
   cd "$INSTALL_DIR"
@@ -149,18 +187,18 @@ Useful commands:
   scripts/perf/freeq-perf-bundle-results.sh
 
 David next steps:
-  1. Send Patrick this file:
-     $PERF_DIR/node.env
-  2. Save Patrick's node.env as:
-     $HOME/Downloads/patrick-node.env
-  3. Ask Patrick for his reachable host/IP and run:
+  1. Send Patrick:
+     $PERF_DIR/peer.env
+  2. Save Patrick's peer.env as:
+     $HOME/Downloads/patrick-peer.env
+  3. Ask Patrick for his reachable UDP host/IP and run:
      cd "$INSTALL_DIR"
      scripts/perf/freeq-perf-render-config.sh \\
        --local-env "$PERF_DIR/node.env" \\
-       --peer-env "$HOME/Downloads/patrick-node.env" \\
-       --peer-endpoint PATRICK_HOST_OR_IP:51820
+       --peer-env "$HOME/Downloads/patrick-peer.env" \\
+       --peer-endpoint ACTUAL_PATRICK_HOST_OR_IP:51820
   4. Start FreeQ:
-     scripts/perf/freeq-perf-start-macos.sh --peer-env "$HOME/Downloads/patrick-node.env"
+     scripts/perf/freeq-perf-start-macos.sh --peer-env "$HOME/Downloads/patrick-peer.env"
   5. Run the overlay leg:
      scripts/perf/freeq-perf-run.sh \\
        --mode freeq \\
@@ -170,15 +208,6 @@ David next steps:
   6. Bundle results:
      scripts/perf/freeq-perf-bundle-results.sh david-to-patrick
 EOF
-
-if [ -n "$REMOTE_SSH" ]; then
-  echo "Testing SSH reachability to $REMOTE_SSH on port $REMOTE_SSH_PORT..."
-  if ssh -p "$REMOTE_SSH_PORT" "${SSH_NONINTERACTIVE_OPTS[@]}" "$REMOTE_SSH" 'echo freeq-ssh-ok'; then
-    echo "SSH check succeeded."
-  else
-    echo "SSH check failed. This is not fatal; verify hostname, user, firewall, Remote Login, and key-based auth."
-  fi
-fi
 
 echo
 cat "$PERF_DIR/install-summary.txt"

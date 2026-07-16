@@ -25,14 +25,13 @@ GitHub. It clones or updates the repo for him:
 ```bash
 FREEQ_NODE_NAME=david-florida-mac \
 FREEQ_OVERLAY_ADDRESS=10.66.0.2/24 \
-FREEQ_REMOTE_SSH=patrickmccormick@REPLACE_WITH_PATRICK_HOST \
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/perf/freeq-perf-install-macos.sh)"
 ```
 
 Send this file back to Patrick over a trusted channel:
 
 ```text
-~/.freeq/perf/node.env
+~/.freeq/perf/peer.env
 ```
 
 ## Patrick Mac Setup
@@ -50,11 +49,12 @@ target/release/freeq-perf-identity \
   --output-dir ~/.freeq/perf
 ```
 
-Send Patrick's `~/.freeq/perf/node.env` to the Florida tester.
+Send Patrick's `~/.freeq/perf/peer.env` to the Florida tester.
 
 ## Render Configs
 
-Each side renders a config using the other side's `node.env` and reachable UDP
+Each side renders a config using the local `node.env`, the other side's
+`peer.env`, and the other side's reachable UDP
 endpoint.
 
 On the Florida Mac:
@@ -63,8 +63,8 @@ On the Florida Mac:
 cd ~/freeq-core
 scripts/perf/freeq-perf-render-config.sh \
   --local-env ~/.freeq/perf/node.env \
-  --peer-env ~/Downloads/patrick-node.env \
-  --peer-endpoint REPLACE_WITH_PATRICK_HOST_OR_IP:51820
+  --peer-env ~/Downloads/patrick-peer.env \
+  --peer-endpoint ACTUAL_PATRICK_HOST_OR_IP:51820
 ```
 
 On Patrick's Mac:
@@ -73,8 +73,8 @@ On Patrick's Mac:
 cd /Users/patrickmccormick/Documents/FreeQ/freeq-core
 scripts/perf/freeq-perf-render-config.sh \
   --local-env ~/.freeq/perf/node.env \
-  --peer-env ~/Downloads/florida-node.env \
-  --peer-endpoint REPLACE_WITH_FLORIDA_HOST_OR_IP:51820
+  --peer-env ~/Downloads/florida-peer.env \
+  --peer-endpoint ACTUAL_FLORIDA_HOST_OR_IP:51820
 ```
 
 ## Start FreeQ
@@ -83,7 +83,7 @@ Both Macs need UDP `51820` reachable, or a different shared port if configured.
 For the first test, run in foreground so logs are visible:
 
 ```bash
-scripts/perf/freeq-perf-start-macos.sh --peer-env ~/Downloads/peer-node.env
+scripts/perf/freeq-perf-start-macos.sh --peer-env ~/Downloads/peer.env
 ```
 
 ## Run Direct Baseline
@@ -100,9 +100,9 @@ Then on the Florida Mac:
 cd ~/freeq-core
 scripts/perf/freeq-perf-run.sh \
   --mode direct \
-  --target REPLACE_WITH_PATRICK_HOST_OR_IP \
+  --target ACTUAL_PATRICK_HOST_OR_IP \
   --ssh-user patrickmccormick \
-  --ssh-port REPLACE_WITH_PATRICK_SSH_PORT \
+  --ssh-port ACTUAL_PATRICK_SSH_PORT \
   --label florida-to-patrick-direct
 ```
 

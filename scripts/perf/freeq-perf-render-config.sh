@@ -8,17 +8,17 @@ OUTPUT_CONFIG="${FREEQ_CONFIG_OUT:-$HOME/.freeq/perf/freeq.toml}"
 
 usage() {
   cat <<'EOF'
-Render a two-node freeq.toml from local and peer perf node.env files.
+Render a two-node freeq.toml from local node.env and peer peer.env files.
 
 Example:
   scripts/perf/freeq-perf-render-config.sh \
     --local-env ~/.freeq/perf/node.env \
-    --peer-env ~/Downloads/patrick-node.env \
+    --peer-env ~/Downloads/patrick-peer.env \
     --peer-endpoint 203.0.113.10:51820
 
 Options:
   --local-env PATH       local node.env from freeq-perf-identity
-  --peer-env PATH        peer node.env from the other tester
+  --peer-env PATH        peer.env from the other tester
   --peer-endpoint HOST:PORT reachable UDP endpoint for the peer
   --output PATH          output freeq.toml path
 EOF
@@ -35,10 +35,32 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+validate_endpoint() {
+  local endpoint="$1"
+  case "$endpoint" in
+    *REPLACE*|*PLACEHOLDER*|*HOST_OR_IP*|*ACTUAL_*|*PATRICK_HOST*|*FLORIDA_HOST*|*YOUR_HOST*|*PEER_HOST*)
+      echo "Refusing placeholder peer endpoint: $endpoint" >&2
+      echo "Use a real reachable host or IP, for example: 203.0.113.10:51820" >&2
+      exit 1
+      ;;
+  esac
+  if [[ "$endpoint" != *:* ]]; then
+    echo "--peer-endpoint must be HOST:PORT, got: $endpoint" >&2
+    exit 1
+  fi
+  host="${endpoint%:*}"
+  port="${endpoint##*:}"
+  if [ -z "$host" ] || [ -z "$port" ] || ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+    echo "--peer-endpoint must be HOST:PORT with port 1-65535, got: $endpoint" >&2
+    exit 1
+  fi
+}
+
 if [ -z "$LOCAL_ENV" ] || [ -z "$PEER_ENV" ] || [ -z "$PEER_ENDPOINT" ]; then
   usage
   exit 1
 fi
+validate_endpoint "$PEER_ENDPOINT"
 
 if [ ! -f "$LOCAL_ENV" ]; then
   echo "Missing local env file: $LOCAL_ENV" >&2
@@ -55,6 +77,11 @@ LOCAL_NODE_NAME="$FREEQ_NODE_NAME"
 LOCAL_NODE_ADDRESS="$FREEQ_NODE_ADDRESS"
 LOCAL_NODE_LISTEN="$FREEQ_NODE_LISTEN"
 LOCAL_IDENTITY_KEY_PATH="$FREEQ_IDENTITY_KEY_PATH"
+if [ ! -f "$LOCAL_IDENTITY_KEY_PATH" ]; then
+  echo "Missing local identity key: $LOCAL_IDENTITY_KEY_PATH" >&2
+  echo "Did you accidentally pass a peer.env as --local-env?" >&2
+  exit 1
+fi
 
 # shellcheck disable=SC1090
 . "$PEER_ENV"
@@ -63,6 +90,17 @@ PEER_NODE_ADDRESS="$FREEQ_NODE_ADDRESS"
 PEER_PUBLIC_KEY_B64="$FREEQ_PUBLIC_KEY_B64"
 PEER_KEM_KEY_B64="$FREEQ_KEM_KEY_B64"
 PEER_ALLOWED_IP="${PEER_NODE_ADDRESS%%/*}/32"
+
+if [ "$LOCAL_NODE_NAME" = "$PEER_NODE_NAME" ]; then
+  echo "Local and peer env files both describe node '$LOCAL_NODE_NAME'." >&2
+  echo "Use your own ~/.freeq/perf/node.env for --local-env and the other tester's peer.env for --peer-env." >&2
+  exit 1
+fi
+if [ "$LOCAL_NODE_ADDRESS" = "$PEER_NODE_ADDRESS" ]; then
+  echo "Local and peer env files both use overlay address '$LOCAL_NODE_ADDRESS'." >&2
+  echo "Each tester needs a unique overlay address, such as 10.66.0.1/24 and 10.66.0.2/24." >&2
+  exit 1
+fi
 
 mkdir -p "$(dirname "$OUTPUT_CONFIG")"
 cat > "$OUTPUT_CONFIG" <<EOF
