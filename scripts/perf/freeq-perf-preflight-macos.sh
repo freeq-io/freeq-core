@@ -115,11 +115,12 @@ if need brew; then
     if brew list "$pkg" >/dev/null 2>&1; then
       pass "Homebrew package installed: $pkg"
     else
-      warn "Homebrew package missing: $pkg. Installer can add it with: brew install $pkg"
+      warn "Homebrew package missing: $pkg. Install with: brew install $pkg"
     fi
   done
 else
-  warn "Homebrew missing. iperf3/jq will not be auto-installed."
+  warn "Homebrew missing. Install with: /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+  warn "After Homebrew is installed, optional benchmark tools can be installed with: brew install iperf3 jq"
 fi
 
 if [ -n "$REMOTE_SSH" ]; then

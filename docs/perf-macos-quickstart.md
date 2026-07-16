@@ -37,6 +37,10 @@ setup folder:
 Edit `~/FreeQ/freeq-setup.conf` if you need to override the generated node
 name, overlay address, listen address, peer endpoint, or peer SSH settings.
 
+If a dependency is missing, the installer prints the install command and may ask
+whether to run it. Answer `y` to let setup continue, or `n` to install it
+yourself and rerun the setup script later.
+
 ## Step 2: Exchange Peer Files
 
 Send the `.env` file from this folder to the other tester:

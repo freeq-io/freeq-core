@@ -69,6 +69,27 @@ need() {
   command -v "$1" >/dev/null 2>&1
 }
 
+ask_yes_no() {
+  local prompt="$1"
+  local default="${2:-no}"
+  local answer
+  if [ "${FREEQ_ASSUME_DEFAULTS:-}" = "1" ] || [ ! -t 0 ]; then
+    return 1
+  fi
+  if [ "$default" = "yes" ]; then
+    printf '%s [Y/n]: ' "$prompt" >&2
+  else
+    printf '%s [y/N]: ' "$prompt" >&2
+  fi
+  IFS= read -r answer || answer=""
+  case "$answer" in
+    y|Y|yes|YES) return 0 ;;
+    n|N|no|NO) return 1 ;;
+    "") [ "$default" = "yes" ] ;;
+    *) return 1 ;;
+  esac
+}
+
 existing_identity_matches() {
   if [ ! -f "$PERF_DIR/node.env" ]; then
     return 1
@@ -128,6 +149,20 @@ run_guided_setup() {
     PEER_SSH_PORT="$(prompt_value "Peer SSH port for optional benchmarks" "$PEER_SSH_PORT")"
   fi
   echo
+}
+
+maybe_prompt_peer_endpoint() {
+  if [ -n "$PEER_ENDPOINT" ] || [ "${FREEQ_ASSUME_DEFAULTS:-}" = "1" ] || [ ! -t 0 ]; then
+    return 0
+  fi
+  local peer_count
+  peer_count="$(count_received_peer_envs)"
+  if [ "$peer_count" -eq 1 ]; then
+    echo "A peer file is present, but FREEQ_PEER_ENDPOINT is not set."
+    echo "Enter the peer's reachable UDP endpoint, for example host.example.com:51820."
+    PEER_ENDPOINT="$(prompt_value "Peer reachable UDP endpoint" "$PEER_ENDPOINT")"
+    write_config
+  fi
 }
 
 write_config() {
@@ -240,6 +275,67 @@ find_cargo() {
   return 1
 }
 
+install_xcode_tools() {
+  echo "Command to install Apple command line tools:"
+  echo "  xcode-select --install"
+  if ask_yes_no "Open the Apple command line tools installer now?"; then
+    xcode-select --install || true
+    echo "After the Apple installer finishes, rerun this setup script."
+  fi
+}
+
+install_rust() {
+  echo "Command to install Rust:"
+  echo "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+  if ask_yes_no "Run the Rust installer now?"; then
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    if [ -f "$HOME/.cargo/env" ]; then
+      # shellcheck disable=SC1090
+      . "$HOME/.cargo/env"
+    fi
+  fi
+}
+
+install_homebrew() {
+  echo "Command to install Homebrew:"
+  echo '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+  if ask_yes_no "Run the Homebrew installer now?"; then
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    if [ -x /opt/homebrew/bin/brew ]; then
+      eval "$(/opt/homebrew/bin/brew shellenv)"
+    elif [ -x /usr/local/bin/brew ]; then
+      eval "$(/usr/local/bin/brew shellenv)"
+    fi
+  fi
+}
+
+ensure_homebrew_packages() {
+  if ! need brew; then
+    echo "Homebrew is not installed."
+    echo "Homebrew is optional for setup, but recommended for iperf3/jq benchmark tooling."
+    install_homebrew
+  fi
+
+  if need brew; then
+    for pkg in iperf3 jq; do
+      if brew list "$pkg" >/dev/null 2>&1; then
+        echo "Homebrew package installed: $pkg"
+      else
+        echo "Missing optional Homebrew package: $pkg"
+        echo "Command to install it:"
+        echo "  brew install $pkg"
+        if ask_yes_no "Install $pkg now?"; then
+          brew install "$pkg"
+        fi
+      fi
+    done
+  else
+    echo "Skipping optional Homebrew packages. You can install them later with:"
+    echo '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+    echo "  brew install iperf3 jq"
+  fi
+}
+
 run_guided_setup
 
 echo "== FreeQ macOS setup =="
@@ -253,28 +349,25 @@ echo
 if ! need git; then
   echo "git is required. Install Xcode command line tools first:"
   echo "  xcode-select --install"
-  exit 1
+  install_xcode_tools
+  if ! need git; then
+    exit 1
+  fi
 fi
 
 CARGO_BIN="$(find_cargo || true)"
 if [ -z "$CARGO_BIN" ]; then
   echo "Rust/cargo is required. Recommended install:"
   echo "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
-  echo "Then open a new terminal and rerun this script."
-  exit 1
+  install_rust
+  CARGO_BIN="$(find_cargo || true)"
+  if [ -z "$CARGO_BIN" ]; then
+    echo "Then open a new terminal and rerun this setup script."
+    exit 1
+  fi
 fi
 
-if need brew; then
-  for pkg in iperf3 jq; do
-    if ! brew list "$pkg" >/dev/null 2>&1; then
-      echo "Installing Homebrew package: $pkg"
-      brew install "$pkg"
-    fi
-  done
-else
-  echo "Homebrew not found. iperf3/jq will not be auto-installed."
-  echo "Install Homebrew later if direct throughput tests need iperf3."
-fi
+ensure_homebrew_packages
 
 if [ -d "$INSTALL_DIR/.git" ]; then
   echo "Updating existing checkout..."
@@ -320,6 +413,7 @@ else
     --output-dir "$PERF_DIR"
 fi
 publish_visible_exchange
+maybe_prompt_peer_endpoint
 
 cat > "$PERF_DIR/install-summary.txt" <<EOF
 FreeQ setup complete.
