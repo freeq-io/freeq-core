@@ -138,6 +138,34 @@ scripts/setup/freeq-connect-macos.sh
 
 The connect script validates the peer file, renders the config, starts `freeqd`, and configures the Mac `utun` interface.
 
+For this Patrick/David field exercise, use the role-specific helpers instead:
+
+Patrick:
+
+```bash
+cd ~/freeq-core
+scripts/field/freeq-patrick-start-for-david-macos.sh
+```
+
+David:
+
+```bash
+cd ~/freeq-core
+scripts/field/freeq-david-connect-to-patrick-macos.sh
+```
+
+These helpers still use the same generic setup engine, but they make the expected file names obvious:
+
+```text
+Patrick puts David's file here:
+  ~/FreeQ/02-put-peer-file-here/david-florida-mac-peer.env
+
+David puts Patrick's file here:
+  ~/FreeQ/02-put-peer-file-here/patrick-mac-peer.env
+```
+
+If a helper cannot find the expected peer file, it prints the exact visible folder to use and exits before starting anything.
+
 If you need to run the lower-level steps manually:
 
 ```bash
@@ -191,6 +219,12 @@ scripts/setup/freeq-start-macos.sh
 ```
 
 Direct SSH benchmarks can be tested later, after the FreeQ overlay is working.
+
+## Current Cloaking Boundary
+
+The current field scripts start the existing direct-QUIC daemon path. FreeQ still performs peer authentication before a tunnel is trusted, and unauthenticated FreeQ-layer traffic is silently dropped, but full transport invisibility against random UDP or generic QUIC probes requires the pre-QUIC UDP admission gate planned in the strict cloaking workstream.
+
+Until that gate is implemented, do not describe this field tunnel as fully transport-cloaked. It is a functional two-node FreeQ tunnel bring-up path for Patrick and David.
 
 ## What To Send
 
