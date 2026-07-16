@@ -2,9 +2,9 @@
 set -euo pipefail
 
 TARGET_HOST=""
-VISIBLE_DIR="${FREEQ_PERF_VISIBLE_DIR:-$HOME/FreeQ-Perf}"
-CONFIG_FILE="${FREEQ_PERF_CONFIG:-$VISIBLE_DIR/freeq-perf.conf}"
-RECEIVE_DIR="$VISIBLE_DIR/02-put-peer-file-here"
+SETUP_DIR="${FREEQ_SETUP_DIR:-$HOME/FreeQ}"
+CONFIG_FILE="${FREEQ_SETUP_CONFIG:-$SETUP_DIR/freeq-setup.conf}"
+RECEIVE_DIR="$SETUP_DIR/02-put-peer-file-here"
 
 if [ -f "$CONFIG_FILE" ]; then
   # shellcheck disable=SC1090

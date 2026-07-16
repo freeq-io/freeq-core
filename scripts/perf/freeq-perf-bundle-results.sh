@@ -4,7 +4,7 @@ set -euo pipefail
 PERF_DIR="${FREEQ_PERF_DIR:-$HOME/.freeq/perf}"
 RESULT_ROOT="${FREEQ_PERF_RESULT_ROOT:-perf-results}"
 LABEL="${1:-$(date -u +%Y%m%dT%H%M%SZ)}"
-OUT_DIR="${FREEQ_PERF_BUNDLE_DIR:-$HOME/FreeQ-Perf/03-results}"
+OUT_DIR="${FREEQ_PERF_BUNDLE_DIR:-${FREEQ_SETUP_DIR:-$HOME/FreeQ}/03-perf-results}"
 mkdir -p "$OUT_DIR"
 ARCHIVE="$OUT_DIR/freeq-perf-results-$LABEL.tar.gz"
 TMP_DIR="$(mktemp -d -t freeq-perf-bundle.XXXXXX)"

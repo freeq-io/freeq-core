@@ -18,22 +18,23 @@ Then open a new Terminal window.
 ## Step 1: Install
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/perf/freeq-perf-install-macos.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/setup/freeq-setup-macos.sh)"
 ```
 
-The installer derives the local node name from the Mac hostname and writes a
-visible setup folder:
+The installer asks a few setup questions. Press Return to accept the defaults.
+The local node name defaults to the Mac hostname. The installer writes a visible
+setup folder:
 
 ```text
-~/FreeQ-Perf
-~/FreeQ-Perf/freeq-perf.conf
-~/FreeQ-Perf/01-send-this-file
-~/FreeQ-Perf/02-put-peer-file-here
-~/FreeQ-Perf/03-results
-~/FreeQ-Perf/04-logs
+~/FreeQ
+~/FreeQ/freeq-setup.conf
+~/FreeQ/01-send-this-file
+~/FreeQ/02-put-peer-file-here
+~/FreeQ/03-perf-results
+~/FreeQ/04-logs
 ```
 
-Edit `~/FreeQ-Perf/freeq-perf.conf` if you need to override the generated node
+Edit `~/FreeQ/freeq-setup.conf` if you need to override the generated node
 name, overlay address, listen address, peer endpoint, or peer SSH settings.
 
 ## Step 2: Exchange Peer Files
@@ -41,13 +42,13 @@ name, overlay address, listen address, peer endpoint, or peer SSH settings.
 Send the `.env` file from this folder to the other tester:
 
 ```text
-~/FreeQ-Perf/01-send-this-file
+~/FreeQ/01-send-this-file
 ```
 
 When the other tester sends their `.env` file, put it here:
 
 ```text
-~/FreeQ-Perf/02-put-peer-file-here
+~/FreeQ/02-put-peer-file-here
 ```
 
 Do not send `identity.key`. You do not need to browse hidden folders.
@@ -57,7 +58,7 @@ Do not send `identity.key`. You do not need to browse hidden folders.
 Open:
 
 ```text
-~/FreeQ-Perf/freeq-perf.conf
+~/FreeQ/freeq-setup.conf
 ```
 
 Set:
@@ -75,10 +76,20 @@ FREEQ_PEER_SSH_PORT='22'
 
 ## Step 4: Render And Start
 
+After the peer file is in the drop folder and `FREEQ_PEER_ENDPOINT` is set, you
+can rerun the setup script and answer yes when it offers to render and start:
+
 ```bash
 cd ~/freeq-core
-scripts/perf/freeq-perf-render-config.sh
-scripts/perf/freeq-perf-start-macos.sh
+scripts/setup/freeq-setup-macos.sh
+```
+
+Or run the two setup commands directly:
+
+```bash
+cd ~/freeq-core
+scripts/setup/freeq-render-config.sh
+scripts/setup/freeq-start-macos.sh
 ```
 
 Leave that Terminal window open.
@@ -95,7 +106,7 @@ scripts/perf/freeq-perf-run.sh --mode freeq
 ```
 
 Direct baseline, after `FREEQ_PEER_ENDPOINT`, `FREEQ_PEER_SSH_USER`, and
-`FREEQ_PEER_SSH_PORT` are set in `freeq-perf.conf`:
+`FREEQ_PEER_SSH_PORT` are set in `freeq-setup.conf`:
 
 ```bash
 cd ~/freeq-core
@@ -112,7 +123,7 @@ scripts/perf/freeq-perf-bundle-results.sh
 The archive will be created in:
 
 ```text
-~/FreeQ-Perf/03-results
+~/FreeQ/03-perf-results
 ```
 
 ## If Something Fails
@@ -127,5 +138,5 @@ scripts/perf/freeq-perf-preflight-macos.sh
 Logs are written here:
 
 ```text
-~/FreeQ-Perf/04-logs
+~/FreeQ/04-logs
 ```

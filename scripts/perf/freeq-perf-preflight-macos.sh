@@ -4,7 +4,7 @@ set -euo pipefail
 REMOTE_SSH="${FREEQ_REMOTE_SSH:-}"
 REMOTE_SSH_PORT="${FREEQ_REMOTE_SSH_PORT:-22}"
 REMOTE_UDP="${FREEQ_REMOTE_UDP:-}"
-LOG_DIR="${FREEQ_PERF_LOG_DIR:-${FREEQ_PERF_DIR:-${FREEQ_PERF_VISIBLE_DIR:-$HOME/FreeQ-Perf}/04-logs}}"
+LOG_DIR="${FREEQ_LOG_DIR:-${FREEQ_PERF_LOG_DIR:-${FREEQ_SETUP_DIR:-$HOME/FreeQ}/04-logs}}"
 SSH_NONINTERACTIVE_OPTS=(
   -o BatchMode=yes
   -o PreferredAuthentications=publickey
@@ -19,13 +19,13 @@ LOG_FILE="$LOG_DIR/preflight-$(date -u +%Y%m%dT%H%M%SZ).log"
 
 usage() {
   cat <<'EOF'
-Run macOS preflight checks for a FreeQ perf test.
+Run macOS preflight checks for a FreeQ setup.
 
 Environment:
   FREEQ_REMOTE_SSH=user@host       optional non-interactive SSH key target to test
   FREEQ_REMOTE_SSH_PORT=PORT       optional SSH port, default 22
   FREEQ_REMOTE_UDP=host:port       optional UDP target to probe best-effort
-  FREEQ_PERF_LOG_DIR=PATH          default ~/FreeQ-Perf/04-logs
+  FREEQ_LOG_DIR=PATH               default ~/FreeQ/04-logs
 
 Examples:
   FREEQ_REMOTE_SSH=user@example.com scripts/perf/freeq-perf-preflight-macos.sh
@@ -86,7 +86,7 @@ find_cargo() {
 
 FAILED=0
 
-log "== FreeQ macOS perf preflight =="
+log "== FreeQ macOS setup preflight =="
 log "Started: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 log "Log: $LOG_FILE"
 log ""

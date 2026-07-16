@@ -7,7 +7,7 @@ use clap::Parser;
 
 #[derive(Debug, Parser)]
 #[command(name = "freeq-perf-identity")]
-#[command(about = "Generate identity/key exchange files for a FreeQ perf test node")]
+#[command(about = "Generate identity/key exchange files for a FreeQ setup node")]
 struct Args {
     #[arg(long)]
     node_name: String,
@@ -108,7 +108,7 @@ fn main() -> Result<()> {
     fs::write(args.output_dir.join("peer.env"), peer_env_file)
         .context("failed to write peer.env")?;
 
-    println!("FreeQ perf identity generated:");
+    println!("FreeQ setup identity generated:");
     println!("  {}", args.output_dir.join("node-exchange.json").display());
     println!("  {}", args.output_dir.join("node.env").display());
     println!("  {}", args.output_dir.join("peer.env").display());

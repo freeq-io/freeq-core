@@ -1,6 +1,6 @@
 [package]
 name = "freeq-perf-identity"
-description = "Generate local FreeQ perf-test identity exchange files"
+description = "Generate local FreeQ setup identity exchange files"
 
 version.workspace = true
 edition.workspace = true

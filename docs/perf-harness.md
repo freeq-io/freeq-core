@@ -22,31 +22,34 @@ docs/perf-macos-quickstart.md
 The setup is profile-driven. Machine-specific values live in:
 
 ```text
-~/FreeQ-Perf/freeq-perf.conf
+~/FreeQ/freeq-setup.conf
 ```
 
 The installer derives `FREEQ_NODE_NAME` from the local hostname unless the
 profile overrides it. The received peer file goes in:
 
 ```text
-~/FreeQ-Perf/02-put-peer-file-here
+~/FreeQ/02-put-peer-file-here
 ```
 
 The file to send to the other tester is created in:
 
 ```text
-~/FreeQ-Perf/01-send-this-file
+~/FreeQ/01-send-this-file
 ```
 
 ## Render Configs
 
-After `FREEQ_PEER_ENDPOINT` is set in `~/FreeQ-Perf/freeq-perf.conf` and the
+After `FREEQ_PEER_ENDPOINT` is set in `~/FreeQ/freeq-setup.conf` and the
 peer `.env` file is in the visible drop folder, run:
 
 ```bash
 cd ~/freeq-core
-scripts/perf/freeq-perf-render-config.sh
+scripts/setup/freeq-render-config.sh
 ```
+
+The setup script can also be rerun at this point; it will detect the peer file
+and endpoint, then offer to render and start FreeQ.
 
 ## Start FreeQ
 
@@ -54,7 +57,7 @@ Both Macs need UDP `51820` reachable, or a different listen port if configured.
 
 ```bash
 cd ~/freeq-core
-scripts/perf/freeq-perf-start-macos.sh
+scripts/setup/freeq-start-macos.sh
 ```
 
 ## Run Direct Baseline
@@ -66,7 +69,7 @@ iperf3 -s
 ```
 
 Then on the sending Mac, after `FREEQ_PEER_ENDPOINT`, `FREEQ_PEER_SSH_USER`, and
-`FREEQ_PEER_SSH_PORT` are set in `~/FreeQ-Perf/freeq-perf.conf`:
+`FREEQ_PEER_SSH_PORT` are set in `~/FreeQ/freeq-setup.conf`:
 
 ```bash
 cd ~/freeq-core
