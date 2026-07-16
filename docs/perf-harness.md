@@ -52,9 +52,9 @@ scripts/setup/freeq-render-config.sh
 ```
 
 The setup script can also be rerun at this point; it will detect the peer file
-and then offer to render and start FreeQ. If the peer file is older or does not
-include `FREEQ_PUBLIC_ENDPOINT`, set `FREEQ_PEER_ENDPOINT` in
-`~/FreeQ/freeq-setup.conf` as a manual override.
+and then offer to render and start FreeQ. If the peer file does not include
+`FREEQ_PUBLIC_ENDPOINT`, ask the other tester to rerun setup with their
+reachable UDP endpoint and resend the file.
 
 ## Start FreeQ
 
@@ -74,8 +74,8 @@ iperf3 -s
 ```
 
 Then on the sending Mac, after the peer endpoint is available from the peer file
-or `FREEQ_PEER_ENDPOINT`, and `FREEQ_PEER_SSH_USER` and `FREEQ_PEER_SSH_PORT`
-are set in `~/FreeQ/freeq-setup.conf`:
+and `FREEQ_PEER_SSH_USER` and `FREEQ_PEER_SSH_PORT` are set in
+`~/FreeQ/freeq-setup.conf`:
 
 ```bash
 cd ~/freeq-core

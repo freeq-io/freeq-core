@@ -63,24 +63,12 @@ Do not send `identity.key`. You do not need to browse hidden folders.
 The peer name comes from the `.env` file you receive. You do not need to know
 or type it.
 
-If each tester entered this Mac's reachable UDP endpoint during setup, the
-endpoint is already inside the `.env` file they sent you. No extra endpoint step
-is needed.
+Each tester should enter this Mac's reachable UDP endpoint during setup. That
+value is written into the `.env` file they send you as `FREEQ_PUBLIC_ENDPOINT`.
+No peer endpoint is typed on the receiving Mac.
 
-If the sender left that blank, open:
-
-```text
-~/FreeQ/freeq-setup.conf
-```
-
-Set:
-
-```bash
-FREEQ_PEER_ENDPOINT='PEER_HOST_OR_IP:51820'
-```
-
-This is an override for older or incomplete peer files. New setup files should
-usually carry `FREEQ_PUBLIC_ENDPOINT` automatically.
+If the sender left `FREEQ_PUBLIC_ENDPOINT` blank, ask them to rerun setup with
+their reachable UDP endpoint and resend their `.env` file.
 
 If direct SSH benchmarks are needed, also set:
 
@@ -120,9 +108,8 @@ cd ~/freeq-core
 scripts/perf/freeq-perf-run.sh --mode freeq
 ```
 
-Direct baseline, after the peer endpoint is available from the peer file or
-`FREEQ_PEER_ENDPOINT`, and `FREEQ_PEER_SSH_USER` and `FREEQ_PEER_SSH_PORT` are
-set in `freeq-setup.conf`:
+Direct baseline, after the peer endpoint is available from the peer file and
+`FREEQ_PEER_SSH_USER` and `FREEQ_PEER_SSH_PORT` are set in `freeq-setup.conf`:
 
 ```bash
 cd ~/freeq-core

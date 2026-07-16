@@ -13,8 +13,6 @@ if [ -f "$CONFIG_FILE" ]; then
   . "$CONFIG_FILE"
 fi
 
-PEER_ENDPOINT="${FREEQ_PEER_ENDPOINT:-}"
-
 usage() {
   cat <<'EOF'
 Render a two-node freeq.toml from local node.env and peer peer.env files.
@@ -25,7 +23,6 @@ Example:
 Options:
   --local-env PATH       internal local identity file; normally omit
   --peer-env PATH        peer.env from the other tester; auto-detected from ~/FreeQ if omitted
-  --peer-endpoint HOST:PORT optional peer endpoint override; normally read from peer.env
   --output PATH          output freeq.toml path
 EOF
 }
@@ -34,7 +31,6 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --local-env) LOCAL_ENV="$2"; shift 2 ;;
     --peer-env) PEER_ENV="$2"; shift 2 ;;
-    --peer-endpoint) PEER_ENDPOINT="$2"; shift 2 ;;
     --output) OUTPUT_CONFIG="$2"; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
@@ -51,13 +47,13 @@ validate_endpoint() {
       ;;
   esac
   if [[ "$endpoint" != *:* ]]; then
-    echo "--peer-endpoint must be HOST:PORT, got: $endpoint" >&2
+    echo "FREEQ_PUBLIC_ENDPOINT must be HOST:PORT, got: $endpoint" >&2
     exit 1
   fi
   host="${endpoint%:*}"
   port="${endpoint##*:}"
   if [ -z "$host" ] || [ -z "$port" ] || ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
-    echo "--peer-endpoint must be HOST:PORT with port 1-65535, got: $endpoint" >&2
+    echo "FREEQ_PUBLIC_ENDPOINT must be HOST:PORT with port 1-65535, got: $endpoint" >&2
     exit 1
   fi
 }
@@ -146,20 +142,14 @@ PEER_PUBLIC_KEY_B64="$FREEQ_PUBLIC_KEY_B64"
 PEER_KEM_KEY_B64="$FREEQ_KEM_KEY_B64"
 PEER_ALLOWED_IP="${PEER_NODE_ADDRESS%%/*}/32"
 
-if [ -z "$PEER_ENDPOINT" ] && [ -n "$PEER_PUBLIC_ENDPOINT" ]; then
-  PEER_ENDPOINT="$PEER_PUBLIC_ENDPOINT"
-  echo "Using peer endpoint from peer env: $PEER_ENDPOINT"
-fi
-
-if [ -z "$PEER_ENDPOINT" ]; then
+if [ -z "$PEER_PUBLIC_ENDPOINT" ]; then
   echo "Missing peer endpoint." >&2
   echo "The peer file does not include FREEQ_PUBLIC_ENDPOINT." >&2
-  echo "Ask the other node operator for their reachable UDP endpoint, then set FREEQ_PEER_ENDPOINT in:" >&2
-  echo "  $CONFIG_FILE" >&2
-  echo "Or rerun with: --peer-endpoint HOST:PORT" >&2
+  echo "Ask the other node operator to rerun setup with their reachable UDP endpoint, then resend their peer.env file." >&2
   exit 1
 fi
-validate_endpoint "$PEER_ENDPOINT"
+echo "Using peer endpoint from peer env: $PEER_PUBLIC_ENDPOINT"
+validate_endpoint "$PEER_PUBLIC_ENDPOINT"
 
 if [ "$LOCAL_NODE_NAME" = "$PEER_NODE_NAME" ]; then
   echo "Local and peer env files both describe node '$LOCAL_NODE_NAME'." >&2
@@ -186,7 +176,7 @@ api_addr = "127.0.0.1:6789"
 
 [[peer]]
 name = "$PEER_NODE_NAME"
-endpoint = "$PEER_ENDPOINT"
+endpoint = "$PEER_PUBLIC_ENDPOINT"
 public_key = "$PEER_PUBLIC_KEY_B64"
 kem_key = "$PEER_KEM_KEY_B64"
 allowed_ips = ["$PEER_ALLOWED_IP"]

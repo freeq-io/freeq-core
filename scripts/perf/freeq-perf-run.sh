@@ -21,7 +21,6 @@ RESULT_ROOT="${FREEQ_PERF_RESULT_ROOT:-perf-results}"
 IPERF_SECONDS="${FREEQ_IPERF_SECONDS:-20}"
 SCP_MB="${FREEQ_SCP_MB:-32}"
 PEER_ENV="${FREEQ_PEER_ENV:-}"
-PEER_ENDPOINT="${FREEQ_PEER_ENDPOINT:-}"
 
 usage() {
   cat <<'EOF'
@@ -101,7 +100,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if [ -z "$PEER_ENV" ] && { [ "$MODE" != "direct" ] || { [ -z "$TARGET_HOST" ] && [ -z "$PEER_ENDPOINT" ]; }; }; then
+if [ -z "$PEER_ENV" ] && { [ "$MODE" != "direct" ] || [ -z "$TARGET_HOST" ]; }; then
   PEER_ENV="$(find_peer_env)"
 fi
 if [ -f "$PEER_ENV" ]; then
@@ -113,12 +112,9 @@ if [ -f "$PEER_ENV" ]; then
   if [ -z "$OVERLAY_HOST" ]; then
     OVERLAY_HOST="$PEER_OVERLAY_HOST"
   fi
-  if [ -z "$PEER_ENDPOINT" ] && [ -n "$PEER_PUBLIC_ENDPOINT" ]; then
-    PEER_ENDPOINT="$PEER_PUBLIC_ENDPOINT"
-  fi
 fi
-if [ -z "$TARGET_HOST" ] && [ -n "$PEER_ENDPOINT" ]; then
-  TARGET_HOST="${PEER_ENDPOINT%:*}"
+if [ -z "$TARGET_HOST" ] && [ -n "${PEER_PUBLIC_ENDPOINT:-}" ]; then
+  TARGET_HOST="${PEER_PUBLIC_ENDPOINT%:*}"
 fi
 
 if [ "$MODE" != "direct" ] && [ "$MODE" != "freeq" ] && [ "$MODE" != "both" ]; then
@@ -126,7 +122,7 @@ if [ "$MODE" != "direct" ] && [ "$MODE" != "freeq" ] && [ "$MODE" != "both" ]; t
   exit 1
 fi
 if [ "$MODE" != "freeq" ] && [ -z "$TARGET_HOST" ]; then
-  echo "--target is required for direct/both mode unless the peer file includes FREEQ_PUBLIC_ENDPOINT or FREEQ_PEER_ENDPOINT is set in $CONFIG_FILE" >&2
+  echo "--target is required for direct/both mode unless the peer file includes FREEQ_PUBLIC_ENDPOINT" >&2
   exit 1
 fi
 if [ "$MODE" != "direct" ] && [ -z "$OVERLAY_HOST" ]; then
