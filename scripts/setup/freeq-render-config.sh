@@ -80,6 +80,58 @@ if not (1 <= port_int <= 65535):
 PY
 }
 
+env_value() {
+  local file="$1"
+  local key="$2"
+  awk -v key="$key" '
+    index($0, key "=") == 1 {
+      value = substr($0, length(key) + 2)
+      if (value ~ /^'\''.*'\''$/) {
+        value = substr(value, 2, length(value) - 2)
+      }
+      print value
+      exit
+    }
+  ' "$file"
+}
+
+select_remote_peer_env() {
+  local candidates=("$@")
+  local remote_candidates=()
+  local local_name=""
+  local local_address=""
+  local path peer_name peer_address
+
+  if [ -f "$LOCAL_ENV" ]; then
+    local_name="$(env_value "$LOCAL_ENV" FREEQ_NODE_NAME)"
+    local_address="$(env_value "$LOCAL_ENV" FREEQ_NODE_ADDRESS)"
+  fi
+
+  for path in "${candidates[@]}"; do
+    peer_name="$(env_value "$path" FREEQ_NODE_NAME)"
+    peer_address="$(env_value "$path" FREEQ_NODE_ADDRESS)"
+    if { [ -n "$local_name" ] && [ "$peer_name" = "$local_name" ]; } || \
+       { [ -n "$local_address" ] && [ "$peer_address" = "$local_address" ]; }; then
+      echo "Ignoring local node peer file in receive folder: $path" >&2
+      continue
+    fi
+    remote_candidates+=("$path")
+  done
+
+  if [ "${#remote_candidates[@]}" -eq 1 ]; then
+    printf '%s\n' "${remote_candidates[0]}"
+    return 0
+  fi
+  if [ "${#remote_candidates[@]}" -gt 1 ]; then
+    echo "Found multiple remote peer env files in the visible drop folder:" >&2
+    printf '  %s\n' "${remote_candidates[@]}" >&2
+    echo "Leave only the intended peer.env in: $RECEIVE_DIR" >&2
+    exit 1
+  fi
+
+  return 1
+}
+
 find_peer_env() {
   local candidates=()
   local path
@@ -88,12 +140,11 @@ find_peer_env() {
       candidates+=("$path")
     fi
   done
-  if [ "${#candidates[@]}" -eq 1 ]; then
-    printf '%s\n' "${candidates[0]}"
+  if [ "${#candidates[@]}" -gt 0 ] && select_remote_peer_env "${candidates[@]}"; then
     return 0
   fi
   if [ "${#candidates[@]}" -gt 1 ]; then
-    echo "Found multiple peer env files in the visible drop folder:" >&2
+    echo "Found multiple peer env files in the visible drop folder, but none describe a remote peer:" >&2
     printf '  %s\n' "${candidates[@]}" >&2
     echo "Leave only the intended peer.env in: $RECEIVE_DIR" >&2
     exit 1

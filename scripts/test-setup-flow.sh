@@ -97,14 +97,17 @@ target/release/freeq-perf-identity \
   --public-endpoint peer.example.test:51820 \
   --output-dir "$TMP_ROOT/peer" >/dev/null
 cp "$TMP_ROOT/peer/peer.env" "$TMP_ROOT/setup/02-put-peer-file-here/peer-mac-peer.env"
+cp "$TMP_ROOT/local/peer.env" "$TMP_ROOT/setup/02-put-peer-file-here/local-mac-peer.env"
 scripts/setup/freeq-validate-peer-env.sh "$TMP_ROOT/setup/02-put-peer-file-here/peer-mac-peer.env" > "$TMP_ROOT/validate.out"
 assert_file_contains "$TMP_ROOT/validate.out" "Peer env is valid"
 FREEQ_SETUP_DIR="$TMP_ROOT/setup" \
 FREEQ_LOCAL_ENV="$TMP_ROOT/local/node.env" \
 FREEQ_CONFIG_OUT="$TMP_ROOT/freeq.toml" \
-scripts/setup/freeq-render-config.sh > "$TMP_ROOT/render.out"
+scripts/setup/freeq-render-config.sh > "$TMP_ROOT/render.out" 2> "$TMP_ROOT/render.err"
+assert_file_contains "$TMP_ROOT/render.err" "Ignoring local node peer file"
 assert_file_contains "$TMP_ROOT/freeq.toml" 'name = "peer-mac"'
 assert_file_contains "$TMP_ROOT/freeq.toml" 'endpoint = "peer.example.test:51820"'
+rm -f "$TMP_ROOT/setup/02-put-peer-file-here/local-mac-peer.env"
 
 echo "== setup flow: listen-only config renders without peer file =="
 FREEQ_LOCAL_ENV="$TMP_ROOT/local/node.env" \
