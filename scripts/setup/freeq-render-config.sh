@@ -61,6 +61,25 @@ validate_endpoint() {
   fi
 }
 
+validate_socket_addr() {
+  python3 - "$1" <<'PY' >/dev/null 2>&1
+import ipaddress
+import sys
+
+value = sys.argv[1]
+if value.startswith("["):
+    host, sep, port = value[1:].partition("]:")
+else:
+    host, sep, port = value.rpartition(":")
+if not host or not sep or not port.isdigit():
+    raise SystemExit(1)
+ipaddress.ip_address(host)
+port_int = int(port)
+if not (1 <= port_int <= 65535):
+    raise SystemExit(1)
+PY
+}
+
 find_peer_env() {
   local candidates=()
   local path
@@ -132,6 +151,11 @@ LOCAL_NODE_NAME="$FREEQ_NODE_NAME"
 LOCAL_NODE_ADDRESS="$FREEQ_NODE_ADDRESS"
 LOCAL_NODE_LISTEN="$FREEQ_NODE_LISTEN"
 LOCAL_IDENTITY_KEY_PATH="$FREEQ_IDENTITY_KEY_PATH"
+if ! validate_socket_addr "$LOCAL_NODE_LISTEN"; then
+  echo "Invalid local listen address in node.env: $LOCAL_NODE_LISTEN" >&2
+  echo "Use an IP:PORT bind address such as 0.0.0.0:51820." >&2
+  exit 1
+fi
 if [ ! -f "$LOCAL_IDENTITY_KEY_PATH" ]; then
   echo "Missing local identity key: $LOCAL_IDENTITY_KEY_PATH" >&2
   echo "Did you accidentally pass a peer.env as --local-env?" >&2

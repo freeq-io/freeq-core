@@ -90,6 +90,33 @@ find_peer_env() {
   exit 1
 }
 
+validate_socket_addr() {
+  python3 - "$1" <<'PY' >/dev/null 2>&1
+import ipaddress
+import sys
+
+value = sys.argv[1]
+if value.startswith("["):
+    host, sep, port = value[1:].partition("]:")
+else:
+    host, sep, port = value.rpartition(":")
+if not host or not sep or not port.isdigit():
+    raise SystemExit(1)
+ipaddress.ip_address(host)
+port_int = int(port)
+if not (1 <= port_int <= 65535):
+    raise SystemExit(1)
+PY
+}
+
+config_listen_addr() {
+  awk -F'"' '
+    /^\[node\]/ { in_node = 1; next }
+    /^\[/ { in_node = 0 }
+    in_node && /^[[:space:]]*listen[[:space:]]*=/ { print $2; exit }
+  ' "$CONFIG"
+}
+
 mkdir -p "$LOG_DIR"
 
 if [ "$(uname -s)" != "Darwin" ]; then
@@ -104,6 +131,12 @@ if grep -Eq 'REPLACE|PLACEHOLDER|HOST_OR_IP|ACTUAL_|YOUR_HOST|PEER_HOST|peer-hos
   echo "Config still contains a placeholder endpoint:" >&2
   grep -En 'endpoint *=|REPLACE|HOST_OR_IP|ACTUAL_|YOUR_HOST|PEER_HOST|peer-host|<|>' "$CONFIG" >&2 || true
   echo "Rerun scripts/setup/freeq-render-config.sh with a real peer endpoint before starting." >&2
+  exit 1
+fi
+LISTEN_VALUE="$(config_listen_addr)"
+if [ -z "$LISTEN_VALUE" ] || ! validate_socket_addr "$LISTEN_VALUE"; then
+  echo "Config contains an invalid node.listen value: ${LISTEN_VALUE:-missing}" >&2
+  echo "Rerun setup so FreeQ can use the safe default: 0.0.0.0:51820" >&2
   exit 1
 fi
 if [ ! -x "target/release/freeqd" ]; then

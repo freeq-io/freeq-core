@@ -49,6 +49,17 @@ assert_file_contains "$TMP_ROOT/dry-run.out" "Public endpoint to share: lap21.ex
 [ ! -e "$DRY_HOME/FreeQ" ] || fail "dry run created visible setup folder"
 [ ! -e "$DRY_HOME/.freeq" ] || fail "dry run created hidden internal folder"
 
+echo "== setup flow: invalid listen address resets before config =="
+BAD_LISTEN_HOME="$TMP_ROOT/bad-listen-home"
+mkdir -p "$BAD_LISTEN_HOME"
+FREEQ_ASSUME_DEFAULTS=1 \
+FREEQ_NODE_NAME=bad-listen \
+FREEQ_LISTEN_ADDR=192.168.1.1.140:51820 \
+HOME="$BAD_LISTEN_HOME" \
+scripts/setup/freeq-setup-macos.sh --dry-run > "$TMP_ROOT/bad-listen.out"
+assert_file_contains "$TMP_ROOT/bad-listen.out" "Invalid local listen address"
+assert_file_contains "$TMP_ROOT/bad-listen.out" "Listen address: 0.0.0.0:51820"
+
 echo "== setup flow: simple installer syntax and dry run =="
 bash -n scripts/install/freeq-install-macos.sh
 FREEQ_INSTALL_DIR="$TMP_ROOT/simple-install/freeq-core" \
@@ -101,6 +112,17 @@ assert_file_contains "$TMP_ROOT/listen-only.toml" 'name = "local-mac"'
 assert_file_contains "$TMP_ROOT/listen-only.toml" 'listen = "0.0.0.0:51820"'
 assert_no_match '^\[\[peer\]\]' "$TMP_ROOT/listen-only.toml"
 assert_file_contains "$TMP_ROOT/listen-only-render.out" "Rendered listen-only FreeQ config"
+
+echo "== setup flow: bad local listen fails before daemon start =="
+BAD_LOCAL_ENV="$TMP_ROOT/bad-local/node.env"
+mkdir -p "$(dirname "$BAD_LOCAL_ENV")"
+sed 's/FREEQ_NODE_LISTEN=.*/FREEQ_NODE_LISTEN='"'"'192.168.1.1.140:51820'"'"'/' "$TMP_ROOT/local/node.env" > "$BAD_LOCAL_ENV"
+if FREEQ_LOCAL_ENV="$BAD_LOCAL_ENV" \
+  FREEQ_CONFIG_OUT="$TMP_ROOT/bad-listen.toml" \
+  scripts/setup/freeq-render-config.sh --listen-only > "$TMP_ROOT/bad-listen-render.out" 2> "$TMP_ROOT/bad-listen-render.err"; then
+  fail "render accepted invalid FREEQ_NODE_LISTEN"
+fi
+assert_file_contains "$TMP_ROOT/bad-listen-render.err" "Invalid local listen address"
 
 echo "== setup flow: incomplete peer file fails clearly =="
 mkdir -p "$TMP_ROOT/bad-peer" "$TMP_ROOT/bad-setup/02-put-peer-file-here"

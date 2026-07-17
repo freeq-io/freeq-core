@@ -16,6 +16,34 @@ quote_shell() {
   printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
 }
 
+is_valid_socket_addr() {
+  python3 - "$1" <<'PY' >/dev/null 2>&1
+import ipaddress
+import sys
+
+value = sys.argv[1]
+if value.startswith("["):
+    host, sep, port = value[1:].partition("]:")
+else:
+    host, sep, port = value.rpartition(":")
+if not host or not sep or not port.isdigit():
+    raise SystemExit(1)
+ipaddress.ip_address(host)
+port_int = int(port)
+if not (1 <= port_int <= 65535):
+    raise SystemExit(1)
+PY
+}
+
+normalize_listen_addr() {
+  if is_valid_socket_addr "$LISTEN_ADDR"; then
+    return 0
+  fi
+  echo "Invalid local listen address: $LISTEN_ADDR"
+  echo "Using safe local bind default instead: 0.0.0.0:51820"
+  LISTEN_ADDR="0.0.0.0:51820"
+}
+
 REPO_URL="${FREEQ_REPO_URL:-https://github.com/freeq-io/freeq-core.git}"
 INSTALL_DIR="${FREEQ_INSTALL_DIR:-$HOME/freeq-core}"
 BRANCH="${FREEQ_BRANCH:-main}"
@@ -211,25 +239,22 @@ write_visible_readme() {
   cat > "$SETUP_DIR/README.txt" <<EOF
 FreeQ Setup
 
-This visible folder is the only folder you need to use.
+FreeQ is managed from this local setup page:
 
-1. Send this file to the other tester:
-   $SEND_DIR/$NODE_NAME-peer.env
+  http://127.0.0.1:6789/
 
-2. When the other tester sends you their peer.env file, put it here:
-   $RECEIVE_DIR
+Use that page to create or join a 15-minute invite.
 
-3. The setup reads the peer name and endpoint from that peer.env file.
-   If their file does not contain FREEQ_PUBLIC_ENDPOINT, ask them to rerun
-   setup and resend the file.
+Fallback compatibility files are kept here only for older two-node test scripts:
 
-4. Then run:
-   cd "$INSTALL_DIR"
-   scripts/setup/freeq-render-config.sh
-   scripts/setup/freeq-start-macos.sh
+  Send fallback peer file:
+    $SEND_DIR/$NODE_NAME-peer.env
 
-5. Performance result bundles will be written here:
-   $RESULTS_DIR
+  Receive fallback peer files:
+    $RECEIVE_DIR
+
+Performance result bundles will be written here:
+  $RESULTS_DIR
 
 Do not send identity.key.
 Do not use Finder to open hidden .freeq folders.
@@ -362,6 +387,7 @@ ensure_homebrew_packages() {
 }
 
 run_guided_setup
+normalize_listen_addr
 
 echo "== FreeQ macOS setup =="
 echo "Repo: $REPO_URL"
@@ -496,22 +522,16 @@ Useful commands:
   scripts/perf/freeq-perf-bundle-results.sh
 
 Next steps:
-  1. Send the other tester:
-     $SEND_DIR/$NODE_NAME-peer.env
-  2. Put the other tester's peer.env file in:
-     $RECEIVE_DIR
-  3. Render and start:
-     cd "$INSTALL_DIR"
-     scripts/setup/freeq-render-config.sh
-     scripts/setup/freeq-start-macos.sh
-     If their peer.env file has no FREEQ_PUBLIC_ENDPOINT, ask them to rerun
-     setup and resend the file.
-  4. Run the overlay leg:
-     scripts/perf/freeq-perf-run.sh \\
-       --mode freeq \\
-       --label "$NODE_NAME-to-peer-freeq"
-  5. Bundle results:
-     scripts/perf/freeq-perf-bundle-results.sh "$NODE_NAME-to-peer"
+  1. Keep this installer window open until it reports PASS or FAIL.
+  2. Use the local setup page when it opens:
+     http://127.0.0.1:6789/
+  3. Create or join a 15-minute invite from that page.
+
+Fallback compatibility files are available here:
+  Send fallback peer file:
+    $SEND_DIR/$NODE_NAME-peer.env
+  Receive fallback peer files:
+    $RECEIVE_DIR
 EOF
 
 echo
@@ -520,7 +540,7 @@ echo
 echo "A visible setup folder is ready at:"
 echo "  $SETUP_DIR"
 echo
-echo "Send this visible file:"
-echo "  $SEND_DIR/$NODE_NAME-peer.env"
+echo "After FreeQ starts, use the local setup page:"
+echo "  http://127.0.0.1:6789/"
 open "$SETUP_DIR" >/dev/null 2>&1 || true
 offer_configure_and_start
