@@ -46,8 +46,10 @@ pub struct StatusResponse {
 }
 
 /// A peer summary returned from `GET /v1/peers`.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerSummary {
+    /// Stable peer node identifier for UI display.
+    pub node_id: Option<String>,
     /// Peer name.
     pub name: String,
     /// Peer endpoint address, if known.
@@ -58,6 +60,10 @@ pub struct PeerSummary {
     pub connected: bool,
     /// Last handshake timestamp (ISO 8601), if any.
     pub last_handshake: Option<String>,
+    /// Enrollment or trust state shown by the setup UI.
+    pub trust_state: Option<String>,
+    /// Source that enrolled this peer, such as `invite`.
+    pub enrollment_source: Option<String>,
 }
 
 /// Request body for `POST /v1/peers`.
@@ -73,6 +79,77 @@ pub struct AddPeerRequest {
     pub endpoint: Option<String>,
     /// IP prefixes to route through this peer.
     pub allowed_ips: Vec<String>,
+}
+
+/// Request body for `POST /v1/invites`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InviteCreateRequest {
+    /// Human-readable peer label for the invite.
+    pub label: Option<String>,
+    /// Optional endpoint hint to include in the public invite bundle.
+    pub endpoint: Option<String>,
+    /// Optional overlay prefixes to include in the public invite bundle.
+    pub allowed_ips: Option<Vec<String>>,
+}
+
+/// Response body from `POST /v1/invites`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InviteCreateResponse {
+    /// Suggested file name for the public invite bundle.
+    pub bundle_name: String,
+    /// Public invite bundle text to send to the invitee.
+    pub bundle_text: String,
+    /// UTC expiry timestamp. Default invite lifetime is 15 minutes.
+    pub expires_at: String,
+    /// Pairing code to send out-of-band.
+    pub pairing_code_display: String,
+    /// Human-readable next step.
+    pub message: String,
+}
+
+/// Request body for `POST /v1/invites/join`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InviteJoinRequest {
+    /// Public invite bundle text received from the inviter.
+    pub bundle_text: String,
+    /// Out-of-band pairing code received separately from the bundle.
+    pub pairing_code: String,
+}
+
+/// Response body from `POST /v1/invites/join`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InviteJoinResponse {
+    /// Whether the invite was accepted.
+    pub accepted: bool,
+    /// Peer name enrolled from the invite, if accepted.
+    pub peer_name: Option<String>,
+    /// Peer node identifier enrolled from the invite, if accepted.
+    pub node_id: Option<String>,
+    /// Human-readable PASS/FAIL message.
+    pub message: String,
+}
+
+/// Public invite bundle format sent from inviter to invitee.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InviteBundle {
+    /// Bundle schema marker.
+    pub schema: String,
+    /// Inviter node display name.
+    pub inviter_name: String,
+    /// Public inviter node identifier.
+    pub inviter_node_id: String,
+    /// Optional public endpoint hint for the inviter.
+    pub endpoint: Option<String>,
+    /// Public overlay prefixes the inviter wants to share.
+    pub allowed_ips: Vec<String>,
+    /// UTC issue timestamp.
+    pub issued_at: String,
+    /// UTC expiry timestamp.
+    pub expires_at: String,
+    /// SHA-256 hash of the out-of-band pairing code and invite nonce.
+    pub pairing_hash: String,
+    /// Public invite nonce.
+    pub nonce: String,
 }
 
 /// Request body for `POST /v1/algorithm`.

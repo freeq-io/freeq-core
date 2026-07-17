@@ -7,6 +7,7 @@ INSTALL_DIR="${FREEQ_INSTALL_DIR:-$HOME/freeq-core}"
 SETUP_DIR="${FREEQ_SETUP_DIR:-$HOME/FreeQ}"
 CONFIG="${FREEQ_CONFIG:-$HOME/.freeq/perf/freeq.toml}"
 LOG_FILE="${FREEQ_PERF_DIR:-$HOME/.freeq/perf}/freeqd.log"
+SETUP_URL="${FREEQ_SETUP_URL:-http://127.0.0.1:6789/}"
 DRY_RUN=0
 
 usage() {
@@ -88,13 +89,16 @@ What this does:
   2. Builds FreeQ.
   3. Creates this Mac's local node identity.
   4. Starts FreeQ in local listen mode.
-  5. Checks that the local FreeQ status API responds.
+  5. Opens the local FreeQ setup page and checks that FreeQ responds.
 
 Install folder:
   $INSTALL_DIR
 
 Visible setup folder:
   $SETUP_DIR
+
+Local setup page:
+  $SETUP_URL
 
 FreeQ may ask for this Mac's local admin password so it can open the network
 interface. It never asks for another person's password.
@@ -165,8 +169,12 @@ if ! check_status; then
   fail "FreeQ started, but the local status check did not respond yet."
 fi
 
+open "$SETUP_URL" >/dev/null 2>&1 || true
+
 say ""
 say "FreeQ install result: PASS"
 say "FreeQ is installed and running on this Mac."
+say "Setup page:"
+say "  $SETUP_URL"
 say ""
 say "You are done."

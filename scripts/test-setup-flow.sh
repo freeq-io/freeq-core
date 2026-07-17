@@ -56,6 +56,15 @@ FREEQ_SETUP_DIR="$TMP_ROOT/simple-install/FreeQ" \
 scripts/install/freeq-install-macos.sh --dry-run > "$TMP_ROOT/simple-install.out"
 assert_file_contains "$TMP_ROOT/simple-install.out" "FreeQ macOS installer"
 assert_file_contains "$TMP_ROOT/simple-install.out" "Dry run only"
+assert_file_contains "$TMP_ROOT/simple-install.out" "Local setup page:"
+assert_file_contains dashboard/index.html "/v1/status"
+assert_file_contains dashboard/index.html "/v1/peers"
+assert_file_contains dashboard/index.html "/v1/invites"
+assert_file_contains dashboard/index.html "/v1/invites/join"
+assert_file_contains dashboard/index.html "Create 15-Minute Invite"
+assert_file_contains dashboard/index.html "Send the code separately"
+assert_file_contains crates/freeq-api/src/router.rs 'route\("/", get\(dashboard\)\)'
+assert_file_contains crates/freeq-api/src/router.rs "/v1/invites"
 
 echo "== setup flow: build identity helper =="
 cargo build --release -p freeq-perf-identity >/dev/null
@@ -134,10 +143,13 @@ assert_no_match "FREEQ_PEER_ENDPOINT|PEER_ENDPOINT|--peer-endpoint" \
 assert_no_match "patrick|david|Patrick|David" \
   scripts/setup scripts/perf docs/perf-macos-quickstart.md docs/perf-harness.md tools/freeq-perf-identity/src/main.rs
 assert_no_match "~/.freeq|cd .*\\.freeq|open .*\\.freeq" docs/perf-macos-quickstart.md docs/perf-harness.md
+assert_no_match "localStorage|sessionStorage|document.cookie|https://|http://[^1]" dashboard/index.html
 assert_file_contains scripts/setup/freeq-setup-macos.sh "xcode-select --install"
 assert_file_contains scripts/setup/freeq-setup-macos.sh "sh.rustup.rs"
 assert_file_contains scripts/setup/freeq-setup-macos.sh "brew install iperf3 jq"
 assert_file_contains scripts/setup/freeq-setup-macos.sh "FREEQ_PUBLIC_ENDPOINT=.*quote_shell"
 assert_file_contains scripts/setup/freeq-setup-macos.sh "FREEQ_PEER_SSH_USER=.*quote_shell"
+assert_file_contains scripts/install/freeq-install-macos.sh "http://127.0.0.1:6789/"
+assert_file_contains scripts/setup/freeq-start-macos.sh "Setup page:"
 
 echo "setup flow checks passed"

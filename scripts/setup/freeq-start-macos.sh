@@ -12,6 +12,7 @@ LOG_FILE="$LOG_DIR/freeqd.log"
 PID_FILE="$LOG_DIR/freeqd.pid"
 CONFIGURE_INTERFACE=1
 RESTART=0
+SETUP_URL="${FREEQ_SETUP_URL:-http://127.0.0.1:6789/}"
 
 if [ -f "$CONFIG_FILE" ]; then
   # shellcheck disable=SC1090
@@ -222,7 +223,10 @@ fi
 
 echo ""
 echo "FreeQ daemon is running."
+echo "Setup page:"
+echo "  $SETUP_URL"
 echo "Status API:"
 echo "  curl -s http://127.0.0.1:6789/v1/status"
 echo "Stop:"
 echo "  sudo kill $(cat "$PID_FILE")"
+open "$SETUP_URL" >/dev/null 2>&1 || true

@@ -1,3 +1,780 @@
-<h1>FreeQ + SpanSafe POC Dashboard</h1>
-<p>Gateway Running • Secure Risk Score Channel Active</p>
-<p><strong>Status: Quantum-Safe Tunnel Ready</strong></p>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FreeQ Setup</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #5f6f7d;
+      --line: #d8e0e6;
+      --surface: #f6f8fa;
+      --panel: #ffffff;
+      --good: #137a42;
+      --warn: #936300;
+      --bad: #b3261e;
+      --accent: #0b63ce;
+      --accent-soft: #e8f1ff;
+      --shadow: 0 10px 28px rgba(23, 32, 42, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background: var(--surface);
+      color: var(--ink);
+      font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    header {
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .topbar,
+    main {
+      width: min(1180px, calc(100vw - 32px));
+      margin: 0 auto;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 20px 0;
+    }
+
+    .brand {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: 26px;
+      line-height: 1.1;
+      font-weight: 700;
+    }
+
+    h2 {
+      font-size: 18px;
+      line-height: 1.2;
+    }
+
+    h3 {
+      font-size: 15px;
+      line-height: 1.2;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 32px;
+      padding: 6px 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--panel);
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--muted);
+      flex: 0 0 auto;
+    }
+
+    .status-pill.pass .status-dot,
+    .badge.pass {
+      background: var(--good);
+      color: #ffffff;
+    }
+
+    .status-pill.warn .status-dot,
+    .badge.warn {
+      background: var(--warn);
+      color: #ffffff;
+    }
+
+    .status-pill.fail .status-dot,
+    .badge.fail {
+      background: var(--bad);
+      color: #ffffff;
+    }
+
+    main {
+      padding: 22px 0 36px;
+    }
+
+    .notice {
+      display: grid;
+      gap: 6px;
+      padding: 14px 16px;
+      border: 1px solid #b7cae7;
+      border-left: 5px solid var(--accent);
+      background: var(--accent-soft);
+      border-radius: 6px;
+      margin-bottom: 18px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1.05fr 0.95fr;
+      gap: 18px;
+      align-items: start;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .panel-body {
+      padding: 16px;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .metric {
+      min-height: 84px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fbfcfd;
+    }
+
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      font-weight: 700;
+    }
+
+    .metric strong {
+      display: block;
+      margin-top: 7px;
+      font-size: 24px;
+      line-height: 1.05;
+      overflow-wrap: anywhere;
+    }
+
+    .detail-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .detail {
+      display: grid;
+      grid-template-columns: 180px 1fr;
+      gap: 12px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .detail:last-child {
+      border-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .detail dt {
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .detail dd {
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 26px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      background: var(--muted);
+      color: #ffffff;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .form-grid {
+      display: grid;
+      gap: 12px;
+      margin-top: 14px;
+    }
+
+    label {
+      display: grid;
+      gap: 5px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    input,
+    textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 9px 10px;
+      color: var(--ink);
+      font: inherit;
+      font-weight: 400;
+      resize: vertical;
+    }
+
+    textarea {
+      min-height: 96px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+    }
+
+    button,
+    .button {
+      appearance: none;
+      border: 1px solid #0a55ad;
+      border-radius: 6px;
+      min-height: 38px;
+      padding: 8px 12px;
+      background: var(--accent);
+      color: #ffffff;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      text-decoration: none;
+    }
+
+    button.secondary {
+      border-color: var(--line);
+      background: var(--panel);
+      color: var(--ink);
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.58;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    th,
+    td {
+      padding: 10px 8px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+
+    tbody tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .empty {
+      padding: 24px 8px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .setup-flow {
+      display: grid;
+      gap: 12px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 34px 1fr;
+      gap: 10px;
+      align-items: start;
+    }
+
+    .step-number {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 800;
+    }
+
+    code {
+      padding: 1px 4px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: #f8fafc;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+    }
+
+    .error-list {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding-left: 18px;
+      color: var(--bad);
+    }
+
+    .result-box {
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fbfcfd;
+    }
+
+    .result-box[hidden] {
+      display: none;
+    }
+
+    .full {
+      grid-column: 1 / -1;
+    }
+
+    @media (max-width: 860px) {
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .grid,
+      .summary {
+        grid-template-columns: 1fr;
+      }
+
+      .detail {
+        grid-template-columns: 1fr;
+        gap: 3px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="topbar">
+      <div class="brand">
+        <h1>FreeQ Setup</h1>
+        <p class="muted">Local-only node status and peer enrollment console</p>
+      </div>
+      <div id="api-pill" class="status-pill warn" role="status" aria-live="polite">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="api-pill-text">Checking local API</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="notice" aria-label="Security boundary">
+      <h2>Local setup boundary</h2>
+      <p>This page is served by the FreeQ daemon on this machine. It is intended for loopback access only and should not expose private keys, invite secrets, or setup tokens.</p>
+    </section>
+
+    <div class="grid">
+      <section class="panel" aria-labelledby="status-heading">
+        <div class="panel-header">
+          <div>
+            <h2 id="status-heading">Node Status</h2>
+            <p class="muted" id="last-refresh">Waiting for first refresh</p>
+          </div>
+          <div id="setup-result" class="badge warn">Checking</div>
+        </div>
+        <div class="panel-body">
+          <div class="summary">
+            <div class="metric">
+              <span>Node</span>
+              <strong id="node-name">Unknown</strong>
+            </div>
+            <div class="metric">
+              <span>Uptime</span>
+              <strong id="uptime">0s</strong>
+            </div>
+            <div class="metric">
+              <span>Peers</span>
+              <strong id="peer-count">0</strong>
+            </div>
+            <div class="metric">
+              <span>Tunnels</span>
+              <strong id="tunnel-count">0</strong>
+            </div>
+          </div>
+
+          <dl class="detail-list">
+            <div class="detail">
+              <dt>Interface</dt>
+              <dd id="interface">Not initialized</dd>
+            </div>
+            <div class="detail">
+              <dt>Algorithms</dt>
+              <dd id="algorithms">Waiting for daemon</dd>
+            </div>
+            <div class="detail">
+              <dt>Packet counters</dt>
+              <dd id="packet-counters">No tunnel traffic yet</dd>
+            </div>
+            <div class="detail">
+              <dt>Last error</dt>
+              <dd id="last-error">None reported</dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="setup-heading">
+        <div class="panel-header">
+          <div>
+            <h2 id="setup-heading">Simple Setup</h2>
+            <p class="muted">One visible result, one local test</p>
+          </div>
+        </div>
+        <div class="panel-body setup-flow">
+          <div class="step">
+            <div class="step-number">1</div>
+            <div>
+              <h3>Confirm this node is running</h3>
+              <p class="muted">The status panel should show PASS when the local daemon and API respond.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-number">2</div>
+            <div>
+              <h3>Invite a peer</h3>
+              <p class="muted">Create a 15-minute invite bundle, send it to the peer, and send the pairing code separately.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-number">3</div>
+            <div>
+              <h3>Verify tunnel health</h3>
+              <p class="muted">Known peer rows update after invite join. Tunnel counters update when dataplane traffic starts.</p>
+            </div>
+          </div>
+          <div class="actions" aria-label="Setup actions">
+            <button id="refresh-button" type="button">Refresh</button>
+            <button id="create-invite-button" type="button" class="secondary">Create Invite</button>
+            <button id="join-invite-button" type="button" class="secondary">Join Invite</button>
+          </div>
+          <div id="create-invite-panel" class="result-box" hidden>
+            <h3>Create Invite</h3>
+            <label>
+              Peer label
+              <input id="invite-label" autocomplete="off" placeholder="David's Mac">
+            </label>
+            <label>
+              Endpoint hint
+              <input id="invite-endpoint" autocomplete="off" placeholder="host-or-ip:51820">
+            </label>
+            <button id="submit-create-invite" type="button">Create 15-Minute Invite</button>
+            <label>
+              Invite bundle to send
+              <textarea id="invite-bundle-output" readonly></textarea>
+            </label>
+            <p class="muted">Pairing code to send separately: <strong id="pairing-code-output">Not created yet</strong></p>
+            <p class="muted" id="invite-expiry-output"></p>
+          </div>
+          <div id="join-invite-panel" class="result-box" hidden>
+            <h3>Join Invite</h3>
+            <label>
+              Invite bundle text
+              <textarea id="join-bundle-input" placeholder="Paste the invite bundle here"></textarea>
+            </label>
+            <label>
+              Pairing code
+              <input id="join-pairing-code" autocomplete="off" inputmode="text">
+            </label>
+            <button id="submit-join-invite" type="button">Join Invite</button>
+            <p id="join-result" class="muted">Waiting for invite.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel full" aria-labelledby="peer-heading">
+        <div class="panel-header">
+          <div>
+            <h2 id="peer-heading">Known Peers</h2>
+            <p class="muted" id="peer-summary">Waiting for peer registry</p>
+          </div>
+        </div>
+        <div class="panel-body">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Endpoint</th>
+                <th>Allowed IPs</th>
+                <th>State</th>
+                <th>Last Handshake</th>
+              </tr>
+            </thead>
+            <tbody id="peer-rows">
+              <tr>
+                <td colspan="5" class="empty">No peers reported yet.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel full" aria-labelledby="blocker-heading">
+        <div class="panel-header">
+          <div>
+            <h2 id="blocker-heading">Startup Blockers</h2>
+            <p class="muted">Shown only when the daemon reports a setup blocker</p>
+          </div>
+        </div>
+        <div class="panel-body">
+          <ul id="startup-blockers" class="error-list">
+            <li>No startup blockers reported.</li>
+          </ul>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const apiPill = document.getElementById("api-pill");
+    const apiPillText = document.getElementById("api-pill-text");
+    const setupResult = document.getElementById("setup-result");
+    const refreshButton = document.getElementById("refresh-button");
+    const createInvitePanel = document.getElementById("create-invite-panel");
+    const joinInvitePanel = document.getElementById("join-invite-panel");
+
+    function setStatus(level, text) {
+      apiPill.className = `status-pill ${level}`;
+      apiPillText.textContent = text;
+      setupResult.className = `badge ${level}`;
+      setupResult.textContent = level === "pass" ? "PASS" : level === "fail" ? "FAIL" : "CHECK";
+    }
+
+    function formatUptime(seconds) {
+      const value = Number(seconds || 0);
+      const hours = Math.floor(value / 3600);
+      const minutes = Math.floor((value % 3600) / 60);
+      const secs = value % 60;
+      if (hours > 0) return `${hours}h ${minutes}m`;
+      if (minutes > 0) return `${minutes}m ${secs}s`;
+      return `${secs}s`;
+    }
+
+    function text(value, fallback) {
+      if (value === null || value === undefined || value === "") return fallback;
+      return String(value);
+    }
+
+    async function getJson(path) {
+      const response = await fetch(path, { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error(`${path} returned HTTP ${response.status}`);
+      }
+      return response.json();
+    }
+
+    async function postJson(path, body) {
+      const response = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.message || `${path} returned HTTP ${response.status}`);
+      }
+      return payload;
+    }
+
+    function renderStatus(status) {
+      document.getElementById("node-name").textContent = text(status.name, "Unknown");
+      document.getElementById("uptime").textContent = formatUptime(status.uptime_secs);
+      document.getElementById("peer-count").textContent = text(status.peer_count, "0");
+      document.getElementById("tunnel-count").textContent = text(status.tunnel_count, "0");
+      document.getElementById("interface").textContent = status.interface_name
+        ? `${status.interface_name} / MTU ${text(status.interface_mtu, "unknown")}`
+        : "Not initialized";
+      document.getElementById("algorithms").textContent =
+        `${text(status.kem_algorithm, "KEM unknown")} / ${text(status.sign_algorithm, "signature unknown")} / ${text(status.bulk_algorithm, "bulk unknown")}`;
+      document.getElementById("packet-counters").textContent =
+        `${text(status.packets_ingested, "0")} packets, ${text(status.encrypted_bytes, "0")} encrypted bytes, ${text(status.route_misses, "0")} route misses`;
+      document.getElementById("last-error").textContent = text(status.last_error, "None reported");
+
+      const blockers = Array.isArray(status.startup_blockers) ? status.startup_blockers : [];
+      const blockerList = document.getElementById("startup-blockers");
+      blockerList.innerHTML = "";
+      if (blockers.length === 0) {
+        const item = document.createElement("li");
+        item.textContent = "No startup blockers reported.";
+        blockerList.appendChild(item);
+      } else {
+        for (const blocker of blockers) {
+          const item = document.createElement("li");
+          item.textContent = blocker;
+          blockerList.appendChild(item);
+        }
+      }
+    }
+
+    function renderPeers(peers) {
+      const rows = document.getElementById("peer-rows");
+      const summary = document.getElementById("peer-summary");
+      rows.innerHTML = "";
+      if (!Array.isArray(peers) || peers.length === 0) {
+        rows.innerHTML = '<tr><td colspan="5" class="empty">No peers reported yet.</td></tr>';
+        summary.textContent = "No peers reported by the local API";
+        return;
+      }
+      summary.textContent = `${peers.length} peer${peers.length === 1 ? "" : "s"} reported by the local API`;
+      for (const peer of peers) {
+        const row = document.createElement("tr");
+        const values = [
+          peer.node_id ? `${text(peer.name, "Unknown")} (${peer.node_id})` : text(peer.name, "Unknown"),
+          text(peer.endpoint, "No endpoint"),
+          Array.isArray(peer.allowed_ips) && peer.allowed_ips.length > 0 ? peer.allowed_ips.join(", ") : "None",
+          peer.trust_state ? `${peer.trust_state}${peer.connected ? " / connected" : ""}` : peer.connected ? "Connected" : "Not connected",
+          text(peer.last_handshake, "Never"),
+        ];
+        for (const value of values) {
+          const cell = document.createElement("td");
+          cell.textContent = value;
+          row.appendChild(cell);
+        }
+        rows.appendChild(row);
+      }
+    }
+
+    function togglePanel(panel) {
+      const isHidden = panel.hidden;
+      createInvitePanel.hidden = true;
+      joinInvitePanel.hidden = true;
+      panel.hidden = !isHidden;
+    }
+
+    async function createInvite() {
+      const label = document.getElementById("invite-label").value.trim();
+      const endpoint = document.getElementById("invite-endpoint").value.trim();
+      const response = await postJson("/v1/invites", {
+        label: label || null,
+        endpoint: endpoint || null,
+        allowed_ips: [],
+      });
+      document.getElementById("invite-bundle-output").value = response.bundle_text;
+      document.getElementById("pairing-code-output").textContent = response.pairing_code_display;
+      document.getElementById("invite-expiry-output").textContent = `Expires at ${response.expires_at}. Send the code separately from the bundle.`;
+    }
+
+    async function joinInvite() {
+      const bundleText = document.getElementById("join-bundle-input").value.trim();
+      const pairingCode = document.getElementById("join-pairing-code").value.trim();
+      const result = document.getElementById("join-result");
+      if (!bundleText || !pairingCode) {
+        result.textContent = "FAIL: paste the invite bundle and enter the pairing code.";
+        return;
+      }
+      const response = await postJson("/v1/invites/join", {
+        bundle_text: bundleText,
+        pairing_code: pairingCode,
+      });
+      result.textContent = response.message;
+      result.style.color = response.accepted ? "var(--good)" : "var(--bad)";
+      await refresh();
+    }
+
+    async function refresh() {
+      refreshButton.disabled = true;
+      try {
+        const status = await getJson("/v1/status");
+        renderStatus(status);
+        setStatus("pass", "Local API online");
+        document.getElementById("last-refresh").textContent = `Last refreshed ${new Date().toLocaleTimeString()}`;
+
+        try {
+          renderPeers(await getJson("/v1/peers"));
+        } catch (peerError) {
+          document.getElementById("peer-summary").textContent = peerError.message;
+        }
+      } catch (error) {
+        setStatus("fail", "Local API offline");
+        document.getElementById("last-refresh").textContent = error.message;
+      } finally {
+        refreshButton.disabled = false;
+      }
+    }
+
+    refreshButton.addEventListener("click", refresh);
+    document.getElementById("create-invite-button").addEventListener("click", () => togglePanel(createInvitePanel));
+    document.getElementById("join-invite-button").addEventListener("click", () => togglePanel(joinInvitePanel));
+    document.getElementById("submit-create-invite").addEventListener("click", () => {
+      createInvite().catch((error) => {
+        document.getElementById("invite-expiry-output").textContent = error.message;
+      });
+    });
+    document.getElementById("submit-join-invite").addEventListener("click", () => {
+      joinInvite().catch((error) => {
+        const result = document.getElementById("join-result");
+        result.textContent = error.message;
+        result.style.color = "var(--bad)";
+      });
+    });
+    refresh();
+    window.setInterval(refresh, 5000);
+  </script>
+</body>
+</html>

@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::models::PeerSummary;
 use tokio::sync::RwLock;
 
 /// Shared API state handle used by Axum handlers and daemon setup code.
@@ -77,6 +78,8 @@ pub struct RuntimeSnapshot {
     pub last_error: Option<String>,
     /// Current startup blockers.
     pub startup_blockers: Vec<String>,
+    /// Known peer summaries visible to the setup UI.
+    pub known_peers: Vec<PeerSummary>,
 }
 
 #[derive(Debug)]
@@ -93,6 +96,7 @@ struct RuntimeState {
     errors: ErrorCounters,
     last_error: Option<String>,
     startup_blockers: Vec<String>,
+    known_peers: Vec<PeerSummary>,
 }
 
 impl ApiState {
@@ -119,6 +123,7 @@ impl ApiState {
                 errors: ErrorCounters::default(),
                 last_error: None,
                 startup_blockers: Vec::new(),
+                known_peers: Vec::new(),
             })),
         }
     }
@@ -163,6 +168,26 @@ impl ApiState {
         self.inner.write().await.peer_count = peer_count;
     }
 
+    /// Return the known peer summaries currently visible to the setup UI.
+    pub async fn known_peers(&self) -> Vec<PeerSummary> {
+        self.inner.read().await.known_peers.clone()
+    }
+
+    /// Add or replace a known peer summary and keep the peer count in sync.
+    pub async fn upsert_known_peer(&self, peer: PeerSummary) {
+        let mut state = self.inner.write().await;
+        if let Some(existing) = state
+            .known_peers
+            .iter_mut()
+            .find(|candidate| candidate.node_id == peer.node_id || candidate.name == peer.name)
+        {
+            *existing = peer;
+        } else {
+            state.known_peers.push(peer);
+        }
+        state.peer_count = state.known_peers.len();
+    }
+
     /// Capture an immutable snapshot for handler responses.
     pub async fn snapshot(&self) -> RuntimeSnapshot {
         let state = self.inner.read().await;
@@ -179,6 +204,7 @@ impl ApiState {
             errors: state.errors.clone(),
             last_error: state.last_error.clone(),
             startup_blockers: state.startup_blockers.clone(),
+            known_peers: state.known_peers.clone(),
         }
     }
 }
@@ -186,6 +212,7 @@ impl ApiState {
 #[cfg(test)]
 mod tests {
     use super::{ApiState, ErrorKind, TunnelRuntimeSnapshot};
+    use crate::models::PeerSummary;
 
     #[tokio::test]
     async fn snapshot_reflects_tunnel_and_error_updates() {
@@ -221,5 +248,34 @@ mod tests {
         assert_eq!(snapshot.errors.transport_errors, 1);
         assert_eq!(snapshot.last_error.as_deref(), Some("send queue overflow"));
         assert_eq!(snapshot.startup_blockers.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn known_peer_upsert_updates_peer_count() {
+        let state = ApiState::new(
+            "nyc-01".into(),
+            "0.1.0".into(),
+            "ml-kem-768".into(),
+            "ml-dsa-65".into(),
+            "aes-256-gcm".into(),
+            0,
+        );
+
+        state
+            .upsert_known_peer(PeerSummary {
+                node_id: Some("node-1".into()),
+                name: "peer-one".into(),
+                endpoint: Some("198.51.100.10:51820".into()),
+                allowed_ips: vec!["10.66.0.2/32".into()],
+                connected: false,
+                last_handshake: None,
+                trust_state: Some("invited".into()),
+                enrollment_source: Some("invite".into()),
+            })
+            .await;
+
+        let snapshot = state.snapshot().await;
+        assert_eq!(snapshot.peer_count, 1);
+        assert_eq!(snapshot.known_peers.len(), 1);
     }
 }
