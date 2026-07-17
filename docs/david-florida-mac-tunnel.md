@@ -115,14 +115,18 @@ David should send Patrick this file:
 Patrick should put David's file here:
 
 ```text
-~/FreeQ/02-put-peer-file-here/david-florida-mac-peer.env
+~/FreeQ/02-put-peer-file-here/<david-node-name>-peer.env
 ```
+
+The exact filename may reflect David's actual Mac name, for example
+`davids-macbook-pro-peer.env`. The scripts accept any single `.env` file in
+the visible drop folder and validate the node name from the file contents.
 
 Validate it:
 
 ```bash
 cd ~/freeq-core
-scripts/setup/freeq-validate-peer-env.sh ~/FreeQ/02-put-peer-file-here/david-florida-mac-peer.env
+scripts/field/freeq-patrick-start-for-david-macos.sh --check-peer-file
 ```
 
 If validation says `FREEQ_PUBLIC_ENDPOINT` is blank or a placeholder, David needs to update `~/FreeQ/freeq-setup.conf`, rerun setup, and resend his peer file.
@@ -158,10 +162,18 @@ These helpers still use the same generic setup engine, but they make the expecte
 
 ```text
 Patrick puts David's file here:
-  ~/FreeQ/02-put-peer-file-here/david-florida-mac-peer.env
+  ~/FreeQ/02-put-peer-file-here/<david-node-name>-peer.env
 
 David puts Patrick's file here:
-  ~/FreeQ/02-put-peer-file-here/patrick-mac-peer.env
+  ~/FreeQ/02-put-peer-file-here/<patrick-node-name>-peer.env
+```
+
+Each helper also has a check-only mode that detects and validates the peer file
+without starting FreeQ or asking for sudo:
+
+```bash
+scripts/field/freeq-patrick-start-for-david-macos.sh --check-peer-file
+scripts/field/freeq-david-connect-to-patrick-macos.sh --check-peer-file
 ```
 
 If the expected peer file has not arrived yet, the helper prints the exact
