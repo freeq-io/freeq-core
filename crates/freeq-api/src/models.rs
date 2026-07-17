@@ -125,6 +125,10 @@ pub struct InviteJoinResponse {
     pub peer_name: Option<String>,
     /// Peer node identifier enrolled from the invite, if accepted.
     pub node_id: Option<String>,
+    /// Visible peer exchange file installed from the invite, if accepted.
+    pub peer_file_path: Option<String>,
+    /// Local command that activates the tunnel after invite join.
+    pub activation_command: Option<String>,
     /// Human-readable PASS/FAIL message.
     pub message: String,
 }
@@ -140,6 +144,14 @@ pub struct InviteBundle {
     pub inviter_node_id: String,
     /// Optional public endpoint hint for the inviter.
     pub endpoint: Option<String>,
+    /// Public overlay address for the inviter.
+    pub node_address: String,
+    /// Public listen address for the inviter, used for diagnostics only.
+    pub node_listen: Option<String>,
+    /// ML-DSA-65 public key for the inviter.
+    pub public_key: String,
+    /// ML-KEM-768 public key for the inviter.
+    pub kem_key: String,
     /// Public overlay prefixes the inviter wants to share.
     pub allowed_ips: Vec<String>,
     /// UTC issue timestamp.

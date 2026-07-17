@@ -384,6 +384,20 @@
       background: #fbfcfd;
     }
 
+    .activation-note {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border: 1px solid #e5c76a;
+      border-left: 5px solid var(--warn);
+      border-radius: 6px;
+      background: #fff8df;
+      color: #593d00;
+    }
+
+    #join-result {
+      white-space: pre-wrap;
+    }
+
     .result-box[hidden] {
       display: none;
     }
@@ -459,6 +473,8 @@
             </div>
           </div>
 
+          <p id="activation-note" class="activation-note" hidden></p>
+
           <dl class="detail-list">
             <div class="detail">
               <dt>Interface</dt>
@@ -518,7 +534,7 @@
             <h3>Create Invite</h3>
             <label>
               Peer label
-              <input id="invite-label" autocomplete="off" placeholder="David's Mac">
+              <input id="invite-label" autocomplete="off" placeholder="Peer Mac">
             </label>
             <label>
               Endpoint hint
@@ -635,7 +651,10 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const payload = await response.json();
+      const contentType = response.headers.get("content-type") || "";
+      const payload = contentType.includes("application/json")
+        ? await response.json()
+        : { message: await response.text() };
       if (!response.ok) {
         throw new Error(payload.message || `${path} returned HTTP ${response.status}`);
       }
@@ -655,6 +674,16 @@
       document.getElementById("packet-counters").textContent =
         `${text(status.packets_ingested, "0")} packets, ${text(status.encrypted_bytes, "0")} encrypted bytes, ${text(status.route_misses, "0")} route misses`;
       document.getElementById("last-error").textContent = text(status.last_error, "None reported");
+      const activationNote = document.getElementById("activation-note");
+      const peers = Number(status.peer_count || 0);
+      const tunnels = Number(status.tunnel_count || 0);
+      if (peers > 0 && tunnels === 0) {
+        activationNote.hidden = false;
+        activationNote.textContent = "Peer enrolled. Tunnel activation is pending; run scripts/setup/freeq-connect-macos.sh --restart from the repo folder in Terminal.";
+      } else {
+        activationNote.hidden = true;
+        activationNote.textContent = "";
+      }
 
       const blockers = Array.isArray(status.startup_blockers) ? status.startup_blockers : [];
       const blockerList = document.getElementById("startup-blockers");
@@ -732,7 +761,14 @@
         bundle_text: bundleText,
         pairing_code: pairingCode,
       });
-      result.textContent = response.message;
+      const nextSteps = [response.message];
+      if (response.peer_file_path) {
+        nextSteps.push(`Peer file installed: ${response.peer_file_path}`);
+      }
+      if (response.activation_command) {
+        nextSteps.push(`Activate tunnel: ${response.activation_command}`);
+      }
+      result.textContent = nextSteps.join("\n");
       result.style.color = response.accepted ? "var(--good)" : "var(--bad)";
       await refresh();
     }

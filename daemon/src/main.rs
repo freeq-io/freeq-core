@@ -179,6 +179,9 @@ async fn init_api_state(
         config.peer.len(),
     );
     state.set_peer_count(config.peer.len()).await;
+    if let Some(parent) = PathBuf::from(&config.node.key_path).parent() {
+        state.set_local_peer_env_path(parent.join("peer.env")).await;
+    }
     state
         .update_runtime_counters(
             freeq_api::TunnelRuntimeSnapshot {

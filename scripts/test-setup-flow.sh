@@ -74,6 +74,8 @@ assert_file_contains dashboard/index.html "/v1/invites"
 assert_file_contains dashboard/index.html "/v1/invites/join"
 assert_file_contains dashboard/index.html "Create 15-Minute Invite"
 assert_file_contains dashboard/index.html "Send the code separately"
+assert_file_contains dashboard/index.html "Tunnel activation is pending"
+assert_file_contains dashboard/index.html "scripts/setup/freeq-connect-macos.sh --restart"
 assert_file_contains crates/freeq-api/src/router.rs 'route\("/", get\(dashboard\)\)'
 assert_file_contains crates/freeq-api/src/router.rs "/v1/invites"
 
