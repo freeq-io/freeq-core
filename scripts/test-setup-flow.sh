@@ -180,5 +180,7 @@ assert_file_contains scripts/install/freeq-install-macos.sh "http://127.0.0.1:67
 assert_file_contains scripts/setup/freeq-start-macos.sh "Setup page:"
 assert_file_contains scripts/setup/freeq-start-macos.sh "nohup sudo target/release/freeqd"
 assert_file_contains scripts/setup/freeq-start-macos.sh "freeqd did not keep the local setup API online"
+assert_file_contains scripts/setup/freeq-connect-macos.sh "Building updated freeqd release binary"
+assert_file_contains scripts/setup/freeq-start-macos.sh "Building updated freeqd release binary"
 
 echo "setup flow checks passed"

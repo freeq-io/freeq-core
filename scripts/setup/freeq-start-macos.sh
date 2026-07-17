@@ -100,6 +100,25 @@ select_remote_peer_env() {
   return 1
 }
 
+freeqd_needs_build() {
+  if [ ! -x "target/release/freeqd" ]; then
+    return 0
+  fi
+  [ -n "$(find Cargo.toml Cargo.lock daemon crates -type f \( -name '*.rs' -o -name 'Cargo.toml' -o -name 'Cargo.lock' \) -newer target/release/freeqd -print -quit 2>/dev/null)" ]
+}
+
+ensure_freeqd_built() {
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "Missing cargo. Run the installer first:" >&2
+    echo "  scripts/install/freeq-install-macos.sh" >&2
+    exit 1
+  fi
+  if freeqd_needs_build; then
+    echo "Building updated freeqd release binary..."
+    cargo build --release -p freeqd
+  fi
+}
+
 find_peer_env() {
   local candidates=()
   local path
@@ -191,10 +210,7 @@ if [ -z "$LISTEN_VALUE" ] || ! validate_socket_addr "$LISTEN_VALUE"; then
   echo "Rerun setup so FreeQ can use the safe default: 0.0.0.0:51820" >&2
   exit 1
 fi
-if [ ! -x "target/release/freeqd" ]; then
-  echo "Missing target/release/freeqd. Run: cargo build --release -p freeqd" >&2
-  exit 1
-fi
+ensure_freeqd_built
 
 if [ "$CONFIGURE_INTERFACE" -eq 1 ]; then
   if [ -z "$PEER_ENV" ]; then
