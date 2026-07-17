@@ -11,6 +11,22 @@
 
 ---
 
+## Simple Install
+
+For a non-technical Mac install, use the simple install guide:
+
+[docs/simple-install.md](docs/simple-install.md)
+
+The installer has one success result:
+
+```text
+FreeQ install result: PASS
+```
+
+If you see `PASS`, FreeQ is installed and running locally.
+
+---
+
 ## The problem
 
 Nation-state adversaries are recording your encrypted network traffic **right now** with the intent to decrypt it once quantum computers arrive — the **harvest now, decrypt later** attack. The timeline for cryptographically-relevant quantum computers is estimated at 10–15 years. Data with a long shelf life — health records, financial transactions, intellectual property, communications — is at immediate risk.

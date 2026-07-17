@@ -49,6 +49,14 @@ assert_file_contains "$TMP_ROOT/dry-run.out" "Public endpoint to share: lap21.ex
 [ ! -e "$DRY_HOME/FreeQ" ] || fail "dry run created visible setup folder"
 [ ! -e "$DRY_HOME/.freeq" ] || fail "dry run created hidden internal folder"
 
+echo "== setup flow: simple installer syntax and dry run =="
+bash -n scripts/install/freeq-install-macos.sh
+FREEQ_INSTALL_DIR="$TMP_ROOT/simple-install/freeq-core" \
+FREEQ_SETUP_DIR="$TMP_ROOT/simple-install/FreeQ" \
+scripts/install/freeq-install-macos.sh --dry-run > "$TMP_ROOT/simple-install.out"
+assert_file_contains "$TMP_ROOT/simple-install.out" "FreeQ macOS installer"
+assert_file_contains "$TMP_ROOT/simple-install.out" "Dry run only"
+
 echo "== setup flow: build identity helper =="
 cargo build --release -p freeq-perf-identity >/dev/null
 
