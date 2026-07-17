@@ -74,7 +74,7 @@ assert_file_contains dashboard/index.html "/v1/invites"
 assert_file_contains dashboard/index.html "/v1/invites/join"
 assert_file_contains dashboard/index.html "Create 15-Minute Invite"
 assert_file_contains dashboard/index.html "Send the code separately"
-assert_file_contains dashboard/index.html "Tunnel activation is pending"
+assert_file_contains dashboard/index.html "The tunnel counter stays at 0 until overlay traffic flows"
 assert_file_contains dashboard/index.html "scripts/setup/freeq-connect-macos.sh --restart"
 assert_file_contains crates/freeq-api/src/router.rs 'route\("/", get\(dashboard\)\)'
 assert_file_contains crates/freeq-api/src/router.rs "/v1/invites"
@@ -175,5 +175,7 @@ assert_file_contains scripts/setup/freeq-setup-macos.sh "FREEQ_PUBLIC_ENDPOINT=.
 assert_file_contains scripts/setup/freeq-setup-macos.sh "FREEQ_PEER_SSH_USER=.*quote_shell"
 assert_file_contains scripts/install/freeq-install-macos.sh "http://127.0.0.1:6789/"
 assert_file_contains scripts/setup/freeq-start-macos.sh "Setup page:"
+assert_file_contains scripts/setup/freeq-start-macos.sh "nohup sudo target/release/freeqd"
+assert_file_contains scripts/setup/freeq-start-macos.sh "freeqd did not keep the local setup API online"
 
 echo "setup flow checks passed"

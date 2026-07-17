@@ -679,7 +679,7 @@
       const tunnels = Number(status.tunnel_count || 0);
       if (peers > 0 && tunnels === 0) {
         activationNote.hidden = false;
-        activationNote.textContent = "Peer enrolled. Tunnel activation is pending; run scripts/setup/freeq-connect-macos.sh --restart from the repo folder in Terminal.";
+        activationNote.textContent = "Peer configured. The tunnel counter stays at 0 until overlay traffic flows. If activation is not done, run scripts/setup/freeq-connect-macos.sh --restart from the repo folder in Terminal; then test the peer overlay IP.";
       } else {
         activationNote.hidden = true;
         activationNote.textContent = "";

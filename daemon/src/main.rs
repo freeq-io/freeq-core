@@ -471,6 +471,7 @@ async fn run_accept_loop(shared: DataplaneShared, packet_egress: PacketEgress) {
                     .lock()
                     .await
                     .insert(peer_name.clone(), Arc::clone(&session));
+                tracing::info!(peer = %peer_name, "inbound peer session established");
                 tokio::spawn(run_connection_receiver(
                     session,
                     Arc::clone(&shared.tunnel_service),
@@ -541,6 +542,12 @@ async fn run_egress_loop(shared: DataplaneShared, mut packet_ingress: PacketIngr
         {
             Ok(session) => session,
             Err(err) => {
+                tracing::warn!(
+                    peer = %routed_packet.peer_id,
+                    endpoint = %peer_addr,
+                    error = %err,
+                    "outbound peer session failed"
+                );
                 shared
                     .api_state
                     .record_error(freeq_api::ErrorKind::Transport, err.to_string())
@@ -689,6 +696,7 @@ async fn establish_outbound_session(
     peer_name: &str,
     peer_addr: SocketAddr,
 ) -> Result<ActivePeerSession> {
+    tracing::info!(peer = %peer_name, endpoint = %peer_addr, "establishing outbound peer session");
     let connection = endpoint.connect(peer_addr).await?;
     let peer_entry = peer_registry
         .get_peer(peer_name)
@@ -723,6 +731,7 @@ async fn establish_outbound_session(
     .await?;
     let responder_confirmation = recv_handshake_message(&connection).await?;
     freeq_auth::handshake::verify_key_confirmation(&keys, responder_confirmation.as_ref())?;
+    tracing::info!(peer = %peer_name, endpoint = %peer_addr, "outbound peer session established");
 
     Ok(ActivePeerSession {
         connection,

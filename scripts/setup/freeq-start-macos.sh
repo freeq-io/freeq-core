@@ -13,6 +13,7 @@ PID_FILE="$LOG_DIR/freeqd.pid"
 CONFIGURE_INTERFACE=1
 RESTART=0
 SETUP_URL="${FREEQ_SETUP_URL:-http://127.0.0.1:6789/}"
+STATUS_URL="${SETUP_URL%/}/v1/status"
 
 if [ -f "$CONFIG_FILE" ]; then
   # shellcheck disable=SC1090
@@ -189,13 +190,11 @@ if [ -f "$PID_FILE" ]; then
 fi
 
 : > "$LOG_FILE"
-if [ "$RESTART" -eq 0 ]; then
-  echo "Checking sudo access..."
-  sudo -v
-fi
+echo "Checking sudo access..."
+sudo -v
 
 echo "Starting freeqd..."
-sudo target/release/freeqd --config "$CONFIG" --foreground > "$LOG_FILE" 2>&1 &
+nohup sudo target/release/freeqd --config "$CONFIG" --foreground > "$LOG_FILE" 2>&1 &
 pid="$!"
 echo "$pid" > "$PID_FILE"
 echo "freeqd pid: $pid"
@@ -252,6 +251,27 @@ if [ "$CONFIGURE_INTERFACE" -eq 1 ]; then
   echo "Configuring $interface local=$local_ip peer=$peer_ip"
   sudo ifconfig "$interface" "$local_ip" "$peer_ip" up
   sudo route -n add -host "$peer_ip" -interface "$interface" >/dev/null 2>&1 || true
+fi
+
+api_ready=0
+for _ in $(seq 1 15); do
+  if curl -fsS "$STATUS_URL" >/dev/null 2>&1; then
+    api_ready=1
+    break
+  fi
+  if ! kill -0 "$pid" >/dev/null 2>&1; then
+    echo "freeqd exited after interface setup. Last log lines:"
+    tail -60 "$LOG_FILE"
+    exit 1
+  fi
+  sleep 1
+done
+
+if [ "$api_ready" -ne 1 ]; then
+  echo "freeqd did not keep the local setup API online at $STATUS_URL." >&2
+  echo "Last log lines:" >&2
+  tail -60 "$LOG_FILE" >&2
+  exit 1
 fi
 
 echo ""
