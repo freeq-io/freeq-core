@@ -317,7 +317,25 @@ if [ "$CONFIGURE_INTERFACE" -eq 1 ]; then
 
   echo "Configuring $interface local=$local_ip peer=$peer_ip"
   sudo ifconfig "$interface" "$local_ip" "$peer_ip" up
-  sudo route -n add -host "$peer_ip" -interface "$interface" >/dev/null 2>&1 || true
+
+  # macOS point-to-point utun interfaces may not route this node's own
+  # overlay address locally. Pin it to loopback so local services such as SSH
+  # can answer on the overlay IP while the peer host route stays on utun.
+  if sudo route -n add -host "$local_ip" 127.0.0.1 >/dev/null 2>&1; then
+    echo "Added local overlay route: $local_ip -> 127.0.0.1"
+  elif sudo route -n change -host "$local_ip" 127.0.0.1 >/dev/null 2>&1; then
+    echo "Updated local overlay route: $local_ip -> 127.0.0.1"
+  else
+    echo "WARN: could not pin local overlay route for $local_ip to 127.0.0.1" >&2
+  fi
+
+  if sudo route -n add -host "$peer_ip" -interface "$interface" >/dev/null 2>&1; then
+    echo "Added peer overlay route: $peer_ip -> $interface"
+  elif sudo route -n change -host "$peer_ip" -interface "$interface" >/dev/null 2>&1; then
+    echo "Updated peer overlay route: $peer_ip -> $interface"
+  else
+    echo "WARN: could not pin peer overlay route for $peer_ip to $interface" >&2
+  fi
 fi
 
 api_ready=0
