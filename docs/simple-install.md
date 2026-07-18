@@ -13,6 +13,9 @@ router, or run network commands.
 
 ## Mac Install
 
+From the FreeQ website, click **Install FreeQ Now** to jump to the current
+install section.
+
 Open the Terminal app.
 
 Copy this one line, paste it into Terminal, and press Return:
