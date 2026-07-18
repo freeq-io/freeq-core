@@ -170,14 +170,19 @@ ssh_opts = [
     "-o", "ConnectTimeout=8",
 ]
 samples = []
+return_codes = []
 for i in range(5):
     start = time.perf_counter()
     rc = subprocess.call(["ssh", "-p", port, *ssh_opts, target, "true"])
     elapsed = (time.perf_counter() - start) * 1000
     samples.append(elapsed)
+    return_codes.append(rc)
     print(f"sample={i+1} rc={rc} ms={elapsed:.1f}")
 print(f"avg_ms={statistics.mean(samples):.1f}")
 print(f"p95ish_ms={sorted(samples)[-1]:.1f}")
+failed = [rc for rc in return_codes if rc != 0]
+print(f"successful_samples={len(return_codes) - len(failed)}")
+sys.exit(0 if not failed else 1)
 ' "$ssh_target" "$port"
 }
 
@@ -207,8 +212,12 @@ elapsed = time.perf_counter() - start
 mb = int(sys.argv[4])
 print(f"rc={rc}")
 print(f"seconds={elapsed:.3f}")
-print(f"mbps={(mb * 8) / elapsed:.2f}")
-subprocess.call(["ssh", "-p", port, *ssh_opts, target, "rm -f /tmp/freeq-perf-payload.bin"])
+if rc == 0:
+    print(f"mbps={(mb * 8) / elapsed:.2f}")
+    subprocess.call(["ssh", "-p", port, *ssh_opts, target, "rm -f /tmp/freeq-perf-payload.bin"])
+else:
+    print("mbps=not_available")
+sys.exit(rc)
 ' "$payload" "$ssh_target" "$port" "$SCP_MB"
 }
 
