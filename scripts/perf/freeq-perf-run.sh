@@ -20,6 +20,8 @@ LABEL="$(date -u +%Y%m%dT%H%M%SZ)"
 RESULT_ROOT="${FREEQ_PERF_RESULT_ROOT:-perf-results}"
 IPERF_SECONDS="${FREEQ_IPERF_SECONDS:-20}"
 SCP_MB="${FREEQ_SCP_MB:-32}"
+SSH_SAMPLE_TIMEOUT="${FREEQ_SSH_SAMPLE_TIMEOUT:-15}"
+SCP_TIMEOUT="${FREEQ_SCP_TIMEOUT:-}"
 PEER_ENV="${FREEQ_PEER_ENV:-}"
 
 usage() {
@@ -130,6 +132,13 @@ if [ "$MODE" != "direct" ] && [ -z "$OVERLAY_HOST" ]; then
   echo "--overlay-host is required for freeq/both mode unless a peer.env file is available in $RECEIVE_DIR" >&2
   exit 1
 fi
+if ! [[ "$SCP_MB" =~ ^[0-9]+$ ]] || [ "$SCP_MB" -lt 1 ]; then
+  echo "FREEQ_SCP_MB must be a positive integer." >&2
+  exit 1
+fi
+if [ -z "$SCP_TIMEOUT" ]; then
+  SCP_TIMEOUT=$((60 + (SCP_MB * 30)))
+fi
 
 RESULT_DIR="$RESULT_ROOT/$LABEL"
 mkdir -p "$RESULT_DIR"
@@ -152,6 +161,8 @@ write_summary() {
     echo "- FreeQ overlay target: ${OVERLAY_HOST:-n/a}"
     echo "- SSH user: $SSH_USER"
     echo "- Direct SSH port: $SSH_PORT"
+    echo "- SSH sample timeout: ${SSH_SAMPLE_TIMEOUT}s"
+    echo "- SCP timeout: ${SCP_TIMEOUT}s"
     echo "- Result dir: $RESULT_DIR"
     echo ""
     echo "## Step Status"
@@ -198,7 +209,7 @@ time_ssh() {
   local ssh_target="${SSH_USER}@${host}"
   run_capture "$name" python3 -c '
 import subprocess, sys, time, statistics
-target, port = sys.argv[1], sys.argv[2]
+target, port, sample_timeout = sys.argv[1], sys.argv[2], float(sys.argv[3])
 ssh_opts = [
     "-o", "BatchMode=yes",
     "-o", "PreferredAuthentications=publickey",
@@ -212,7 +223,11 @@ samples = []
 return_codes = []
 for i in range(5):
     start = time.perf_counter()
-    rc = subprocess.call(["ssh", "-p", port, *ssh_opts, target, "true"])
+    try:
+        result = subprocess.run(["ssh", "-p", port, *ssh_opts, target, "true"], timeout=sample_timeout)
+        rc = result.returncode
+    except subprocess.TimeoutExpired:
+        rc = 124
     elapsed = (time.perf_counter() - start) * 1000
     samples.append(elapsed)
     return_codes.append(rc)
@@ -222,7 +237,7 @@ print(f"p95ish_ms={sorted(samples)[-1]:.1f}")
 failed = [rc for rc in return_codes if rc != 0]
 print(f"successful_samples={len(return_codes) - len(failed)}")
 sys.exit(0 if not failed else 1)
-' "$ssh_target" "$port"
+' "$ssh_target" "$port" "$SSH_SAMPLE_TIMEOUT"
 }
 
 scp_test() {
@@ -236,7 +251,7 @@ scp_test() {
   log "Uploading ${SCP_MB} MiB payload for $name..."
   run_capture "$name" python3 -c '
 import subprocess, sys, time
-payload, target, port = sys.argv[1], sys.argv[2], sys.argv[3]
+payload, target, port, mb, scp_timeout = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), float(sys.argv[5])
 ssh_opts = [
     "-o", "BatchMode=yes",
     "-o", "PreferredAuthentications=publickey",
@@ -248,18 +263,26 @@ ssh_opts = [
 ]
 remote = f"{target}:/tmp/freeq-perf-payload.bin"
 start = time.perf_counter()
-rc = subprocess.call(["scp", "-q", "-P", port, *ssh_opts, payload, remote])
+timed_out = False
+try:
+    result = subprocess.run(["scp", "-q", "-P", port, *ssh_opts, payload, remote], timeout=scp_timeout)
+    rc = result.returncode
+except subprocess.TimeoutExpired:
+    timed_out = True
+    rc = 124
 elapsed = time.perf_counter() - start
-mb = int(sys.argv[4])
 print(f"rc={rc}")
 print(f"seconds={elapsed:.3f}")
+print(f"timeout_secs={scp_timeout:.1f}")
+if timed_out:
+    print("timeout=true")
 if rc == 0:
     print(f"mbps={(mb * 8) / elapsed:.2f}")
-    subprocess.call(["ssh", "-p", port, *ssh_opts, target, "rm -f /tmp/freeq-perf-payload.bin"])
+    subprocess.run(["ssh", "-p", port, *ssh_opts, target, "rm -f /tmp/freeq-perf-payload.bin"], timeout=15)
 else:
     print("mbps=not_available")
 sys.exit(rc)
-' "$payload" "$ssh_target" "$port" "$SCP_MB"
+' "$payload" "$ssh_target" "$port" "$SCP_MB" "$SCP_TIMEOUT"
 }
 
 iperf_test() {
@@ -296,6 +319,8 @@ run_leg() {
   echo "ssh_port=$SSH_PORT"
   echo "iperf_seconds=$IPERF_SECONDS"
   echo "scp_mb=$SCP_MB"
+  echo "ssh_sample_timeout=$SSH_SAMPLE_TIMEOUT"
+  echo "scp_timeout=$SCP_TIMEOUT"
   echo "started_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } > "$RESULT_DIR/run.env"
 
