@@ -133,6 +133,44 @@ fi
 
 RESULT_DIR="$RESULT_ROOT/$LABEL"
 mkdir -p "$RESULT_DIR"
+STATUS_FILE="$RESULT_DIR/run-status.tsv"
+RUN_COMPLETE=0
+
+write_summary() {
+  local state="incomplete"
+  if [ "$RUN_COMPLETE" -eq 1 ]; then
+    state="complete"
+  fi
+
+  {
+    echo "# FreeQ Perf Run"
+    echo ""
+    echo "- Label: $LABEL"
+    echo "- State: $state"
+    echo "- Mode: $MODE"
+    echo "- Direct target: ${TARGET_HOST:-n/a}"
+    echo "- FreeQ overlay target: ${OVERLAY_HOST:-n/a}"
+    echo "- SSH user: $SSH_USER"
+    echo "- Direct SSH port: $SSH_PORT"
+    echo "- Result dir: $RESULT_DIR"
+    echo ""
+    echo "## Step Status"
+    echo ""
+    if [ "$(wc -l < "$STATUS_FILE" | tr -d ' ')" -gt 1 ]; then
+      echo "| Step | Exit code |"
+      echo "| --- | ---: |"
+      awk -F '\t' 'NR > 1 { printf "| `%s` | %s |\n", $1, $2 }' "$STATUS_FILE"
+    else
+      echo "No steps completed before exit."
+    fi
+    echo ""
+    echo "Raw command output files are stored alongside this summary."
+  } > "$RESULT_DIR/summary.md"
+}
+
+trap write_summary EXIT
+
+printf 'step\texit_code\n' > "$STATUS_FILE"
 
 log() {
   printf '%s\n' "$*" | tee -a "$RESULT_DIR/run.log"
@@ -148,6 +186,7 @@ run_capture() {
   "$@" > "$RESULT_DIR/$name.out" 2> "$RESULT_DIR/$name.err"
   local rc=$?
   set -e
+  printf '%s\t%s\n' "$name" "$rc" >> "$STATUS_FILE"
   log "exit_code=$rc"
   return 0
 }
@@ -192,7 +231,9 @@ scp_test() {
   local port="$3"
   local ssh_target="${SSH_USER}@${host}"
   local payload="$RESULT_DIR/${name}-payload.bin"
+  log "Creating ${SCP_MB} MiB payload for $name..."
   dd if=/dev/zero of="$payload" bs=1048576 count="$SCP_MB" >/dev/null 2>&1
+  log "Uploading ${SCP_MB} MiB payload for $name..."
   run_capture "$name" python3 -c '
 import subprocess, sys, time
 payload, target, port = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -265,19 +306,7 @@ if [ "$MODE" = "freeq" ] || [ "$MODE" = "both" ]; then
   run_leg "freeq" "$OVERLAY_HOST" "22"
 fi
 
-{
-  echo "# FreeQ Perf Run"
-  echo ""
-  echo "- Label: $LABEL"
-  echo "- Mode: $MODE"
-  echo "- Direct target: ${TARGET_HOST:-n/a}"
-  echo "- FreeQ overlay target: ${OVERLAY_HOST:-n/a}"
-  echo "- SSH user: $SSH_USER"
-  echo "- Direct SSH port: $SSH_PORT"
-  echo "- Result dir: $RESULT_DIR"
-  echo ""
-  echo "Raw command output files are stored alongside this summary."
-} > "$RESULT_DIR/summary.md"
-
+RUN_COMPLETE=1
+write_summary
 log ""
 log "Perf run complete: $RESULT_DIR"
