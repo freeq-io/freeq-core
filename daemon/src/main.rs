@@ -431,8 +431,8 @@ fn spawn_dataplane_runtime(
     packet_ingress: PacketIngress,
     packet_egress: PacketEgress,
 ) -> DataplaneRuntime {
-    let accept_task = tokio::spawn(run_accept_loop(shared.clone(), packet_egress));
-    let egress_task = tokio::spawn(run_egress_loop(shared, packet_ingress));
+    let accept_task = tokio::spawn(run_accept_loop(shared.clone(), packet_egress.clone()));
+    let egress_task = tokio::spawn(run_egress_loop(shared, packet_ingress, packet_egress));
 
     DataplaneRuntime {
         _accept_task: accept_task,
@@ -506,7 +506,11 @@ fn is_silent_inbound_probe(err: &anyhow::Error) -> bool {
 }
 
 #[allow(dead_code)]
-async fn run_egress_loop(shared: DataplaneShared, mut packet_ingress: PacketIngress) {
+async fn run_egress_loop(
+    shared: DataplaneShared,
+    mut packet_ingress: PacketIngress,
+    packet_egress: PacketEgress,
+) {
     while let Some(packet) = packet_ingress.recv().await {
         let routed_packet = match route_packet_for_peer(&shared.tunnel_service, packet) {
             Ok(routed_packet) => routed_packet,
@@ -530,7 +534,7 @@ async fn run_egress_loop(shared: DataplaneShared, mut packet_ingress: PacketIngr
             continue;
         };
 
-        let session = match get_or_create_outbound_session(
+        let (session, created_session) = match get_or_create_outbound_session(
             &shared.active_sessions,
             shared.endpoint.clone(),
             shared.identity.as_ref(),
@@ -555,6 +559,20 @@ async fn run_egress_loop(shared: DataplaneShared, mut packet_ingress: PacketIngr
                 continue;
             }
         };
+
+        if created_session {
+            tracing::info!(
+                peer = %routed_packet.peer_id,
+                "outbound peer receive loop attached"
+            );
+            tokio::spawn(run_connection_receiver(
+                Arc::clone(&session),
+                Arc::clone(&shared.tunnel_service),
+                packet_egress.clone(),
+                shared.api_state.clone(),
+                routed_packet.peer_id.clone(),
+            ));
+        }
 
         let packet_id = session
             .outbound_counter
@@ -674,9 +692,9 @@ async fn get_or_create_outbound_session(
     peer_registry: &freeq_auth::registry::PeerRegistry,
     peer_name: &str,
     peer_addr: SocketAddr,
-) -> Result<Arc<ActivePeerSession>> {
+) -> Result<(Arc<ActivePeerSession>, bool)> {
     if let Some(session) = active_sessions.lock().await.get(peer_name).cloned() {
-        return Ok(session);
+        return Ok((session, false));
     }
 
     let session = Arc::new(
@@ -686,7 +704,7 @@ async fn get_or_create_outbound_session(
         .lock()
         .await
         .insert(peer_name.to_string(), Arc::clone(&session));
-    Ok(session)
+    Ok((session, true))
 }
 
 async fn establish_outbound_session(
@@ -1178,6 +1196,7 @@ mod tests {
             "receiver",
             &receiver_identity.public_key_b64,
             &receiver_identity.kem_key_b64,
+            "10.0.0.2/32",
         );
         let receiver_config = config_with_socket_peer(
             client_endpoint.local_addr().expect("client addr"),
@@ -1185,6 +1204,7 @@ mod tests {
             "sender",
             &sender_identity.public_key_b64,
             &sender_identity.kem_key_b64,
+            "10.0.0.1/32",
         );
 
         let shared_keys =
@@ -1200,8 +1220,8 @@ mod tests {
         let receiver_state = init_api_state(&receiver_config, receiver_service.as_ref()).await;
 
         let (sender_tun_tx, sender_tun_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
-        let (_sender_out_tx, _sender_out_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
-        let (_receiver_in_tx, receiver_in_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
+        let (sender_out_tx, mut sender_out_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
+        let (receiver_in_tx, receiver_in_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
         let (receiver_tun_tx, mut receiver_tun_rx) =
             mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
 
@@ -1220,7 +1240,7 @@ mod tests {
                 api_state: sender_state.clone(),
             },
             sender_tun_rx,
-            _sender_out_tx.clone(),
+            sender_out_tx,
         );
         let _receiver_runtime = spawn_dataplane_runtime(
             DataplaneShared {
@@ -1270,22 +1290,68 @@ mod tests {
 
         assert_eq!(received, packet);
 
+        let return_packet = Bytes::from(test_ipv4_packet_with_source_dest(
+            1180,
+            [10, 0, 0, 2],
+            [10, 0, 0, 1],
+        ));
+        receiver_in_tx
+            .send(return_packet.clone())
+            .await
+            .expect("send return packet into receiver virtual tun");
+
+        let returned = match tokio::time::timeout(Duration::from_secs(5), sender_out_rx.recv())
+            .await
+        {
+            Ok(Some(packet)) => packet,
+            Ok(None) => panic!("sender packet channel closed"),
+            Err(_) => {
+                refresh_api_state(&sender_state, sender_service.as_ref()).await;
+                refresh_api_state(&receiver_state, receiver_service.as_ref()).await;
+                let sender_snapshot = sender_state.snapshot().await;
+                let receiver_snapshot = receiver_state.snapshot().await;
+                panic!(
+                    "return timeout: sender packets={}, frames={}, last_error={:?}; receiver packets={}, frames={}, last_error={:?}",
+                    sender_snapshot.tunnel.packets_ingested,
+                    sender_snapshot.tunnel.transport_frames,
+                    sender_snapshot.last_error,
+                    receiver_snapshot.tunnel.packets_ingested,
+                    receiver_snapshot.tunnel.transport_frames,
+                    receiver_snapshot.last_error,
+                );
+            }
+        };
+
+        assert_eq!(returned, return_packet);
+
         refresh_api_state(&sender_state, sender_service.as_ref()).await;
+        refresh_api_state(&receiver_state, receiver_service.as_ref()).await;
         let sender_snapshot = sender_state.snapshot().await;
+        let receiver_snapshot = receiver_state.snapshot().await;
         assert_eq!(sender_snapshot.tunnel.packets_ingested, 1);
         assert!(sender_snapshot.tunnel.transport_frames >= 1);
+        assert_eq!(receiver_snapshot.tunnel.packets_ingested, 1);
+        assert!(receiver_snapshot.tunnel.transport_frames >= 1);
 
         client_endpoint.close().await;
         server_endpoint.close().await;
     }
 
     fn test_ipv4_packet(len: usize, destination: [u8; 4]) -> Vec<u8> {
+        test_ipv4_packet_with_source_dest(len, [10, 0, 0, 1], destination)
+    }
+
+    fn test_ipv4_packet_with_source_dest(
+        len: usize,
+        source: [u8; 4],
+        destination: [u8; 4],
+    ) -> Vec<u8> {
         let mut packet = vec![0u8; len];
         packet[0] = 0x45;
         packet[2..4].copy_from_slice(&(len as u16).to_be_bytes());
         packet[8] = 64;
         packet[9] = 17;
-        packet[12..16].copy_from_slice(&[10, 0, 0, 1]);
+        packet[12..16].copy_from_slice(&source);
         packet[16..20].copy_from_slice(&destination);
         packet
     }
@@ -1296,6 +1362,7 @@ mod tests {
         peer_name: &str,
         peer_public_key_b64: &str,
         peer_kem_key_b64: &str,
+        peer_allowed_ip: &str,
     ) -> freeq_config::Config {
         toml::from_str(&format!(
             r#"
@@ -1314,7 +1381,7 @@ mod tests {
             endpoint = "{peer_addr}"
             public_key = "{peer_public_key_b64}"
             kem_key = "{peer_kem_key_b64}"
-            allowed_ips = ["10.0.0.2/32"]
+            allowed_ips = ["{peer_allowed_ip}"]
             key_rotation_secs = 3600
             "#
         ))
