@@ -1,6 +1,6 @@
-# David Florida Mac Tunnel Runbook
+# Florida Mac-To-Mac Field Runbook
 
-Goal: connect David's Florida Mac to Patrick's Mac over a two-node FreeQ tunnel without hidden-folder browsing, SSH password sharing, or hand-built config files.
+Goal: connect a Florida Mac behind Starlink to a reachable Mac over a two-node FreeQ tunnel without hidden-folder browsing, SSH password sharing, or hand-built config files.
 
 This runbook uses the new visible setup folder:
 
@@ -13,9 +13,87 @@ This runbook uses the new visible setup folder:
 
 No one should send `identity.key`. No one should need to open `.freeq` in Finder.
 
+## Field Result: 2026-07-17
+
+The first successful field exercise established a FreeQ peer session from a
+Starlink residential Mac to a reachable Mac with UDP `51820` forwarded.
+
+Reachable node status:
+
+```json
+{
+  "name": "patrick-mac",
+  "peer_count": 1,
+  "tunnel_count": 1,
+  "packets_ingested": 12,
+  "encrypted_bytes": 1200,
+  "transport_frames": 12,
+  "route_misses": 0,
+  "last_error": null
+}
+```
+
+Reachable node log:
+
+```json
+{"message":"inbound peer session established","peer":"davids-macbook-pro"}
+```
+
+Starlink-side node status:
+
+```json
+{
+  "name": "davids-macbook-pro",
+  "peer_count": 1,
+  "tunnel_count": 1,
+  "packets_ingested": 8,
+  "encrypted_bytes": 800,
+  "transport_frames": 8,
+  "route_misses": 0,
+  "last_error": null
+}
+```
+
+Starlink-side node log:
+
+```json
+{"message":"establishing outbound peer session","peer":"patrick-mac","endpoint":"136.46.40.139:51820"}
+{"message":"outbound peer session established","peer":"patrick-mac","endpoint":"136.46.40.139:51820"}
+```
+
+Conclusion:
+
+- Starlink residential/CGNAT prevented direct inbound connectivity to the
+  Starlink-side node.
+- The Starlink-side node could still initiate outbound to the reachable node.
+- FreeQ successfully authenticated the peer session and processed tunnel
+  packets in the outbound-to-reachable direction.
+- The installer and setup UI need first-class node capability labels so users
+  understand whether a peer can initiate outbound, accept inbound direct UDP,
+  or needs relay/rendezvous support.
+
+## Node Capability Model
+
+The field lesson is that "peer configured" is not enough. The setup flow should
+classify each node by direct network capability:
+
+| Capability | Meaning | Example |
+|------------|---------|---------|
+| `outbound-only` | Node can initiate to a reachable peer but cannot accept direct inbound UDP | Residential Starlink behind CGNAT |
+| `inbound-reachable` | Node can accept direct inbound UDP from peers | Home/office router forwarding UDP `51820` |
+| `bidirectional-direct` | Node can both initiate outbound and accept inbound direct UDP | Public IP or correctly forwarded router on both sides |
+| `relay-required` | Direct peer-to-peer is not expected to work; use rendezvous/relay | CGNAT-to-CGNAT, locked enterprise guest Wi-Fi |
+
+The setup website should show these labels per peer instead of only `peer_count`
+and `tunnel_count`. A `receive-only` node is possible in narrow gateway designs,
+but it is not the normal end-user shape. Most product decisions should be based
+on inbound reachability and outbound initiation, not on packet send/receive
+words alone.
+
 ## Before You Start
 
-Both Macs need a reachable UDP endpoint for FreeQ, normally UDP `51820`.
+The simplest direct test needs at least one reachable UDP endpoint for FreeQ,
+normally UDP `51820`.
 
 For Patrick's Mac, confirm the public endpoint that David can reach. If Patrick's public IP is still `136.46.40.139` and UDP `51820` is forwarded to this Mac, use:
 
@@ -70,15 +148,15 @@ Send David this file:
 
 That file is safe to send. It contains Patrick's node name, overlay address, public endpoint, and public keys. It does not contain Patrick's private identity key.
 
-## David Side
+## Starlink/CGNAT Side
 
-David should run this in Terminal:
+The Starlink-side tester should run this in Terminal:
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/setup/freeq-setup-macos.sh)"
 ```
 
-When prompted, David should use:
+When prompted, the Starlink-side tester should use:
 
 ```text
 Local node name: david-florida-mac
@@ -88,7 +166,11 @@ This Mac's reachable UDP endpoint to share: <david-public-host-or-ip>:51820
 Peer SSH user for optional benchmarks: leave blank
 ```
 
-If David does not yet know his reachable UDP endpoint, he can leave it blank for install, but he must set it before sending his peer file back. The receiving Mac cannot render a working config from a peer file with a blank `FREEQ_PUBLIC_ENDPOINT`.
+If the Starlink-side tester does not have a public inbound endpoint, leave the
+reachable UDP endpoint blank and treat that node as `outbound-only`. It can
+initiate to the reachable node, but the reachable node should not expect direct
+inbound connectivity back to the Starlink-side node without relay/rendezvous or
+a public IP service.
 
 David's installer creates:
 
@@ -110,7 +192,7 @@ David should send Patrick this file:
 ~/FreeQ/01-send-this-file/david-florida-mac-peer.env
 ```
 
-## Patrick Receives David's File
+## Reachable Node Receives The Starlink-Side File
 
 Patrick should put David's file here:
 
@@ -203,13 +285,15 @@ On each Mac:
 curl -s http://127.0.0.1:6789/v1/status
 ```
 
-Patrick should be able to test David's overlay address:
+The reachable node can try the Starlink-side overlay address, but this is
+expected to fail or partially fail when the Starlink-side node is
+`outbound-only`:
 
 ```bash
 ping 10.66.0.2
 ```
 
-David should be able to test Patrick's overlay address:
+The Starlink-side node should initiate the most meaningful direct test:
 
 ```bash
 ping 10.66.0.1

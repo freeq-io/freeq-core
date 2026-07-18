@@ -100,6 +100,41 @@ OpenTelemetry, SIEM export, or FreeQ Cloud agent forwarding.
    model version, prompt version, evidence IDs, policy pack, and human review
    disposition.
 
+## Connectivity Capability Labels
+
+The Florida Mac-to-Mac field exercise proved that FreeQ needs to describe node
+reachability explicitly. A node can be correctly installed and authenticated
+while still being unable to accept direct inbound UDP because of CGNAT,
+Starlink residential networking, hotel Wi-Fi, enterprise guest networks, or
+locked-down consumer routers.
+
+Core and Cloud should track these capabilities independently of peer trust:
+
+| Capability | Product meaning |
+|------------|-----------------|
+| `outbound-only` | Node can initiate to a reachable peer but is not directly reachable from the internet |
+| `inbound-reachable` | Node can accept direct inbound UDP for FreeQ peer sessions |
+| `bidirectional-direct` | Node can initiate outbound and accept inbound direct UDP |
+| `relay-required` | Direct peer-to-peer should be replaced by rendezvous or relay |
+
+The setup website should show these labels per node and per peer. A simple
+`peer_count` or `tunnel_count` is not enough for non-technical users because a
+healthy outbound-only tunnel may still fail a symmetric direct ping test.
+
+Detection should combine:
+
+- local route/interface validation
+- successful outbound session establishment
+- observed inbound session establishment
+- public endpoint reachability checks when safe
+- user-confirmed network type, such as Starlink/CGNAT
+- relay/rendezvous recommendation when both sides appear outbound-only
+
+This is a Cloud validation point: FreeQ Core can support direct-node operation
+where the network allows it, while FreeQ Cloud should make NAT-hostile
+deployments reliable through rendezvous, relay, fleet policy, and operator
+visibility.
+
 ## Enterprise Acceptance Criteria
 
 - An unauthenticated internet scanner receives no FreeQ response.
@@ -112,3 +147,6 @@ OpenTelemetry, SIEM export, or FreeQ Cloud agent forwarding.
 - Cloud workflows can create alerts, tickets, and provisioning intents without
   bypassing local approval policy.
 - FreeQ Core remains independently useful when Cloud is absent or unreachable.
+- Setup surfaces clearly label each peer as outbound-only, inbound-reachable,
+  bidirectional-direct, or relay-required so operators know whether direct
+  peer-to-peer or Cloud relay is the correct path.

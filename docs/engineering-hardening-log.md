@@ -453,6 +453,35 @@ Main files:
 - `crates/freeq-auth/src/cloaking.rs`
 - `daemon/src/main.rs`
 
+### 5. Setup reachability classification is still too implicit
+
+Current state:
+
+- Field testing proved that a node behind Starlink residential/CGNAT can
+  install successfully, authenticate a peer session outbound, and process
+  tunnel packets while still being unable to accept direct inbound UDP.
+- The setup website currently exposes peer and tunnel counters, but it does not
+  classify whether a node is outbound-only, inbound-reachable,
+  bidirectional-direct, or relay-required.
+- Non-technical users can misread a failed symmetric ping as a failed install
+  even when the direct network topology is the real blocker.
+
+Required fix:
+
+- Add setup/API fields for node and peer connectivity capability.
+- Teach the setup flow to detect or ask about CGNAT/Starlink-style networks.
+- Show capability badges in the local setup website.
+- Recommend direct peer, reachable gateway, or Cloud relay/rendezvous based on
+  the observed capability.
+
+Main files:
+
+- `crates/freeq-api/src/models.rs`
+- `crates/freeq-api/src/state.rs`
+- `dashboard/index.html`
+- `scripts/setup/`
+- `docs/enterprise-telemetry-cloud-path.md`
+
 ## Suggested Next Issues
 
 These make sense as explicit repository issues because they are concrete,
@@ -464,6 +493,7 @@ bounded, and actionable:
 4. Validate Ansible deployment against a real Linux host
 5. Add host-level integration test documentation for macOS `utun` and Linux TUN
 6. Add pre-QUIC UDP admission gate for true transport-level cloaking
+7. Add node reachability classification and setup UI capability badges
 
 ## Suggested Use
 
