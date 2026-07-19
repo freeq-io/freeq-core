@@ -676,6 +676,9 @@ Changes made:
 - Added a required `X-FreeQ-Setup-Intent: local-dashboard` header on local API
   mutation routes and taught the bundled dashboard to send it, reducing
   browser-to-localhost write exposure.
+- Added `scripts/test-linux-deploy.sh` and wired it into the pre-commit guard
+  so the Linux role's service sandboxing and API bind invariants are checked
+  from any development host.
 
 Deliberately left for a real Linux host validation pass:
 

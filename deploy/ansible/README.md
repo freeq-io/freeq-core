@@ -80,6 +80,25 @@ Build locally as part of the play:
 ansible-playbook playbooks/site.yml -e freeq_build_local_binary=true
 ```
 
+## Local Linux Role Validation
+
+The repository includes a static Linux deployment harness that runs on macOS or
+Linux:
+
+```bash
+scripts/test-linux-deploy.sh
+```
+
+It checks the role contract for the hardened systemd unit, local API loopback
+guard, rendered node security fields, and unsafe directive regressions. If
+`ansible-playbook` is installed, it also runs an Ansible syntax check.
+
+The main pre-commit guard runs this harness automatically:
+
+```bash
+scripts/git-pre-commit.sh
+```
+
 ## macOS Local Validation
 
 For local MacBook validation, use the dedicated loopback playbook instead of
@@ -142,6 +161,11 @@ authorized workflow, logged action, and post-deployment validation.
 - `freeq_node_address`: required overlay address/prefix
 - `freeq_peers`: list of peer dictionaries matching the daemon config schema
 - `freeq_api_enabled`: whether the local REST API is enabled
+- `freeq_api_addr`: local REST API bind address; defaults to `127.0.0.1:6789`
+- `freeq_allow_unsafe_api_bind`: must be set to `true` before a non-loopback
+  API bind is accepted
+- `freeq_strict_cloaking`: fail closed until the pre-QUIC admission gate is
+  implemented
 - `freeq_manage_sysctl`: whether to apply the optional sysctl profile
 - `freeq_sysctl`: sysctl map applied when `freeq_manage_sysctl` is true
 
@@ -149,7 +173,25 @@ authorized workflow, logged action, and post-deployment validation.
 
 - The service runs as a dedicated `freeq` user by default.
 - systemd grants `CAP_NET_ADMIN` and `CAP_NET_BIND_SERVICE`.
+- The local API binds to loopback by default. Non-loopback API exposure must be
+  an explicit inventory decision with `freeq_allow_unsafe_api_bind: true`.
 - The role creates `/etc/freeq`, `/var/lib/freeq`, and `/var/log/freeq`.
 - The health check calls `GET /v1/status` on the local API after restart.
 - Peer public keys and KEM keys stay in inventory or a vaulted variable file,
   not in the role itself.
+- The systemd unit keeps filesystem writes scoped to FreeQ directories and
+  grants `/dev/net/tun` access without broad device or administrator
+  capabilities.
+
+## Real Linux Host Validation Checklist
+
+Before treating this as production-ready on a new distro family, validate on a
+real Linux host:
+
+- `systemd-analyze verify /etc/systemd/system/freeqd.service`
+- `systemctl start freeqd` and `systemctl status freeqd`
+- `/dev/net/tun` is present and usable by the service capability set
+- `curl -fsS http://127.0.0.1:6789/v1/status` succeeds locally
+- UDP listen port is reachable according to the intended firewall policy
+- two-node overlay traffic exercises routes through the TUN interface
+- journald logs show no systemd sandbox denial for expected daemon behavior

@@ -9,6 +9,9 @@ cargo fmt -- --check
 echo "Running setup flow harness..."
 scripts/test-setup-flow.sh
 
+echo "Running Linux deployment harness..."
+scripts/test-linux-deploy.sh
+
 echo "Running cargo clippy audit analysis..."
 cargo clippy --all-targets --all-features -- -D warnings
 
