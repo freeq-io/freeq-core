@@ -10,9 +10,11 @@
       - freeq_key_path | length > 0
       - freeq_binary_dest | length > 0
       - freeq_peers is iterable
+      - not (freeq_api_enabled | bool) or (freeq_allow_unsafe_api_bind | bool) or (freeq_api_addr is match('^(127\\.|\\[::1\\]:|::1:)'))
     fail_msg: >-
-      FreeQ deployment requires Linux + systemd and a non-empty
-      freeq_node_address.
+      FreeQ deployment requires Linux + systemd, a non-empty
+      freeq_node_address, and a loopback freeq_api_addr unless
+      freeq_allow_unsafe_api_bind is explicitly true.
 
 - name: Validate peer definitions
   ansible.builtin.assert:

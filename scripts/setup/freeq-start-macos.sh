@@ -15,11 +15,6 @@ RESTART=0
 SETUP_URL="${FREEQ_SETUP_URL:-http://127.0.0.1:6789/}"
 STATUS_URL="${SETUP_URL%/}/v1/status"
 
-if [ -f "$CONFIG_FILE" ]; then
-  # shellcheck disable=SC1090
-  . "$CONFIG_FILE"
-fi
-
 usage() {
   cat <<'EOF'
 Start freeqd for a macOS two-node perf test and configure the assigned utun.
@@ -61,6 +56,18 @@ env_value() {
       exit
     }
   ' "$file"
+}
+
+required_env_value() {
+  local file="$1"
+  local key="$2"
+  local value
+  value="$(env_value "$file" "$key")"
+  if [ -z "$value" ]; then
+    echo "$key is missing or blank in: $file" >&2
+    exit 1
+  fi
+  printf '%s\n' "$value"
 }
 
 select_remote_peer_env() {
@@ -180,12 +187,35 @@ if not (1 <= port_int <= 65535):
 PY
 }
 
+validate_ip_addr() {
+  python3 - "$1" <<'PY' >/dev/null 2>&1
+import ipaddress
+import sys
+
+try:
+    ipaddress.ip_address(sys.argv[1])
+except ValueError:
+    raise SystemExit(1)
+PY
+}
+
 config_listen_addr() {
   awk -F'"' '
     /^\[node\]/ { in_node = 1; next }
     /^\[/ { in_node = 0 }
     in_node && /^[[:space:]]*listen[[:space:]]*=/ { print $2; exit }
   ' "$CONFIG"
+}
+
+validate_pid_value() {
+  [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -gt 0 ]
+}
+
+pid_matches_freeqd() {
+  local pid="$1"
+  local command
+  command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  [ -n "$command" ] && [[ "$command" =~ (^|[[:space:]/])freeqd([[:space:]]|$) ]]
 }
 
 mkdir -p "$LOG_DIR"
@@ -230,7 +260,16 @@ fi
 
 if [ -f "$PID_FILE" ]; then
   old_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+  if [ -n "$old_pid" ] && ! validate_pid_value "$old_pid"; then
+    echo "Ignoring invalid freeqd pid file value: $PID_FILE" >&2
+    old_pid=""
+  fi
   if [ -n "$old_pid" ] && kill -0 "$old_pid" >/dev/null 2>&1; then
+    if ! pid_matches_freeqd "$old_pid"; then
+      echo "Refusing to manage pid $old_pid from $PID_FILE because it is not freeqd." >&2
+      echo "Remove the stale pid file after verifying the process owner: $PID_FILE" >&2
+      exit 1
+    fi
     if [ "$RESTART" -eq 1 ]; then
       echo "Checking sudo access..."
       sudo -v
@@ -307,13 +346,19 @@ fi
 echo "Detected interface: $interface"
 
 if [ "$CONFIGURE_INTERFACE" -eq 1 ]; then
-  # shellcheck disable=SC1090
-  . "$LOCAL_ENV"
-  local_ip="${FREEQ_NODE_ADDRESS%%/*}"
+  local_address="$(required_env_value "$LOCAL_ENV" FREEQ_NODE_ADDRESS)"
+  local_ip="${local_address%%/*}"
+  if ! validate_ip_addr "$local_ip"; then
+    echo "Invalid local overlay address in $LOCAL_ENV: $local_address" >&2
+    exit 1
+  fi
 
-  # shellcheck disable=SC1090
-  . "$PEER_ENV"
-  peer_ip="${FREEQ_NODE_ADDRESS%%/*}"
+  peer_address="$(required_env_value "$PEER_ENV" FREEQ_NODE_ADDRESS)"
+  peer_ip="${peer_address%%/*}"
+  if ! validate_ip_addr "$peer_ip"; then
+    echo "Invalid peer overlay address in $PEER_ENV: $peer_address" >&2
+    exit 1
+  fi
 
   echo "Configuring $interface local=$local_ip peer=$peer_ip"
   sudo ifconfig "$interface" "$local_ip" "$peer_ip" up

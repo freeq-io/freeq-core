@@ -48,6 +48,63 @@ validate_endpoint() {
   fi
 }
 
+validate_node_name() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$ ]]
+}
+
+validate_socket_addr() {
+  python3 - "$1" <<'PY' >/dev/null 2>&1
+import ipaddress
+import sys
+
+value = sys.argv[1]
+if value.startswith("["):
+    host, sep, port = value[1:].partition("]:")
+else:
+    host, sep, port = value.rpartition(":")
+if not host or not sep or not port.isdigit():
+    raise SystemExit(1)
+try:
+    ipaddress.ip_address(host)
+except ValueError:
+    raise SystemExit(1)
+port_int = int(port)
+if not (1 <= port_int <= 65535):
+    raise SystemExit(1)
+PY
+}
+
+validate_overlay_cidr() {
+  python3 - "$1" <<'PY' >/dev/null 2>&1
+import ipaddress
+import sys
+
+try:
+    network = ipaddress.ip_network(sys.argv[1], strict=False)
+except ValueError:
+    raise SystemExit(1)
+if network.version != 4:
+    raise SystemExit(1)
+PY
+}
+
+validate_exchange_key() {
+  local name="$1"
+  local value="$2"
+  python3 - "$name" "$value" <<'PY' >/dev/null 2>&1
+import base64
+import sys
+
+name, value = sys.argv[1], sys.argv[2]
+try:
+    decoded = base64.b64decode(value, validate=True)
+except Exception:
+    raise SystemExit(1)
+if len(decoded) < 16:
+    raise SystemExit(1)
+PY
+}
+
 while IFS= read -r line || [ -n "$line" ]; do
   case "$line" in
     ""|\#*) continue ;;
@@ -76,15 +133,29 @@ for name in FREEQ_NODE_NAME FREEQ_NODE_ADDRESS FREEQ_NODE_LISTEN FREEQ_PUBLIC_EN
   fi
 done
 
-case "$FREEQ_NODE_ADDRESS" in
-  */*) ;;
-  *)
-    echo "FREEQ_NODE_ADDRESS must include a CIDR suffix, got: $FREEQ_NODE_ADDRESS" >&2
-    exit 1
-    ;;
-esac
+if ! validate_node_name "$FREEQ_NODE_NAME"; then
+  echo "FREEQ_NODE_NAME must use only letters, numbers, dot, dash, or underscore, got: $FREEQ_NODE_NAME" >&2
+  exit 1
+fi
+
+if ! validate_overlay_cidr "$FREEQ_NODE_ADDRESS"; then
+  echo "FREEQ_NODE_ADDRESS must be a valid IPv4 CIDR, got: $FREEQ_NODE_ADDRESS" >&2
+  exit 1
+fi
+
+if ! validate_socket_addr "$FREEQ_NODE_LISTEN"; then
+  echo "FREEQ_NODE_LISTEN must be an IP:PORT socket address, got: $FREEQ_NODE_LISTEN" >&2
+  exit 1
+fi
 
 validate_endpoint "$FREEQ_PUBLIC_ENDPOINT"
+for name in FREEQ_PUBLIC_KEY_B64 FREEQ_KEM_KEY_B64; do
+  if ! validate_exchange_key "$name" "${!name}"; then
+    echo "$name must be valid non-empty base64 in peer env file:" >&2
+    echo "  $PEER_ENV" >&2
+    exit 1
+  fi
+done
 
 echo "Peer env is valid:"
 echo "  $PEER_ENV"

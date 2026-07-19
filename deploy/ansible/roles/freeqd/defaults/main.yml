@@ -22,6 +22,8 @@ freeq_node_algorithm: "ml-kem-768"
 freeq_node_sign: "ml-dsa-65"
 freeq_api_enabled: true
 freeq_api_addr: "127.0.0.1:6789"
+freeq_allow_unsafe_api_bind: false
+freeq_strict_cloaking: false
 freeq_peers: []
 
 freeq_systemd_restart_sec: 5

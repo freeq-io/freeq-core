@@ -652,6 +652,35 @@ Main files:
 - `scripts/setup/`
 - `docs/enterprise-telemetry-cloud-path.md`
 
+## 2026-07-19 Unix/Linux Service Hardening Pass
+
+Applied directly after reviewing the OpenVPN chained RCE/LPE lessons against
+FreeQ's setup and deployment surfaces.
+
+Changes made:
+
+- Stopped `freeq-render-config.sh` and `freeq-start-macos.sh` from sourcing
+  setup/profile and peer env files. They now parse explicit keys as data.
+- Made `freeq-render-config.sh` encode parsed values as TOML strings instead
+  of interpolating raw env-file values into the generated config.
+- Added stricter public `peer.env` validation for IPv4 CIDR overlay addresses,
+  IP socket listen addresses, node names, and base64 exchange keys.
+- Added pid-file guardrails before `freeq-start-macos.sh --restart` uses
+  `sudo kill`; the pid must be numeric, live, and match a `freeqd` command.
+- Extended the Ansible Linux role to render `allow_unsafe_api_bind` and
+  `strict_cloaking`, and to reject non-loopback API binds unless explicitly
+  opted into.
+- Added compatible systemd sandboxing controls around address families,
+  kernel logs/tunables/modules, realtime, SUID/SGID, personality changes, and
+  writable/executable memory.
+
+Deliberately left for a real Linux host validation pass:
+
+- `SystemCallFilter=` hardening. FreeQ's TUN and networking path is ioctl-heavy,
+  so this should be added from observed syscall traces rather than guessed.
+- `PrivateDevices=true`. The service needs `/dev/net/tun`; the current unit
+  uses `DeviceAllow=/dev/net/tun rw` without hiding the device namespace.
+
 ## Suggested Next Issues
 
 These make sense as explicit repository issues because they are concrete,

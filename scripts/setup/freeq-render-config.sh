@@ -9,11 +9,6 @@ CONFIG_FILE="${FREEQ_SETUP_CONFIG:-$SETUP_DIR/freeq-setup.conf}"
 RECEIVE_DIR="$SETUP_DIR/02-put-peer-file-here"
 LISTEN_ONLY=0
 
-if [ -f "$CONFIG_FILE" ]; then
-  # shellcheck disable=SC1090
-  . "$CONFIG_FILE"
-fi
-
 usage() {
   cat <<'EOF'
 Render a two-node freeq.toml from local node.env and peer peer.env files.
@@ -80,6 +75,19 @@ if not (1 <= port_int <= 65535):
 PY
 }
 
+validate_node_name() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$ ]]
+}
+
+toml_string() {
+  python3 - "$1" <<'PY'
+import json
+import sys
+
+print(json.dumps(sys.argv[1]))
+PY
+}
+
 env_value() {
   local file="$1"
   local key="$2"
@@ -93,6 +101,18 @@ env_value() {
       exit
     }
   ' "$file"
+}
+
+required_env_value() {
+  local file="$1"
+  local key="$2"
+  local value
+  value="$(env_value "$file" "$key")"
+  if [ -z "$value" ]; then
+    echo "$key is missing or blank in: $file" >&2
+    exit 1
+  fi
+  printf '%s\n' "$value"
 }
 
 select_remote_peer_env() {
@@ -196,12 +216,14 @@ if [ "$LISTEN_ONLY" -eq 0 ]; then
   scripts/setup/freeq-validate-peer-env.sh "$PEER_ENV" >/dev/null
 fi
 
-# shellcheck disable=SC1090
-. "$LOCAL_ENV"
-LOCAL_NODE_NAME="$FREEQ_NODE_NAME"
-LOCAL_NODE_ADDRESS="$FREEQ_NODE_ADDRESS"
-LOCAL_NODE_LISTEN="$FREEQ_NODE_LISTEN"
-LOCAL_IDENTITY_KEY_PATH="$FREEQ_IDENTITY_KEY_PATH"
+LOCAL_NODE_NAME="$(required_env_value "$LOCAL_ENV" FREEQ_NODE_NAME)"
+LOCAL_NODE_ADDRESS="$(required_env_value "$LOCAL_ENV" FREEQ_NODE_ADDRESS)"
+LOCAL_NODE_LISTEN="$(required_env_value "$LOCAL_ENV" FREEQ_NODE_LISTEN)"
+LOCAL_IDENTITY_KEY_PATH="$(required_env_value "$LOCAL_ENV" FREEQ_IDENTITY_KEY_PATH)"
+if ! validate_node_name "$LOCAL_NODE_NAME"; then
+  echo "Invalid local node name in node.env: $LOCAL_NODE_NAME" >&2
+  exit 1
+fi
 if ! validate_socket_addr "$LOCAL_NODE_LISTEN"; then
   echo "Invalid local listen address in node.env: $LOCAL_NODE_LISTEN" >&2
   echo "Use an IP:PORT bind address such as 0.0.0.0:51820." >&2
@@ -213,13 +235,18 @@ if [ ! -f "$LOCAL_IDENTITY_KEY_PATH" ]; then
   exit 1
 fi
 
+LOCAL_NODE_NAME_TOML="$(toml_string "$LOCAL_NODE_NAME")"
+LOCAL_NODE_ADDRESS_TOML="$(toml_string "$LOCAL_NODE_ADDRESS")"
+LOCAL_NODE_LISTEN_TOML="$(toml_string "$LOCAL_NODE_LISTEN")"
+LOCAL_IDENTITY_KEY_PATH_TOML="$(toml_string "$LOCAL_IDENTITY_KEY_PATH")"
+
 mkdir -p "$(dirname "$OUTPUT_CONFIG")"
 cat > "$OUTPUT_CONFIG" <<EOF
 [node]
-name = "$LOCAL_NODE_NAME"
-listen = "$LOCAL_NODE_LISTEN"
-address = "$LOCAL_NODE_ADDRESS"
-key_path = "$LOCAL_IDENTITY_KEY_PATH"
+name = $LOCAL_NODE_NAME_TOML
+listen = $LOCAL_NODE_LISTEN_TOML
+address = $LOCAL_NODE_ADDRESS_TOML
+key_path = $LOCAL_IDENTITY_KEY_PATH_TOML
 algorithm = "ml-kem-768"
 sign = "ml-dsa-65"
 api_enabled = true
@@ -241,15 +268,16 @@ EOF
   exit 0
 fi
 
-unset FREEQ_PUBLIC_ENDPOINT
-# shellcheck disable=SC1090
-. "$PEER_ENV"
-PEER_NODE_NAME="$FREEQ_NODE_NAME"
-PEER_NODE_ADDRESS="$FREEQ_NODE_ADDRESS"
-PEER_PUBLIC_ENDPOINT="${FREEQ_PUBLIC_ENDPOINT:-}"
-PEER_PUBLIC_KEY_B64="$FREEQ_PUBLIC_KEY_B64"
-PEER_KEM_KEY_B64="$FREEQ_KEM_KEY_B64"
+PEER_NODE_NAME="$(required_env_value "$PEER_ENV" FREEQ_NODE_NAME)"
+PEER_NODE_ADDRESS="$(required_env_value "$PEER_ENV" FREEQ_NODE_ADDRESS)"
+PEER_PUBLIC_ENDPOINT="$(required_env_value "$PEER_ENV" FREEQ_PUBLIC_ENDPOINT)"
+PEER_PUBLIC_KEY_B64="$(required_env_value "$PEER_ENV" FREEQ_PUBLIC_KEY_B64)"
+PEER_KEM_KEY_B64="$(required_env_value "$PEER_ENV" FREEQ_KEM_KEY_B64)"
 PEER_ALLOWED_IP="${PEER_NODE_ADDRESS%%/*}/32"
+if ! validate_node_name "$PEER_NODE_NAME"; then
+  echo "Invalid peer node name in peer.env: $PEER_NODE_NAME" >&2
+  exit 1
+fi
 
 if [ -z "$PEER_PUBLIC_ENDPOINT" ]; then
   echo "Missing peer endpoint." >&2
@@ -271,14 +299,20 @@ if [ "$LOCAL_NODE_ADDRESS" = "$PEER_NODE_ADDRESS" ]; then
   exit 1
 fi
 
+PEER_NODE_NAME_TOML="$(toml_string "$PEER_NODE_NAME")"
+PEER_PUBLIC_ENDPOINT_TOML="$(toml_string "$PEER_PUBLIC_ENDPOINT")"
+PEER_PUBLIC_KEY_B64_TOML="$(toml_string "$PEER_PUBLIC_KEY_B64")"
+PEER_KEM_KEY_B64_TOML="$(toml_string "$PEER_KEM_KEY_B64")"
+PEER_ALLOWED_IP_TOML="$(toml_string "$PEER_ALLOWED_IP")"
+
 cat >> "$OUTPUT_CONFIG" <<EOF
 
 [[peer]]
-name = "$PEER_NODE_NAME"
-endpoint = "$PEER_PUBLIC_ENDPOINT"
-public_key = "$PEER_PUBLIC_KEY_B64"
-kem_key = "$PEER_KEM_KEY_B64"
-allowed_ips = ["$PEER_ALLOWED_IP"]
+name = $PEER_NODE_NAME_TOML
+endpoint = $PEER_PUBLIC_ENDPOINT_TOML
+public_key = $PEER_PUBLIC_KEY_B64_TOML
+kem_key = $PEER_KEM_KEY_B64_TOML
+allowed_ips = [$PEER_ALLOWED_IP_TOML]
 key_rotation_secs = 3600
 EOF
 

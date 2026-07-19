@@ -7,6 +7,8 @@ algorithm = "{{ freeq_node_algorithm }}"
 sign = "{{ freeq_node_sign }}"
 api_enabled = {{ freeq_api_enabled | ternary("true", "false") }}
 api_addr = "{{ freeq_api_addr }}"
+allow_unsafe_api_bind = {{ freeq_allow_unsafe_api_bind | ternary("true", "false") }}
+strict_cloaking = {{ freeq_strict_cloaking | ternary("true", "false") }}
 {% for peer in freeq_peers %}
 
 [[peer]]
