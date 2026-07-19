@@ -648,7 +648,10 @@
     async function postJson(path, body) {
       const response = await fetch(path, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-FreeQ-Setup-Intent": "local-dashboard",
+        },
         body: JSON.stringify(body),
       });
       const contentType = response.headers.get("content-type") || "";

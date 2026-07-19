@@ -673,6 +673,9 @@ Changes made:
 - Added compatible systemd sandboxing controls around address families,
   kernel logs/tunables/modules, realtime, SUID/SGID, personality changes, and
   writable/executable memory.
+- Added a required `X-FreeQ-Setup-Intent: local-dashboard` header on local API
+  mutation routes and taught the bundled dashboard to send it, reducing
+  browser-to-localhost write exposure.
 
 Deliberately left for a real Linux host validation pass:
 
