@@ -9,6 +9,7 @@ use crate::{
 };
 use axum::{extract::Path, extract::State, Json};
 use chrono::{Duration, Utc};
+use rand::RngCore as _;
 use sha2::Digest as _;
 use std::{collections::BTreeMap, fs, path::Path as FsPath};
 
@@ -67,11 +68,7 @@ pub async fn create_invite(
     let now = Utc::now();
     let expires_at = now + Duration::minutes(INVITE_TTL_MINUTES);
     let nonce = uuid::Uuid::new_v4().simple().to_string();
-    let pairing_code = nonce
-        .chars()
-        .take(8)
-        .collect::<String>()
-        .to_ascii_uppercase();
+    let pairing_code = generate_pairing_code();
     let node_id = node_id_for_material(local_peer.public_key.as_bytes());
     let label = req
         .label
@@ -312,6 +309,12 @@ fn pairing_hash(nonce: &str, pairing_code: &str) -> String {
     hex_lower(&hasher.finalize())
 }
 
+fn generate_pairing_code() -> String {
+    let mut bytes = [0u8; 4];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    hex_upper(&bytes)
+}
+
 fn node_id_for_material(material: &[u8]) -> String {
     let digest = sha2::Sha256::digest(material);
     format!("fq-{}", &hex_lower(&digest)[..16])
@@ -319,6 +322,16 @@ fn node_id_for_material(material: &[u8]) -> String {
 
 fn hex_lower(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
+fn hex_upper(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         out.push(HEX[(byte >> 4) as usize] as char);
@@ -399,6 +412,10 @@ mod tests {
         .0;
 
         assert_eq!(response.pairing_code_display.len(), 8);
+        assert!(response
+            .pairing_code_display
+            .chars()
+            .all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_lowercase()));
         assert!(response.bundle_text.contains("freeq.invite.v1"));
         assert!(response.bundle_text.contains("203.0.113.10:51820"));
         assert!(response.bundle_text.contains("public-key-b64"));
@@ -407,6 +424,17 @@ mod tests {
         assert!(!response
             .bundle_text
             .contains(&response.pairing_code_display));
+        let bundle: crate::models::InviteBundle =
+            serde_json::from_str(&response.bundle_text).expect("bundle json");
+        assert_ne!(
+            response.pairing_code_display,
+            bundle
+                .nonce
+                .chars()
+                .take(8)
+                .collect::<String>()
+                .to_ascii_uppercase()
+        );
         fs::remove_dir_all(root).expect("remove temp root");
     }
 

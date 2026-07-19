@@ -914,6 +914,7 @@ fn init_identity(
     freeq_crypto::sign::IdentityPublicKey,
 )> {
     if path.exists() {
+        validate_existing_private_key_permissions(path)?;
         let key_bytes = std::fs::read(path)?;
         let keypair = freeq_crypto::sign::IdentityKeypair::from_bytes(&key_bytes).map_err(|e| {
             anyhow::anyhow!("failed to load identity key '{}': {e}", path.display())
@@ -935,6 +936,26 @@ fn init_identity(
     tracing::info!(key_path = %path.display(), "generated new identity keypair");
 
     Ok((keypair, public_key))
+}
+
+fn validate_existing_private_key_permissions(path: &std::path::Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let mode = std::fs::metadata(path)?.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            anyhow::bail!(
+                "identity key '{}' must not be readable, writable, or executable by group or world; set permissions to 0600",
+                path.display()
+            );
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+
+    Ok(())
 }
 
 fn set_private_key_permissions(path: &std::path::Path) -> Result<()> {
@@ -1036,6 +1057,25 @@ mod tests {
             generated_public_key.to_bytes(),
             loaded_public_key.to_bytes()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn init_identity_rejects_group_or_world_readable_existing_key() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let key_path = tempdir.path().join("identity.key");
+        init_identity(&key_path).expect("initial key generation");
+
+        std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o640))
+            .expect("loosen key permissions");
+        let err = match init_identity(&key_path) {
+            Ok(_) => panic!("loose permissions should fail"),
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains("set permissions to 0600"));
     }
 
     #[tokio::test]

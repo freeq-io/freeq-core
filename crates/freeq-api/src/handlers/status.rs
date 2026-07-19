@@ -25,15 +25,35 @@ pub async fn get_status(State(state): State<ApiState>) -> Result<Json<StatusResp
         malformed_packet_errors: snapshot.errors.malformed_packet_errors,
         crypto_errors: snapshot.errors.crypto_errors,
         transport_errors: snapshot.errors.transport_errors,
-        last_error: snapshot.last_error,
+        last_error: snapshot.last_error.as_deref().map(redact_last_error),
         startup_blockers: snapshot.startup_blockers,
     }))
 }
 
+fn redact_last_error(message: &str) -> String {
+    let lower = message.to_ascii_lowercase();
+    let class = if lower.contains("route") {
+        "route"
+    } else if lower.contains("crypto")
+        || lower.contains("decrypt")
+        || lower.contains("encrypt")
+        || lower.contains("aead")
+    {
+        "crypto"
+    } else if lower.contains("malformed") || lower.contains("packet") || lower.contains("mtu") {
+        "packet"
+    } else if lower.contains("tun") || lower.contains("interface") {
+        "interface"
+    } else {
+        "transport"
+    };
+    format!("{class} error; see local daemon logs")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::get_status;
-    use crate::{ApiState, TunnelRuntimeSnapshot};
+    use super::{get_status, redact_last_error};
+    use crate::{ApiState, ErrorKind, TunnelRuntimeSnapshot};
     use axum::extract::State;
 
     #[tokio::test]
@@ -68,5 +88,40 @@ mod tests {
         assert_eq!(response.route_misses, 3);
         assert_eq!(response.interface_mtu, Some(1200));
         assert_eq!(response.startup_blockers.len(), 1);
+    }
+
+    #[test]
+    fn status_redacts_last_error_detail() {
+        let raw = "transport connect failed for 203.0.113.10:51820 using /etc/freeq/freeq.toml";
+        let redacted = redact_last_error(raw);
+
+        assert_eq!(redacted, "transport error; see local daemon logs");
+        assert!(!redacted.contains("203.0.113.10"));
+        assert!(!redacted.contains("/etc/freeq"));
+    }
+
+    #[tokio::test]
+    async fn status_response_redacts_last_error() {
+        let state = ApiState::new(
+            "nyc-01".into(),
+            "0.1.0".into(),
+            "ml-kem-768".into(),
+            "ml-dsa-65".into(),
+            "aes-256-gcm".into(),
+            2,
+        );
+        state
+            .record_error(
+                ErrorKind::Transport,
+                "send failed to 203.0.113.10:51820 from /Users/test/.freeq/perf",
+            )
+            .await;
+
+        let response = get_status(State(state)).await.expect("status").0;
+
+        assert_eq!(
+            response.last_error.as_deref(),
+            Some("transport error; see local daemon logs")
+        );
     }
 }

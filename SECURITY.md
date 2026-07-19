@@ -4,6 +4,15 @@
 
 FreeQ has **not yet received an independent cryptographic audit**. We are fundraising for an NCC Group or Cure53 engagement. Until then, treat FreeQ as beta software — do not use it to protect classified or life-safety data.
 
+An internal July 2026 node security review identified concrete hardening work
+for the local API, invite pairing flow, pre-QUIC cloaking boundary, identity key
+permissions, setup scripts, systemd service policy, and TUN driver boundary.
+The findings are tracked in `docs/engineering-hardening-log.md` and
+`docs/threat-model.md`. The first application pass fixed invite pairing-code
+derivation, status error redaction, and existing identity key permission checks.
+Remaining fixes continue through proposal-only local SLM packets before
+Codex/human review and repository application.
+
 ## Reporting Vulnerabilities
 
 Email **security@getfreeq.com** with a PGP-encrypted report. Our public key is published at `getfreeq.io/security-pgp.asc`.

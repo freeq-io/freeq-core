@@ -352,6 +352,62 @@ Files:
 - `crates/freeq-auth/src/handshake.rs`
 - `daemon/src/main.rs`
 
+### 19. Invite pairing codes became independent of bundle nonce material
+
+Problem:
+
+- Invite bundles included a public nonce, and the displayed pairing code was
+  derived from the first eight nonce characters.
+- Anyone with the bundle could reconstruct the out-of-band pairing code, which
+  weakened the intended two-channel invite flow.
+
+Fix:
+
+- Generate the displayed pairing code from independent random bytes
+- Keep the bundle nonce public, but use it only as pairing-hash context
+- Added regression coverage proving the code is uppercase hex, omitted from the
+  bundle text, and not equal to the old nonce-derived value
+
+Files:
+
+- `crates/freeq-api/src/handlers/peers.rs`
+- `crates/freeq-api/Cargo.toml`
+
+### 20. Public status responses no longer expose raw daemon error detail
+
+Problem:
+
+- `/v1/status` returned the raw last daemon error string, which could include
+  local paths, endpoint addresses, or other operational detail better kept in
+  local logs.
+
+Fix:
+
+- Keep raw error detail in internal runtime snapshots for diagnostics
+- Return only a bounded class summary through the public status handler
+- Added tests for path and endpoint redaction
+
+Files:
+
+- `crates/freeq-api/src/handlers/status.rs`
+
+### 21. Existing identity key permissions are checked before load
+
+Problem:
+
+- Newly generated identity keys were chmodded to `0600`, but existing key files
+  were loaded without checking whether group or world permissions had drifted.
+
+Fix:
+
+- Added Unix permission validation before loading existing identity keys
+- Fail closed when any group/world read, write, or execute bit is present
+- Added a regression test for group-readable key rejection
+
+Files:
+
+- `daemon/src/main.rs`
+
 ## Tests Added or Strengthened
 
 The following areas now have direct test coverage that did not exist or was not
@@ -367,6 +423,9 @@ previously meaningful enough:
 - daemon packet-I/O bridge behavior
 - shared API state snapshot behavior
 - status and metrics handler runtime reporting
+- invite pairing-code independence from public bundle nonce
+- status last-error redaction
+- existing identity key permission rejection
 
 Primary files:
 
@@ -382,6 +441,71 @@ Primary files:
 - `daemon/src/main.rs`
 
 ## Still Incomplete
+
+### 0. July 2026 node security audit produced a hardening queue
+
+Current state:
+
+- A focused node risk-surface audit was performed after reviewing VPN
+  vulnerability patterns that chain network-facing services, local management
+  APIs, privileged helpers, and TUN/TAP driver boundaries.
+- The audit did not replace an independent cryptographic audit, but it did
+  identify concrete implementation and deployment hardening work that should
+  be treated as release-blocking before any FreeQ Linux distro or appliance
+  image is promoted beyond prototype/alpha use.
+- The resulting local-SLM work queue is proposal-only and lives outside this
+  repo in the continual harness:
+  `dev-packets/freeq-core-node-hardening-24-2026-07-18/`.
+- The first application pass applied the independent invite pairing-code fix,
+  status last-error redaction, and existing identity key permission checks.
+
+Remaining primary findings:
+
+- Local API mutating routes rely too heavily on loopback binding and need
+  loopback validation, setup-token protection, and browser-triggered request
+  guards.
+- Full transport cloaking still requires a pre-QUIC UDP admission gate; direct
+  Quinn binding is not enough for a strict no-response posture.
+- macOS setup scripts should parse env files instead of sourcing them before
+  privileged route/interface commands.
+- User-writable pid files need process validation before any privileged kill.
+- Linux systemd hardening is already strong, but should be tightened further
+  where compatible with TUN and QUIC operation.
+- Status/API error surfaces should avoid leaking local paths or sensitive
+  endpoint detail.
+
+Tracked proposal packets:
+
+- invite pairing-code hardening and tests
+- local API loopback validation, setup token, and CSRF-style guard
+- dashboard setup-token header flow without browser storage secrets
+- identity key permission checks
+- peer receive directory boundary cleanup
+- status error redaction
+- strict cloaking config and fail-closed daemon wiring
+- no-tunnel-data-before-key-confirmation regression tests
+- macOS setup script env parsing and pidfile validation
+- peer env validator tightening
+- systemd and Ansible hardening
+- threat model, local API contract, OpenVPN lesson ADR, distro security
+  checklist, and regression plan docs
+
+Main files expected to change after review:
+
+- `crates/freeq-api/src/handlers/peers.rs`
+- `crates/freeq-api/src/router.rs`
+- `crates/freeq-api/src/state.rs`
+- `crates/freeq-api/src/handlers/status.rs`
+- `crates/freeq-config/src/lib.rs`
+- `crates/freeq-config/src/node.rs`
+- `crates/freeq-config/src/peer.rs`
+- `crates/freeq-transport/src/endpoint.rs`
+- `crates/freeq-auth/src/handshake.rs`
+- `daemon/src/main.rs`
+- `dashboard/index.html`
+- `scripts/setup/`
+- `deploy/ansible/roles/freeqd/`
+- `docs/`
 
 ### 1. Live QUIC datagram budget handling is not implemented
 
