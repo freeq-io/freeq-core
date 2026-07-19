@@ -64,9 +64,12 @@ identity key handling, and the host TUN/TAP driver boundary.
 This review produced a concrete proposal-only hardening queue in the continual
 harness: `freeq-core-node-hardening-24-2026-07-18`. The first application pass
 fixed invite pairing-code derivation, status error redaction, and existing
-identity key permission checks. The remaining API, setup-script, service, and
-pre-QUIC cloaking packets should be reviewed and applied before a FreeQ Linux
-distro or appliance image is treated as more than prototype/alpha work.
+identity key permission checks. The second application pass added default
+loopback enforcement for the local API and fail-closed strict-cloaking endpoint
+mode selection. The remaining API token, browser request guard, setup-script,
+service, and pre-QUIC admission-gate packets should be reviewed and applied
+before a FreeQ Linux distro or appliance image is treated as more than
+prototype/alpha work.
 
 ### Local Management API
 
@@ -76,9 +79,8 @@ switching must not be reachable from untrusted networks.
 
 Required controls:
 
-- reject non-loopback `api_addr` by default
-- require an explicit unsafe/public-management override for any non-loopback
-  bind
+- reject non-loopback `api_addr` by default, with an explicit unsafe override
+  required for any non-loopback bind
 - protect mutating routes with setup-token or equivalent local authorization
 - add a browser-triggered request guard so hostile web pages cannot drive local
   management actions through the user's browser

@@ -124,7 +124,11 @@ async fn main() -> Result<()> {
         );
     }
 
-    let endpoint = freeq_transport::endpoint::Endpoint::bind(parse_listen_addr(&config)?).await?;
+    let endpoint = freeq_transport::endpoint::Endpoint::bind_with_mode(
+        parse_listen_addr(&config)?,
+        endpoint_bind_mode(&config),
+    )
+    .await?;
     let peer_addrs = parse_peer_socket_addrs(&config)?;
     let peer_registry = Arc::new(build_peer_registry(&config)?);
     let tun = Arc::new(open_tun_interface(&config).await?);
@@ -293,6 +297,16 @@ fn parse_peer_socket_addrs(config: &freeq_config::Config) -> Result<HashMap<Stri
     }
 
     Ok(peers)
+}
+
+fn endpoint_bind_mode(
+    config: &freeq_config::Config,
+) -> freeq_transport::endpoint::EndpointBindMode {
+    if config.node.strict_cloaking {
+        freeq_transport::endpoint::EndpointBindMode::StrictCloaked
+    } else {
+        freeq_transport::endpoint::EndpointBindMode::DirectQuic
+    }
 }
 
 fn build_peer_registry(
@@ -975,10 +989,11 @@ fn set_private_key_permissions(path: &std::path::Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_api_server, build_peer_registry, collect_startup_blockers, init_api_state,
-        init_identity, init_tunnel_service, init_tunnel_service_with_keys, is_silent_inbound_probe,
-        parse_listen_addr, parse_peer_socket_addrs, refresh_api_state, spawn_dataplane_runtime,
-        spawn_packet_io_runtime, DataplaneShared, PacketIo, DATAPLANE_CHANNEL_CAPACITY,
+        build_api_server, build_peer_registry, collect_startup_blockers, endpoint_bind_mode,
+        init_api_state, init_identity, init_tunnel_service, init_tunnel_service_with_keys,
+        is_silent_inbound_probe, parse_listen_addr, parse_peer_socket_addrs, refresh_api_state,
+        spawn_dataplane_runtime, spawn_packet_io_runtime, DataplaneShared, PacketIo,
+        DATAPLANE_CHANNEL_CAPACITY,
     };
     use base64::Engine as _;
     use bytes::Bytes;
@@ -1147,6 +1162,22 @@ mod tests {
         assert_eq!(
             addr,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 51820)
+        );
+    }
+
+    #[test]
+    fn endpoint_bind_mode_reflects_strict_cloaking_config() {
+        let mut config = sample_config();
+
+        assert_eq!(
+            endpoint_bind_mode(&config),
+            freeq_transport::endpoint::EndpointBindMode::DirectQuic
+        );
+
+        config.node.strict_cloaking = true;
+        assert_eq!(
+            endpoint_bind_mode(&config),
+            freeq_transport::endpoint::EndpointBindMode::StrictCloaked
         );
     }
 

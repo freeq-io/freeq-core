@@ -69,7 +69,12 @@ impl Config {
         }
 
         parse_socket_addr("node.listen", &self.node.listen)?;
-        parse_socket_addr("node.api_addr", &self.node.api_addr)?;
+        let api_addr = parse_socket_addr("node.api_addr", &self.node.api_addr)?;
+        validate_api_bind_policy(
+            self.node.api_enabled,
+            api_addr,
+            self.node.allow_unsafe_api_bind,
+        )?;
         parse_ip_network("node.address", &self.node.address)?;
         validate_kem_algorithm(&self.node.algorithm)?;
         validate_sign_algorithm(&self.node.sign)?;
@@ -123,6 +128,19 @@ fn parse_ip_network(field: &str, value: &str) -> Result<ipnetwork::IpNetwork, Co
     value
         .parse::<ipnetwork::IpNetwork>()
         .map_err(|e| ConfigError::Invalid(format!("{field} must be a valid IP network: {e}")))
+}
+
+fn validate_api_bind_policy(
+    api_enabled: bool,
+    api_addr: SocketAddr,
+    allow_unsafe_api_bind: bool,
+) -> Result<(), ConfigError> {
+    if api_enabled && !allow_unsafe_api_bind && !api_addr.ip().is_loopback() {
+        return Err(ConfigError::Invalid(format!(
+            "node.api_addr must be loopback unless node.allow_unsafe_api_bind is true; got {api_addr}"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_kem_algorithm(value: &str) -> Result<(), ConfigError> {
@@ -237,5 +255,31 @@ mod tests {
 
         let err = config.validate().expect_err("config should fail");
         assert!(err.to_string().contains("endpoint"));
+    }
+
+    #[test]
+    fn validate_accepts_ipv6_loopback_api_addr() {
+        let mut config = sample_config();
+        config.node.api_addr = "[::1]:6789".into();
+
+        config.validate().expect("config should validate");
+    }
+
+    #[test]
+    fn validate_rejects_non_loopback_api_addr_by_default() {
+        let mut config = sample_config();
+        config.node.api_addr = "0.0.0.0:6789".into();
+
+        let err = config.validate().expect_err("config should fail");
+        assert!(err.to_string().contains("allow_unsafe_api_bind"));
+    }
+
+    #[test]
+    fn validate_accepts_non_loopback_api_addr_with_explicit_unsafe_flag() {
+        let mut config = sample_config();
+        config.node.api_addr = "0.0.0.0:6789".into();
+        config.node.allow_unsafe_api_bind = true;
+
+        config.validate().expect("config should validate");
     }
 }

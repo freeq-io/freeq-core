@@ -44,6 +44,20 @@ pub struct NodeConfig {
     /// Default: `"127.0.0.1:6789"`
     #[serde(default = "default_api_addr")]
     pub api_addr: String,
+
+    /// Permit binding the local REST API to a non-loopback address.
+    ///
+    /// Default: `false`. This is intentionally unsafe because the current API
+    /// is a local management surface.
+    #[serde(default)]
+    pub allow_unsafe_api_bind: bool,
+
+    /// Require pre-QUIC authenticated UDP admission before Quinn observes packets.
+    ///
+    /// Default: `false`. When set before the admission gate is implemented,
+    /// daemon startup must fail closed instead of silently using direct QUIC.
+    #[serde(default)]
+    pub strict_cloaking: bool,
 }
 
 fn default_listen() -> String {

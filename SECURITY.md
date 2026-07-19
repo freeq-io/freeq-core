@@ -10,8 +10,9 @@ permissions, setup scripts, systemd service policy, and TUN driver boundary.
 The findings are tracked in `docs/engineering-hardening-log.md` and
 `docs/threat-model.md`. The first application pass fixed invite pairing-code
 derivation, status error redaction, and existing identity key permission checks.
-Remaining fixes continue through proposal-only local SLM packets before
-Codex/human review and repository application.
+The second pass added local API loopback enforcement and fail-closed strict
+cloaking mode selection. Remaining fixes continue through proposal-only local
+SLM packets before Codex/human review and repository application.
 
 ## Reporting Vulnerabilities
 

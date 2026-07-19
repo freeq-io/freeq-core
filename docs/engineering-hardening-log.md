@@ -408,6 +408,49 @@ Files:
 
 - `daemon/src/main.rs`
 
+### 22. Local API bind validation now fails closed by default
+
+Problem:
+
+- The local REST API was documented as loopback-only, but config validation only
+  checked that `node.api_addr` was a syntactically valid socket address.
+- A non-loopback bind such as `0.0.0.0:6789` could expose unauthenticated
+  management routes outside the local machine.
+
+Fix:
+
+- Added `node.allow_unsafe_api_bind`, defaulting to `false`
+- Reject non-loopback `node.api_addr` when the API is enabled unless that
+  explicit unsafe flag is set
+- Added tests for IPv4 loopback, IPv6 loopback, default rejection of
+  non-loopback, and the explicit unsafe override
+
+Files:
+
+- `crates/freeq-config/src/node.rs`
+- `crates/freeq-config/src/lib.rs`
+
+### 23. Strict cloaking config now selects fail-closed endpoint binding
+
+Problem:
+
+- The transport crate already had a `StrictCloaked` bind mode that refuses a
+  direct Quinn bind until pre-QUIC admission exists, but daemon startup always
+  used the direct bind helper.
+
+Fix:
+
+- Added `node.strict_cloaking`, defaulting to `false`
+- Wire daemon endpoint binding through `Endpoint::bind_with_mode`
+- When `strict_cloaking` is true, startup selects `StrictCloaked` and therefore
+  fails closed until the pre-QUIC admission gate exists
+- Added daemon coverage for the bind-mode selection
+
+Files:
+
+- `crates/freeq-config/src/node.rs`
+- `daemon/src/main.rs`
+
 ## Tests Added or Strengthened
 
 The following areas now have direct test coverage that did not exist or was not
@@ -426,6 +469,8 @@ previously meaningful enough:
 - invite pairing-code independence from public bundle nonce
 - status last-error redaction
 - existing identity key permission rejection
+- local API loopback bind enforcement
+- strict cloaking fail-closed endpoint mode selection
 
 Primary files:
 
@@ -462,10 +507,11 @@ Current state:
 Remaining primary findings:
 
 - Local API mutating routes rely too heavily on loopback binding and need
-  loopback validation, setup-token protection, and browser-triggered request
-  guards.
+  setup-token protection and browser-triggered request guards. Loopback bind
+  validation is now enforced by default.
 - Full transport cloaking still requires a pre-QUIC UDP admission gate; direct
-  Quinn binding is not enough for a strict no-response posture.
+  Quinn binding is not enough for a strict no-response posture. The
+  `strict_cloaking` config path now fails closed until that gate exists.
 - macOS setup scripts should parse env files instead of sourcing them before
   privileged route/interface commands.
 - User-writable pid files need process validation before any privileged kill.
