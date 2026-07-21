@@ -687,6 +687,29 @@ Deliberately left for a real Linux host validation pass:
 - `PrivateDevices=true`. The service needs `/dev/net/tun`; the current unit
   uses `DeviceAllow=/dev/net/tun rw` without hiding the device namespace.
 
+## 2026-07-21 AWS Relay TCP Field-Test Finding
+
+Patrick's Mac and David's Mac successfully exchanged ICMP and UDP overlay
+traffic through the AWS gateway relay, including bidirectional UDP payloads up
+to 4 Mbit/sec with low loss. TCP connections established over the same path,
+but bulk TCP transfer stalled.
+
+Root cause identified in the macOS setup path:
+
+- `freeqd` enforces a 1200-byte tunnel MTU internally.
+- `freeq-start-macos.sh` configured the macOS `utun` address and routes but did
+  not set the OS interface MTU.
+- macOS left the `utun` at its default MTU, allowing TCP to emit packets larger
+  than the daemon accepts. Those packets are rejected as over-MTU tunnel input,
+  while ICMP and small UDP packets continue to work.
+
+Fix:
+
+- `freeq-start-macos.sh` now validates `FREEQ_TUN_MTU` and applies it to the
+  detected `utun` interface. The default remains 1200 to match the Rust tunnel
+  pipeline.
+- `scripts/test-setup-flow.sh` asserts the MTU guardrail remains present.
+
 ## Suggested Next Issues
 
 These make sense as explicit repository issues because they are concrete,

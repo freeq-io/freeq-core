@@ -10,6 +10,7 @@ CONFIG_FILE="${FREEQ_SETUP_CONFIG:-$SETUP_DIR/freeq-setup.conf}"
 RECEIVE_DIR="$SETUP_DIR/02-put-peer-file-here"
 LOG_FILE="$LOG_DIR/freeqd.log"
 PID_FILE="$LOG_DIR/freeqd.pid"
+TUN_MTU="${FREEQ_TUN_MTU:-1200}"
 CONFIGURE_INTERFACE=1
 RESTART=0
 SETUP_URL="${FREEQ_SETUP_URL:-http://127.0.0.1:6789/}"
@@ -199,6 +200,10 @@ except ValueError:
 PY
 }
 
+validate_mtu() {
+  [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 576 ] && [ "$1" -le 1500 ]
+}
+
 config_listen_addr() {
   awk -F'"' '
     /^\[node\]/ { in_node = 1; next }
@@ -238,6 +243,10 @@ LISTEN_VALUE="$(config_listen_addr)"
 if [ -z "$LISTEN_VALUE" ] || ! validate_socket_addr "$LISTEN_VALUE"; then
   echo "Config contains an invalid node.listen value: ${LISTEN_VALUE:-missing}" >&2
   echo "Rerun setup so FreeQ can use the safe default: 0.0.0.0:51820" >&2
+  exit 1
+fi
+if ! validate_mtu "$TUN_MTU"; then
+  echo "Invalid FREEQ_TUN_MTU '$TUN_MTU'; expected an integer from 576 through 1500." >&2
   exit 1
 fi
 ensure_freeqd_built
@@ -360,8 +369,9 @@ if [ "$CONFIGURE_INTERFACE" -eq 1 ]; then
     exit 1
   fi
 
-  echo "Configuring $interface local=$local_ip peer=$peer_ip"
+  echo "Configuring $interface local=$local_ip peer=$peer_ip mtu=$TUN_MTU"
   sudo ifconfig "$interface" "$local_ip" "$peer_ip" up
+  sudo ifconfig "$interface" mtu "$TUN_MTU"
 
   # macOS point-to-point utun interfaces may not route this node's own
   # overlay address locally. Pin it to loopback so local services such as SSH
