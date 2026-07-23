@@ -9,7 +9,6 @@ WIFI_DEVICE="${FREEQ_WIFI_DEVICE:-en0}"
 WIFI_SERVICE="${FREEQ_WIFI_SERVICE:-Wi-Fi}"
 RENEW_DHCP=0
 OVERLAY_IPS=()
-SUDO_READY=0
 
 usage() {
   cat <<'EOF'
@@ -136,13 +135,14 @@ append_overlay_ip_from_env() {
   fi
 }
 
-ensure_sudo() {
-  if [ "$SUDO_READY" -eq 1 ]; then
-    return 0
-  fi
-  echo "Checking sudo access..."
+run_sudo() {
+  echo "Checking sudo access for: $*"
+  sudo -k
   sudo -v
-  SUDO_READY=1
+  sudo "$@"
+  local status=$?
+  sudo -k || true
+  return "$status"
 }
 
 stop_freeqd() {
@@ -170,9 +170,8 @@ stop_freeqd() {
     exit 1
   fi
 
-  ensure_sudo
   echo "Stopping freeqd pid $pid..."
-  sudo kill "$pid"
+  run_sudo kill "$pid"
   for _ in $(seq 1 20); do
     if ! kill -0 "$pid" >/dev/null 2>&1; then
       break
@@ -216,7 +215,6 @@ remove_overlay_routes() {
     return 0
   fi
 
-  ensure_sudo
   for ip in "${OVERLAY_IPS[@]}"; do
     if ! validate_ip_addr "$ip"; then
       echo "Skipping invalid overlay IP: $ip" >&2
@@ -226,7 +224,7 @@ remove_overlay_routes() {
       *" $ip "*) continue ;;
     esac
     seen="${seen}${ip} "
-    if sudo route -n delete -host "$ip" >/dev/null 2>&1; then
+    if run_sudo route -n delete -host "$ip"; then
       echo "Removed overlay host route: $ip"
     else
       echo "Overlay host route was not present: $ip"
@@ -243,11 +241,11 @@ renew_dhcp() {
     mode="$(state_value FREEQ_WIFI_CONFIG_MODE)"
     if [ "$mode" = "DHCP Configuration" ]; then
       echo "Restoring Wi-Fi service to DHCP mode: $WIFI_SERVICE"
-      sudo networksetup -setdhcp "$WIFI_SERVICE" || echo "WARN: networksetup DHCP restore failed for $WIFI_SERVICE." >&2
+      run_sudo networksetup -setdhcp "$WIFI_SERVICE" || echo "WARN: networksetup DHCP restore failed for $WIFI_SERVICE." >&2
     fi
   fi
   echo "Renewing DHCP on $WIFI_DEVICE..."
-  if sudo ipconfig set "$WIFI_DEVICE" DHCP; then
+  if run_sudo ipconfig set "$WIFI_DEVICE" DHCP; then
     echo "DHCP renewed on $WIFI_DEVICE."
   else
     echo "WARN: DHCP renew failed on $WIFI_DEVICE." >&2
