@@ -15,6 +15,7 @@ brew install freeq
 brew upgrade freeq
 freeq setup
 freeq gateway
+freeq gateway status
 freeq stop
 freeq status
 ```
@@ -96,6 +97,7 @@ FreeQ Core owns the local endpoint lifecycle:
 - `freeq setup` prepares the Mac and local FreeQ setup folder.
 - `freeq gateway` connects using the gateway or peer material placed in the
   visible setup folder.
+- `freeq gateway status` reports whether gateway material is present and ready.
 - `freeq stop` stops FreeQ and rolls networking back to the pre-FreeQ state.
 - `freeq status` reports daemon, route, peer, and local setup health.
 

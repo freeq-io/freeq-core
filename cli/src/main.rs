@@ -9,6 +9,7 @@
 //! brew upgrade freeq      Update FreeQ
 //! freeq setup             Prepare this Mac and start the local setup node
 //! freeq gateway           Connect or reconnect to a gateway/peer file
+//! freeq gateway status    Show gateway file readiness
 //! freeq stop              Stop FreeQ and roll networking back
 //! freeq status            Show node status and active tunnels
 //! ```
@@ -17,7 +18,8 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use freeq_api::models::StatusResponse;
 use std::{
-    env,
+    collections::BTreeMap,
+    env, fs,
     io::{Read, Write},
     net::TcpStream,
     path::{Path, PathBuf},
@@ -42,8 +44,11 @@ enum Commands {
     /// Prepare this Mac and start the local setup node.
     Setup,
 
-    /// Connect or reconnect this Mac to the gateway/peer file in ~/FreeQ.
-    Gateway,
+    /// Connect to or inspect a gateway/peer file in ~/FreeQ.
+    Gateway {
+        #[command(subcommand)]
+        action: Option<GatewayAction>,
+    },
 
     /// Stop FreeQ and roll this Mac back to normal networking.
     Stop,
@@ -78,6 +83,14 @@ enum Commands {
         #[command(subcommand)]
         action: AlgorithmAction,
     },
+}
+
+#[derive(Subcommand, Debug)]
+enum GatewayAction {
+    /// Connect or reconnect this Mac to the gateway/peer file in ~/FreeQ.
+    Connect,
+    /// Show gateway readiness and the peer file that will be used.
+    Status,
 }
 
 #[derive(Subcommand, Debug)]
@@ -132,12 +145,17 @@ async fn main() -> Result<()> {
         Commands::Setup => {
             run_script(&["scripts", "install", "freeq-install-macos.sh"], &[])?;
         }
-        Commands::Gateway => {
-            run_script(
-                &["scripts", "setup", "freeq-connect-macos.sh"],
-                &["--restart"],
-            )?;
-        }
+        Commands::Gateway { action } => match action.unwrap_or(GatewayAction::Connect) {
+            GatewayAction::Connect => {
+                run_script(
+                    &["scripts", "setup", "freeq-connect-macos.sh"],
+                    &["--restart"],
+                )?;
+            }
+            GatewayAction::Status => {
+                print_gateway_status(cli.api.as_str())?;
+            }
+        },
         Commands::Stop => {
             run_script(
                 &["scripts", "setup", "freeq-stop-macos.sh"],
@@ -166,10 +184,91 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+fn print_gateway_status(api: &str) -> Result<()> {
+    let home = home_dir().context("HOME is not set")?;
+    let setup_dir = env::var_os("FREEQ_SETUP_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join("FreeQ"));
+    let receive_dir = setup_dir.join("02-put-peer-file-here");
+    let local_env = env::var_os("FREEQ_LOCAL_ENV")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".freeq/perf/node.env"));
+    let explicit_peer_env = env::var_os("FREEQ_PEER_ENV").map(PathBuf::from);
+
+    println!("FreeQ gateway status");
+    println!("  Setup folder: {}", setup_dir.display());
+    println!("  Peer drop folder: {}", receive_dir.display());
+
+    if local_env.is_file() {
+        let local = read_env_file(&local_env)?;
+        println!(
+            "  Local node: {} ({})",
+            value_or_unknown(&local, "FREEQ_NODE_NAME"),
+            value_or_unknown(&local, "FREEQ_NODE_ADDRESS")
+        );
+    } else {
+        println!("  Local node: not set up");
+        println!("  Next: run `freeq setup`");
+    }
+
+    match select_gateway_peer_env(explicit_peer_env.as_deref(), &receive_dir, &local_env)? {
+        PeerSelection::Ready(path) => {
+            let peer = read_env_file(&path)?;
+            println!("  Gateway file: {}", path.display());
+            println!(
+                "  Gateway node: {}",
+                value_or_unknown(&peer, "FREEQ_NODE_NAME")
+            );
+            println!(
+                "  Gateway overlay: {}",
+                value_or_unknown(&peer, "FREEQ_NODE_ADDRESS")
+            );
+            println!(
+                "  Gateway endpoint: {}",
+                value_or_unknown(&peer, "FREEQ_PUBLIC_ENDPOINT")
+            );
+            println!("  Connect: freeq gateway");
+        }
+        PeerSelection::Missing => {
+            println!("  Gateway file: missing");
+            println!(
+                "  Next: place a gateway peer.env file in {}",
+                receive_dir.display()
+            );
+            println!("  Then: freeq gateway");
+        }
+        PeerSelection::Multiple(paths) => {
+            println!("  Gateway file: ambiguous");
+            for path in paths {
+                println!("    - {}", path.display());
+            }
+            println!(
+                "  Next: leave only the intended gateway file in {}",
+                receive_dir.display()
+            );
+        }
+    }
+
+    match try_status(api) {
+        Ok(Some(status)) => {
+            println!(
+                "  Local daemon: running, {} peer(s), {} active tunnel(s)",
+                status.peer_count, status.tunnel_count
+            );
+        }
+        Ok(None) => {
+            println!("  Local daemon: not reachable");
+        }
+        Err(err) => {
+            println!("  Local daemon: status check failed ({err})");
+        }
+    }
+
+    Ok(())
+}
+
 fn print_status(api: &str) -> Result<()> {
-    let body = http_get(api, "/v1/status")?;
-    let status: StatusResponse =
-        serde_json::from_str(&body).context("failed to parse FreeQ status response")?;
+    let status = get_status(api)?;
 
     println!("FreeQ status");
     println!("  Node: {}", status.name);
@@ -207,6 +306,18 @@ fn print_status(api: &str) -> Result<()> {
     Ok(())
 }
 
+fn try_status(api: &str) -> Result<Option<StatusResponse>> {
+    match get_status(api) {
+        Ok(status) => Ok(Some(status)),
+        Err(_) => Ok(None),
+    }
+}
+
+fn get_status(api: &str) -> Result<StatusResponse> {
+    let body = http_get(api, "/v1/status")?;
+    serde_json::from_str(&body).context("failed to parse FreeQ status response")
+}
+
 fn http_get(api: &str, path: &str) -> Result<String> {
     let (host, port) = parse_local_http_api(api)?;
     let mut stream = TcpStream::connect((host.as_str(), port))
@@ -232,6 +343,95 @@ fn http_get(api: &str, path: &str) -> Result<String> {
         bail!("FreeQ API returned {status_line}");
     }
     Ok(body.to_string())
+}
+
+enum PeerSelection {
+    Ready(PathBuf),
+    Missing,
+    Multiple(Vec<PathBuf>),
+}
+
+fn select_gateway_peer_env(
+    explicit_peer_env: Option<&Path>,
+    receive_dir: &Path,
+    local_env: &Path,
+) -> Result<PeerSelection> {
+    if let Some(path) = explicit_peer_env {
+        if path.is_file() {
+            return Ok(PeerSelection::Ready(path.to_path_buf()));
+        }
+        return Ok(PeerSelection::Missing);
+    }
+
+    let local = if local_env.is_file() {
+        read_env_file(local_env).unwrap_or_default()
+    } else {
+        BTreeMap::new()
+    };
+    let local_name = local.get("FREEQ_NODE_NAME").map(String::as_str);
+    let local_address = local.get("FREEQ_NODE_ADDRESS").map(String::as_str);
+
+    let mut remote_candidates = Vec::new();
+    if receive_dir.is_dir() {
+        for entry in fs::read_dir(receive_dir)
+            .with_context(|| format!("failed to read {}", receive_dir.display()))?
+        {
+            let path = entry?.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("env") {
+                continue;
+            }
+            let peer = read_env_file(&path).unwrap_or_default();
+            let peer_name = peer.get("FREEQ_NODE_NAME").map(String::as_str);
+            let peer_address = peer.get("FREEQ_NODE_ADDRESS").map(String::as_str);
+            if local_name.is_some() && peer_name == local_name {
+                continue;
+            }
+            if local_address.is_some() && peer_address == local_address {
+                continue;
+            }
+            remote_candidates.push(path);
+        }
+    }
+
+    match remote_candidates.len() {
+        0 => Ok(PeerSelection::Missing),
+        1 => Ok(PeerSelection::Ready(remote_candidates.remove(0))),
+        _ => Ok(PeerSelection::Multiple(remote_candidates)),
+    }
+}
+
+fn read_env_file(path: &Path) -> Result<BTreeMap<String, String>> {
+    let contents = fs::read_to_string(path)
+        .with_context(|| format!("failed to read env file {}", path.display()))?;
+    let mut values = BTreeMap::new();
+    for raw_line in contents.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, raw_value)) = line.split_once('=') else {
+            continue;
+        };
+        let value = raw_value
+            .strip_prefix('\'')
+            .and_then(|value| value.strip_suffix('\''))
+            .unwrap_or(raw_value)
+            .to_string();
+        values.insert(key.to_string(), value);
+    }
+    Ok(values)
+}
+
+fn value_or_unknown<'a>(values: &'a BTreeMap<String, String>, key: &str) -> &'a str {
+    values
+        .get(key)
+        .map(String::as_str)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unknown")
+}
+
+fn home_dir() -> Option<PathBuf> {
+    env::var_os("HOME").map(PathBuf::from)
 }
 
 fn parse_local_http_api(api: &str) -> Result<(String, u16)> {

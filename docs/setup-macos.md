@@ -98,13 +98,19 @@ The local Mac steps do not change:
 
 1. Get the gateway or relay peer `.env` file.
 2. Put it in `~/FreeQ/02-put-peer-file-here`.
-3. Start or restart FreeQ:
+3. Check that FreeQ sees the gateway file:
+
+```bash
+freeq gateway status
+```
+
+4. Start or restart FreeQ:
 
 ```bash
 freeq gateway
 ```
 
-Check the local gateway or node status:
+Check whether this local machine is running FreeQ:
 
 ```bash
 freeq status

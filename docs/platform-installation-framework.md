@@ -10,6 +10,7 @@ The user-facing lifecycle should stay consistent:
 ```bash
 freeq setup
 freeq gateway
+freeq gateway status
 freeq stop
 freeq status
 freeq doctor
@@ -81,6 +82,7 @@ The workstation flow remains:
 ```bash
 freeq setup
 freeq gateway
+freeq gateway status
 freeq stop
 freeq status
 ```
@@ -107,6 +109,7 @@ The gateway command contract should remain recognizable:
 
 ```bash
 freeq gateway
+freeq gateway status
 freeq status
 freeq doctor
 freeq stop
@@ -267,4 +270,3 @@ A platform is considered supported only when:
 7. Add Windows design stub and test harness.
 8. Add signed Windows MSI and winget package.
 9. Add enterprise packaging wrappers after the native package paths stabilize.
-

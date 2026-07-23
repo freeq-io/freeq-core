@@ -67,13 +67,19 @@ Put the peer or gateway file you receive here:
 ~/FreeQ/02-put-peer-file-here
 ```
 
+Check whether FreeQ sees the gateway file and what endpoint it will use:
+
+```bash
+freeq gateway status
+```
+
 Then start or restart FreeQ from Terminal:
 
 ```bash
 freeq gateway
 ```
 
-Check gateway or node status:
+Check whether this local machine is running FreeQ:
 
 ```bash
 freeq status
@@ -85,6 +91,7 @@ gateway or relay node as the peer file source. The local Mac flow is the same:
 place the gateway peer file in `~/FreeQ/02-put-peer-file-here`, then run:
 
 ```bash
+freeq gateway status
 freeq gateway
 ```
 
