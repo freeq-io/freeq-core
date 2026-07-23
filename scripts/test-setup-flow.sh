@@ -236,6 +236,7 @@ assert_file_contains "$TMP_ROOT/stop-sudo.log" "route -n delete -host 10.66.0.20
 assert_file_contains "$TMP_ROOT/stop-sudo.log" "route -n delete -host 10.66.0.21"
 assert_file_contains "$TMP_ROOT/stop-sudo.log" "networksetup -setdhcp Wi-Fi"
 assert_file_contains "$TMP_ROOT/stop-sudo.log" "ipconfig set en0 DHCP"
+[ "$(grep -Ec '^-v$' "$TMP_ROOT/stop-sudo.log")" -eq 1 ] || fail "stop helper checked sudo access more than once"
 [ ! -e "$TMP_ROOT/freeq-network-state.env" ] || fail "stop helper did not remove rollback ledger"
 
 echo "== setup flow: guardrails =="

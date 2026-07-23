@@ -9,6 +9,7 @@ WIFI_DEVICE="${FREEQ_WIFI_DEVICE:-en0}"
 WIFI_SERVICE="${FREEQ_WIFI_SERVICE:-Wi-Fi}"
 RENEW_DHCP=0
 OVERLAY_IPS=()
+SUDO_READY=0
 
 usage() {
   cat <<'EOF'
@@ -135,6 +136,15 @@ append_overlay_ip_from_env() {
   fi
 }
 
+ensure_sudo() {
+  if [ "$SUDO_READY" -eq 1 ]; then
+    return 0
+  fi
+  echo "Checking sudo access..."
+  sudo -v
+  SUDO_READY=1
+}
+
 stop_freeqd() {
   local pid=""
   if [ ! -f "$PID_FILE" ]; then
@@ -160,8 +170,7 @@ stop_freeqd() {
     exit 1
   fi
 
-  echo "Checking sudo access..."
-  sudo -v
+  ensure_sudo
   echo "Stopping freeqd pid $pid..."
   sudo kill "$pid"
   for _ in $(seq 1 20); do
@@ -207,8 +216,7 @@ remove_overlay_routes() {
     return 0
   fi
 
-  echo "Checking sudo access..."
-  sudo -v
+  ensure_sudo
   for ip in "${OVERLAY_IPS[@]}"; do
     if ! validate_ip_addr "$ip"; then
       echo "Skipping invalid overlay IP: $ip" >&2
