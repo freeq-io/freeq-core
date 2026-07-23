@@ -56,8 +56,9 @@ changing the FreeQ command vocabulary.
 
 ## Workstation Path
 
-Homebrew is the best first workstation installer for supported macOS and Linux
-targets because many early users already understand:
+Homebrew is the best first workstation installer for supported macOS targets and
+the planned first Linux workstation path because many early users already
+understand:
 
 ```bash
 brew install freeq

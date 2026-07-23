@@ -2,6 +2,11 @@
 
 Status: read-only alpha preflight and static-readiness scaffold only.
 
+The release gate for changing that status is
+[`docs/linux-supported-acceptance.md`](linux-supported-acceptance.md). It
+requires real-host evidence; this brief and its fixture tests do not establish
+Linux support.
+
 This brief defines a safe SLM/code-mill slice for Linux installation work. It
 does not establish Linux workstation or gateway installation as working.
 

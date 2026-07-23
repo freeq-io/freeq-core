@@ -205,8 +205,8 @@ Status key: `[x]` implemented in the current repo, `[~]` partially implemented o
 
 | Platform       | Status        |
 |----------------|---------------|
-| Linux x86_64   | ✅ Primary     |
-| Linux aarch64  | ✅ Supported   |
+| Linux x86_64   | Preflight only |
+| Linux aarch64  | Preflight only |
 | macOS (Apple Silicon / Intel) | ✅ Supported |
 | Windows        | 🔜 v0.3        |
 | Docker         | ✅ Supported   |

@@ -6,7 +6,9 @@ Overall framework: `docs/platform-installation-framework.md`.
 
 FreeQ should standardize workstation install, update, gateway connection,
 rollback, and normal network restoration around Homebrew on every supported
-Homebrew target, including macOS and Linux.
+Homebrew target. macOS is the active workstation path; Linux is a planned
+Homebrew target until the [Linux support acceptance](linux-supported-acceptance.md)
+gate passes.
 
 The target user contract is:
 
@@ -127,8 +129,9 @@ for engineers, but not the product path.
 
 ## Other Installer Paths
 
-Homebrew should be the primary workstation path for supported macOS and Linux
-targets, but not the only packaging option forever.
+Homebrew should be the primary workstation path for supported macOS targets and
+the planned first workstation path for Linux, but not the only packaging option
+forever.
 
 Shell installer:
 
@@ -174,7 +177,8 @@ The Homebrew path is ready for broad alpha when:
 
 - `brew install freeq-io/tap/freeq` works on a clean Apple Silicon Mac.
 - `brew install freeq-io/tap/freeq` works on a clean Intel Mac.
-- `brew install freeq-io/tap/freeq` works on a clean supported Linux target.
+- `brew install freeq-io/tap/freeq` works on a clean Linux target only after the
+  Linux support acceptance gate passes.
 - `freeq setup` completes without requiring hidden-folder access.
 - `freeq gateway` connects using visible gateway material.
 - `freeq stop` removes FreeQ-owned routes and restores normal networking on

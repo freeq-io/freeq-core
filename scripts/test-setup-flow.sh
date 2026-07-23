@@ -106,7 +106,7 @@ assert_file_contains docs/homebrew-install-maintenance-strategy.md "brew install
 assert_file_contains docs/homebrew-install-maintenance-strategy.md "freeq-io/tap/freeq"
 assert_file_contains docs/homebrew-install-maintenance-strategy.md "Homebrew core"
 assert_file_contains docs/homebrew-install-maintenance-strategy.md "macOS and Linux"
-assert_file_contains docs/homebrew-install-maintenance-strategy.md "supported Linux target"
+assert_file_contains docs/homebrew-install-maintenance-strategy.md "Linux target only after the"
 assert_file_contains docs/homebrew-install-maintenance-strategy.md "FreeQ Core owns"
 assert_file_contains docs/homebrew-install-maintenance-strategy.md "FreeQ Cloud"
 assert_file_contains docs/homebrew-install-maintenance-strategy.md "Shell installer"

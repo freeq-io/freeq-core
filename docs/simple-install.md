@@ -143,6 +143,8 @@ Do not send files from hidden `.freeq` folders.
 
 Mac install is first.
 
-Linux install is next.
+Linux has a read-only preflight, but Linux installation and rollback are still
+in progress and are not supported yet. See
+[Linux Support Acceptance](linux-supported-acceptance.md) for the release gate.
 
 Windows and gateway hardware installers are planned, but they are not ready yet.

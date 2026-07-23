@@ -81,6 +81,54 @@ for fixture in ubuntu fedora alpine arch unknown; do
   test -f "$FIXTURES/$fixture.os-release"
 done
 
+echo "== linux install: public support status guardrail =="
+python3 - "$ROOT" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+acceptance = (root / "docs/linux-supported-acceptance.md").read_text()
+marker = re.search(r"FREEQ_LINUX_SUPPORT_STATUS:\s*([a-z-]+)", acceptance)
+if not marker:
+    raise SystemExit("Linux acceptance document is missing the status marker")
+if marker.group(1) != "preflight":
+    raise SystemExit(
+        "Linux public status changed without this preflight harness being updated "
+        "for real-host evidence"
+    )
+
+surfaces = [
+    root / "README.md",
+    root / "docs/simple-install.md",
+    root / "docs/homebrew-install-maintenance-strategy.md",
+    root / "docs/platform-installation-framework.md",
+    root / "docs/index.html",
+]
+claim = re.compile(
+    r"(?i)(?:\blinux[^\n]{0,80}\b(?:is|are)\b[^\n]{0,40}\b(?:supported|primary)\b|\b(?:supported|primary)\s+linux\b)"
+)
+for path in surfaces:
+    for line_number, line in enumerate(path.read_text().splitlines(), 1):
+        if claim.search(line):
+            raise SystemExit(
+                f"{path.relative_to(root)}:{line_number} contains a Linux support claim: {line.strip()}"
+            )
+
+for required in [
+    "preflight available",
+    "Linux installation and rollback are not",
+    "real-host matrix",
+    "Homebrew-on-Linux workstation",
+    "Linux gateway",
+    "Rollback",
+]:
+    if required not in acceptance:
+        raise SystemExit(f"Linux acceptance document is missing: {required}")
+
+print("Linux public support status guardrail passed")
+PY
+
 echo "== linux install: apply refusal =="
 if bash "$INSTALLER" --apply > "$TMP_DIR/apply.out" 2>&1; then
   echo "FAIL: --apply unexpectedly succeeded" >&2
