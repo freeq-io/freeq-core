@@ -141,6 +141,20 @@ freeq status
 `freeq gateway` rolls back any previous FreeQ daemon and FreeQ-owned routes
 before starting the new connection.
 
+Quick bidirectional smoke test:
+
+```bash
+scripts/perf/freeq-bidirectional-smoke-macos.sh
+```
+
+That tests local-to-gateway overlay reachability and prints the command to run
+from the gateway for the return path. If you have SSH access to the gateway,
+run the full return-path test from this Mac:
+
+```bash
+scripts/perf/freeq-bidirectional-smoke-macos.sh --ssh-user ubuntu
+```
+
 ## Step 5: Run Tests
 
 Open a second Terminal window.

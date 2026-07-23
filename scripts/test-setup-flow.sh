@@ -101,6 +101,7 @@ assert_file_contains docs/perf-macos-quickstart.md "freeq gateway"
 assert_file_contains docs/perf-macos-quickstart.md "freeq gateway status"
 assert_file_contains docs/perf-macos-quickstart.md "freeq stop"
 assert_file_contains docs/perf-macos-quickstart.md "freeq status"
+assert_file_contains docs/perf-macos-quickstart.md "freeq-bidirectional-smoke-macos.sh"
 assert_file_contains docs/homebrew-install-maintenance-strategy.md "brew install freeq"
 assert_file_contains docs/homebrew-install-maintenance-strategy.md "freeq-io/tap/freeq"
 assert_file_contains docs/homebrew-install-maintenance-strategy.md "Homebrew core"
@@ -216,6 +217,11 @@ FREEQ_SCP_MB=1 \
 PATH="$FAKE_BIN:$PATH" \
 scripts/perf/freeq-perf-run.sh --mode direct --label direct-test > "$TMP_ROOT/perf.out"
 assert_file_contains "$TMP_ROOT/results/direct-test/run.env" "target_host=peer.example.test"
+
+echo "== setup flow: bidirectional smoke script syntax =="
+bash -n scripts/perf/freeq-bidirectional-smoke-macos.sh
+assert_file_contains scripts/perf/freeq-bidirectional-smoke-macos.sh "FreeQ bidirectional smoke result: PASS"
+assert_file_contains scripts/perf/freeq-bidirectional-smoke-macos.sh "peer-to-local return ping"
 
 echo "== setup flow: macOS stop consumes rollback ledger =="
 STOP_FAKE_BIN="$TMP_ROOT/stop-fake-bin"
