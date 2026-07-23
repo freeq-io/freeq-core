@@ -1,6 +1,6 @@
 # Linux Install Code Mill Brief
 
-Status: proposal and static-readiness scaffold only.
+Status: read-only alpha preflight and static-readiness scaffold only.
 
 This brief defines a safe SLM/code-mill slice for Linux installation work. It
 does not establish Linux workstation or gateway installation as working.
@@ -15,8 +15,31 @@ does not establish Linux workstation or gateway installation as working.
   and optionally runs an Ansible syntax check when Ansible is installed.
 - Linux workstation installation is planned/stubbed; there is no validated
   end-user Linux installer in this repository.
+- `scripts/install/freeq-install-linux.sh` is a read-only alpha preflight. It
+  reports host facts and planned next steps, but it does not install packages,
+  change services, or change host networking.
+- `scripts/test-linux-install-flow.sh` validates the preflight's shell syntax,
+  static command guardrails, fake-host inspection path, and explicit `--apply`
+  refusal.
 - Linux gateway installation is planned/stubbed; Ansible scaffolding is not a
   substitute for a supported package, service, or rollback workflow.
+
+## Read-Only Distro Matrix
+
+This matrix is fixture coverage for the alpha preflight only. It is not a
+support statement, package implementation, or gateway installation path.
+
+| Fixture | Reported ID | Normalized family | Status |
+| --- | --- | --- | --- |
+| Ubuntu/Debian-like | `ubuntu` | `debian` | planned/stubbed, read-only |
+| Fedora/RHEL-like | `fedora` | `rhel` | planned/stubbed, read-only |
+| Alpine | `alpine` | `alpine` | planned/stubbed, read-only |
+| Arch | `arch` | `arch` | planned/stubbed, read-only |
+| Unknown/minimal | `unknown` | `unknown` | planned/stubbed, read-only |
+
+The fixtures live under `scripts/fixtures/linux-os-release/` and are consumed
+by `scripts/test-linux-install-flow.sh`. A real Linux host still receives only
+inspection output; `--apply` remains refused.
 
 ## Alpha Command Contract
 
@@ -79,10 +102,14 @@ Linux acceptance testing on representative workstation and gateway hosts.
 
 ## Acceptance For This Run
 
-- Only Markdown and static, non-executing test scaffolding are changed.
+- Only Markdown, the read-only Linux preflight, and static test scaffolding are
+  changed.
 - No Rust, Cargo, daemon, TUN, route, systemd, or privileged-networking files
   are modified.
 - Documentation says explicitly that Linux install is not yet working.
+- The Linux preflight defaults to read-only inspection and does not claim that
+  it installed FreeQ.
+- `--apply` refuses with a main-engineer review message and makes no changes.
 - The existing `scripts/test-linux-deploy.sh` remains the static Ansible
   contract check.
 - The command vocabulary remains compatible with `freeq setup`,
@@ -98,4 +125,3 @@ Linux acceptance testing on representative workstation and gateway hosts.
   rollback design support in the first Linux alpha?
 - What real-host acceptance matrix is required before Linux moves from
   planned/stubbed to supported?
-

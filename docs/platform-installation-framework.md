@@ -161,6 +161,17 @@ The constrained Linux readiness proposal is documented in
 It is a planning and static-scaffold document only; it does not claim that
 Linux workstation or gateway installation is working.
 
+The current Linux alpha command is read-only host preflight:
+
+```bash
+scripts/install/freeq-install-linux.sh
+```
+
+It may report distribution, architecture, tool presence, systemd presence,
+Homebrew-on-Linux presence, and TUN-device presence. It must not install
+packages, invoke privilege escalation, change services, or mutate networking.
+`--apply` is intentionally refused pending main-engineer review.
+
 Linux native packages should be added after the Homebrew Linux path proves the
 CLI and rollback contract.
 
