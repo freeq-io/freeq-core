@@ -15,10 +15,14 @@
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
+use freeq_api::models::StatusResponse;
 use std::{
     env,
+    io::{Read, Write},
+    net::TcpStream,
     path::{Path, PathBuf},
     process::Command,
+    time::Duration,
 };
 
 /// freeq — FreeQ post-quantum overlay network management CLI.
@@ -141,8 +145,7 @@ async fn main() -> Result<()> {
             )?;
         }
         Commands::Status => {
-            // TODO(v0.1): GET {api}/v1/status and pretty-print
-            println!("freeq status — not yet implemented");
+            print_status(&cli.api)?;
         }
         Commands::Init { config: _, name: _ } => {
             // TODO(v0.1): generate identity keypair, write config
@@ -161,6 +164,107 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn print_status(api: &str) -> Result<()> {
+    let body = http_get(api, "/v1/status")?;
+    let status: StatusResponse =
+        serde_json::from_str(&body).context("failed to parse FreeQ status response")?;
+
+    println!("FreeQ status");
+    println!("  Node: {}", status.name);
+    println!("  Version: {}", status.version);
+    println!("  Uptime: {}", format_duration(status.uptime_secs));
+    println!("  Peers: {}", status.peer_count);
+    println!("  Active tunnels: {}", status.tunnel_count);
+    if let Some(interface_name) = status.interface_name.as_deref() {
+        match status.interface_mtu {
+            Some(mtu) => println!("  Interface: {interface_name} / MTU {mtu}"),
+            None => println!("  Interface: {interface_name}"),
+        }
+    } else {
+        println!("  Interface: not active");
+    }
+    println!(
+        "  Algorithms: {} / {} / {}",
+        status.kem_algorithm, status.sign_algorithm, status.bulk_algorithm
+    );
+    println!(
+        "  Traffic: {} packets, {} encrypted bytes, {} route misses",
+        status.packets_ingested, status.encrypted_bytes, status.route_misses
+    );
+    if let Some(last_error) = status.last_error.as_deref() {
+        println!("  Last error: {last_error}");
+    }
+    if status.startup_blockers.is_empty() {
+        println!("  Startup blockers: none");
+    } else {
+        println!("  Startup blockers:");
+        for blocker in status.startup_blockers {
+            println!("    - {blocker}");
+        }
+    }
+    Ok(())
+}
+
+fn http_get(api: &str, path: &str) -> Result<String> {
+    let (host, port) = parse_local_http_api(api)?;
+    let mut stream = TcpStream::connect((host.as_str(), port))
+        .with_context(|| {
+            format!(
+                "could not connect to FreeQ API at {host}:{port}; run `freeq gateway` or `freeq setup` first"
+            )
+        })?;
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\nAccept: application/json\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes())?;
+
+    let mut response = String::new();
+    stream.read_to_string(&mut response)?;
+    let (head, body) = response
+        .split_once("\r\n\r\n")
+        .context("FreeQ API returned an invalid HTTP response")?;
+    let status_line = head.lines().next().unwrap_or("");
+    if !status_line.contains(" 200 ") {
+        bail!("FreeQ API returned {status_line}");
+    }
+    Ok(body.to_string())
+}
+
+fn parse_local_http_api(api: &str) -> Result<(String, u16)> {
+    let without_scheme = api
+        .strip_prefix("http://")
+        .context("FREEQ_API must use http:// for the local FreeQ API")?;
+    let authority = without_scheme
+        .split('/')
+        .next()
+        .context("FREEQ_API is missing a host")?;
+    let (host, port) = authority
+        .rsplit_once(':')
+        .context("FREEQ_API must include a port, such as http://127.0.0.1:6789")?;
+    if host != "127.0.0.1" && host != "localhost" {
+        bail!("freeq status only supports the local FreeQ API");
+    }
+    let port = port
+        .parse::<u16>()
+        .context("FREEQ_API port must be a number")?;
+    Ok((host.to_string(), port))
+}
+
+fn format_duration(total_seconds: u64) -> String {
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+    if hours > 0 {
+        format!("{hours}h {minutes}m {seconds}s")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds}s")
+    } else {
+        format!("{seconds}s")
+    }
 }
 
 fn run_script(relative_path: &[&str], args: &[&str]) -> Result<()> {

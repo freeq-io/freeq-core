@@ -134,6 +134,7 @@ The local steps are the same:
 cd ~/freeq-core
 cp /path/to/gateway-peer.env ~/FreeQ/02-put-peer-file-here/
 freeq gateway
+freeq status
 ```
 
 `freeq gateway` rolls back any previous FreeQ daemon and FreeQ-owned routes

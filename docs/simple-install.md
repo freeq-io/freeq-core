@@ -73,6 +73,12 @@ Then start or restart FreeQ from Terminal:
 freeq gateway
 ```
 
+Check gateway or node status:
+
+```bash
+freeq status
+```
+
 If direct peer-to-peer will not work because one side is on hotel Wi-Fi,
 carrier-grade NAT, Starlink, or another restricted network, use a reachable
 gateway or relay node as the peer file source. The local Mac flow is the same:
@@ -80,6 +86,12 @@ place the gateway peer file in `~/FreeQ/02-put-peer-file-here`, then run:
 
 ```bash
 freeq gateway
+```
+
+Check the active gateway path:
+
+```bash
+freeq status
 ```
 
 To stop FreeQ and return this Mac to normal networking:

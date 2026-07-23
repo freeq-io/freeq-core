@@ -104,6 +104,12 @@ The local Mac steps do not change:
 freeq gateway
 ```
 
+Check the local gateway or node status:
+
+```bash
+freeq status
+```
+
 If there is an old FreeQ route or daemon from a previous run, `--restart` uses
 the rollback helper before starting the replacement daemon.
 
