@@ -18,8 +18,16 @@ Then open a new Terminal window.
 ## Step 1: Install
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/setup/freeq-setup-macos.sh)"
+brew install freeq
 ```
+
+Prepare this Mac and start the local setup node:
+
+```bash
+freeq setup
+```
+
+Update FreeQ later with `brew upgrade freeq`.
 
 To preview setup without installing, building, or writing files, add
 `--dry-run`:
@@ -111,6 +119,26 @@ scripts/setup/freeq-start-macos.sh
 
 Leave that Terminal window open.
 
+FreeQ records the macOS network changes it owns in an internal rollback ledger.
+That ledger is used later to remove only FreeQ-owned routes.
+
+## Gateway Or Relay Path
+
+If the two Macs cannot connect directly because one side is on hotel Wi-Fi,
+airport Wi-Fi, carrier-grade NAT, Starlink, or another restricted network, use a
+reachable gateway or relay peer file instead of a direct peer file.
+
+The local steps are the same:
+
+```bash
+cd ~/freeq-core
+cp /path/to/gateway-peer.env ~/FreeQ/02-put-peer-file-here/
+freeq gateway
+```
+
+`freeq gateway` rolls back any previous FreeQ daemon and FreeQ-owned routes
+before starting the new connection.
+
 ## Step 5: Run Tests
 
 Open a second Terminal window.
@@ -156,4 +184,25 @@ Logs are written here:
 
 ```text
 ~/FreeQ/04-logs
+```
+
+## Roll Back And Resume Normal Networking
+
+When the test is done, before joining captive Wi-Fi, or whenever normal Mac
+networking looks wrong, run:
+
+```bash
+freeq stop
+```
+
+This stops the validated FreeQ daemon, removes FreeQ-owned overlay host routes,
+restores recorded DHCP mode, renews Wi-Fi DHCP, and deletes the rollback ledger.
+Do not use raw `sudo kill` as the normal stop path; it stops the process but can
+leave host-network state behind.
+
+The local helper remains available after install:
+
+```bash
+cd ~/freeq-core
+scripts/setup/freeq-stop-macos.sh --renew-dhcp
 ```

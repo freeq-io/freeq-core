@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG="${FREEQ_CONFIG:-$HOME/.freeq/perf/freeq.toml}"
 LOCAL_ENV="${FREEQ_LOCAL_ENV:-$HOME/.freeq/perf/node.env}"
 PEER_ENV="${FREEQ_PEER_ENV:-}"
@@ -10,7 +11,10 @@ CONFIG_FILE="${FREEQ_SETUP_CONFIG:-$SETUP_DIR/freeq-setup.conf}"
 RECEIVE_DIR="$SETUP_DIR/02-put-peer-file-here"
 LOG_FILE="$LOG_DIR/freeqd.log"
 PID_FILE="$LOG_DIR/freeqd.pid"
+NETWORK_STATE_FILE="$LOG_DIR/freeq-network-state.env"
 TUN_MTU="${FREEQ_TUN_MTU:-1200}"
+WIFI_SERVICE="${FREEQ_WIFI_SERVICE:-Wi-Fi}"
+WIFI_DEVICE="${FREEQ_WIFI_DEVICE:-en0}"
 CONFIGURE_INTERFACE=1
 RESTART=0
 SETUP_URL="${FREEQ_SETUP_URL:-http://127.0.0.1:6789/}"
@@ -26,9 +30,13 @@ Options:
   --peer-env PATH        peer.env from the other tester; auto-detected from ~/FreeQ if omitted
   --no-interface         start daemon but skip ifconfig/route helper
   --restart              stop an existing freeqd pid from this setup before starting
+  --help, -h             show this help
 
 Examples:
   scripts/setup/freeq-start-macos.sh
+
+Rollback:
+  scripts/setup/freeq-stop-macos.sh --renew-dhcp
 EOF
 }
 
@@ -212,6 +220,10 @@ config_listen_addr() {
   ' "$CONFIG"
 }
 
+quote_shell() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
 validate_pid_value() {
   [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -gt 0 ]
 }
@@ -221,6 +233,66 @@ pid_matches_freeqd() {
   local command
   command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
   [ -n "$command" ] && [[ "$command" =~ (^|[[:space:]/])freeqd([[:space:]]|$) ]]
+}
+
+host_route_exists() {
+  local ip="$1"
+  netstat -rn -f inet | awk -v ip="$ip" '$1 == ip { found = 1 } END { exit found ? 0 : 1 }'
+}
+
+require_no_preexisting_overlay_route() {
+  local ip="$1"
+  local label="$2"
+  if host_route_exists "$ip"; then
+    echo "Refusing to start because an exact $label overlay host route already exists: $ip" >&2
+    echo "Run cleanup first, then retry:" >&2
+    echo "  scripts/setup/freeq-stop-macos.sh --renew-dhcp" >&2
+    echo "Existing route:" >&2
+    netstat -rn -f inet | awk -v ip="$ip" '$1 == ip { print "  " $0 }' >&2
+    exit 1
+  fi
+}
+
+wifi_config_mode() {
+  networksetup -getinfo "$WIFI_SERVICE" 2>/dev/null | sed -n '1p' || true
+}
+
+write_network_state() {
+  local interface="$1"
+  local local_ip="$2"
+  local peer_ip="$3"
+  local wifi_mode
+  wifi_mode="$(wifi_config_mode)"
+  {
+    echo "# FreeQ macOS network rollback ledger."
+    echo "# Written before FreeQ-owned host routes are added."
+    echo "FREEQ_STATE_VERSION='1'"
+    echo "FREEQ_PID_FILE=$(quote_shell "$PID_FILE")"
+    echo "FREEQ_INTERFACE=$(quote_shell "$interface")"
+    echo "FREEQ_LOCAL_IP=$(quote_shell "$local_ip")"
+    echo "FREEQ_PEER_IP=$(quote_shell "$peer_ip")"
+    echo "FREEQ_TUN_MTU=$(quote_shell "$TUN_MTU")"
+    echo "FREEQ_WIFI_SERVICE=$(quote_shell "$WIFI_SERVICE")"
+    echo "FREEQ_WIFI_DEVICE=$(quote_shell "$WIFI_DEVICE")"
+    echo "FREEQ_WIFI_CONFIG_MODE=$(quote_shell "$wifi_mode")"
+    echo "FREEQ_ADDED_LOCAL_ROUTE='0'"
+    echo "FREEQ_ADDED_PEER_ROUTE='0'"
+  } > "$NETWORK_STATE_FILE"
+}
+
+mark_state_flag() {
+  local key="$1"
+  local value="$2"
+  printf '%s=%s\n' "$key" "$(quote_shell "$value")" >> "$NETWORK_STATE_FILE"
+}
+
+rollback_on_start_error() {
+  local status="$?"
+  if [ "$status" -ne 0 ] && [ "${FREEQ_START_ROLLBACK_ARMED:-0}" = "1" ]; then
+    echo "FreeQ start failed; rolling back macOS network changes..." >&2
+    "$SCRIPT_DIR/freeq-stop-macos.sh" --state-file "$NETWORK_STATE_FILE" --renew-dhcp >&2 || true
+  fi
+  exit "$status"
 }
 
 mkdir -p "$LOG_DIR"
@@ -265,6 +337,21 @@ if [ "$CONFIGURE_INTERFACE" -eq 1 ]; then
     exit 1
   fi
   scripts/setup/freeq-validate-peer-env.sh "$PEER_ENV" >/dev/null
+
+  local_address="$(required_env_value "$LOCAL_ENV" FREEQ_NODE_ADDRESS)"
+  local_ip="${local_address%%/*}"
+  if ! validate_ip_addr "$local_ip"; then
+    echo "Invalid local overlay address in $LOCAL_ENV: $local_address" >&2
+    exit 1
+  fi
+
+  peer_address="$(required_env_value "$PEER_ENV" FREEQ_NODE_ADDRESS)"
+  peer_ip="${peer_address%%/*}"
+  if ! validate_ip_addr "$peer_ip"; then
+    echo "Invalid peer overlay address in $PEER_ENV: $peer_address" >&2
+    exit 1
+  fi
+
 fi
 
 if [ -f "$PID_FILE" ]; then
@@ -280,28 +367,26 @@ if [ -f "$PID_FILE" ]; then
       exit 1
     fi
     if [ "$RESTART" -eq 1 ]; then
-      echo "Checking sudo access..."
-      sudo -v
-      echo "Stopping existing freeqd pid $old_pid..."
-      sudo kill "$old_pid"
-      for _ in $(seq 1 20); do
-        if ! kill -0 "$old_pid" >/dev/null 2>&1; then
-          break
-        fi
-        sleep 0.25
-      done
-      if kill -0 "$old_pid" >/dev/null 2>&1; then
-        echo "Existing freeqd pid $old_pid did not stop." >&2
-        echo "Stop it manually with: sudo kill $old_pid" >&2
-        exit 1
+      echo "Stopping existing freeqd pid $old_pid and cleaning overlay routes..."
+      stop_args=(--pid-file "$PID_FILE" --local-env "$LOCAL_ENV")
+      if [ -n "$PEER_ENV" ]; then
+        stop_args+=(--peer-env "$PEER_ENV")
       fi
-      rm -f "$PID_FILE"
+      if [ -f "$NETWORK_STATE_FILE" ]; then
+        stop_args+=(--state-file "$NETWORK_STATE_FILE")
+      fi
+      "$SCRIPT_DIR/freeq-stop-macos.sh" "${stop_args[@]}"
     else
       echo "freeqd already appears to be running as pid $old_pid"
-      echo "Stop it with: sudo kill $old_pid"
+      echo "Stop it with: scripts/setup/freeq-stop-macos.sh"
       exit 1
     fi
   fi
+fi
+
+if [ "$CONFIGURE_INTERFACE" -eq 1 ]; then
+  require_no_preexisting_overlay_route "$local_ip" "local"
+  require_no_preexisting_overlay_route "$peer_ip" "peer"
 fi
 
 : > "$LOG_FILE"
@@ -314,6 +399,8 @@ pid="$!"
 echo "$pid" > "$PID_FILE"
 echo "freeqd pid: $pid"
 echo "log: $LOG_FILE"
+FREEQ_START_ROLLBACK_ARMED=1
+trap rollback_on_start_error ERR
 
 interface=""
 for _ in $(seq 1 30); do
@@ -355,19 +442,7 @@ fi
 echo "Detected interface: $interface"
 
 if [ "$CONFIGURE_INTERFACE" -eq 1 ]; then
-  local_address="$(required_env_value "$LOCAL_ENV" FREEQ_NODE_ADDRESS)"
-  local_ip="${local_address%%/*}"
-  if ! validate_ip_addr "$local_ip"; then
-    echo "Invalid local overlay address in $LOCAL_ENV: $local_address" >&2
-    exit 1
-  fi
-
-  peer_address="$(required_env_value "$PEER_ENV" FREEQ_NODE_ADDRESS)"
-  peer_ip="${peer_address%%/*}"
-  if ! validate_ip_addr "$peer_ip"; then
-    echo "Invalid peer overlay address in $PEER_ENV: $peer_address" >&2
-    exit 1
-  fi
+  write_network_state "$interface" "$local_ip" "$peer_ip"
 
   echo "Configuring $interface local=$local_ip peer=$peer_ip mtu=$TUN_MTU"
   sudo ifconfig "$interface" "$local_ip" "$peer_ip" up
@@ -378,16 +453,14 @@ if [ "$CONFIGURE_INTERFACE" -eq 1 ]; then
   # can answer on the overlay IP while the peer host route stays on utun.
   if sudo route -n add -host "$local_ip" 127.0.0.1 >/dev/null 2>&1; then
     echo "Added local overlay route: $local_ip -> 127.0.0.1"
-  elif sudo route -n change -host "$local_ip" 127.0.0.1 >/dev/null 2>&1; then
-    echo "Updated local overlay route: $local_ip -> 127.0.0.1"
+    mark_state_flag FREEQ_ADDED_LOCAL_ROUTE 1
   else
     echo "WARN: could not pin local overlay route for $local_ip to 127.0.0.1" >&2
   fi
 
   if sudo route -n add -host "$peer_ip" -interface "$interface" >/dev/null 2>&1; then
     echo "Added peer overlay route: $peer_ip -> $interface"
-  elif sudo route -n change -host "$peer_ip" -interface "$interface" >/dev/null 2>&1; then
-    echo "Updated peer overlay route: $peer_ip -> $interface"
+    mark_state_flag FREEQ_ADDED_PEER_ROUTE 1
   else
     echo "WARN: could not pin peer overlay route for $peer_ip to $interface" >&2
   fi
@@ -414,6 +487,8 @@ if [ "$api_ready" -ne 1 ]; then
   exit 1
 fi
 
+FREEQ_START_ROLLBACK_ARMED=0
+trap - ERR
 echo ""
 echo "FreeQ daemon is running."
 echo "Setup page:"
@@ -421,5 +496,7 @@ echo "  $SETUP_URL"
 echo "Status API:"
 echo "  curl -s http://127.0.0.1:6789/v1/status"
 echo "Stop:"
-echo "  sudo kill $(cat "$PID_FILE")"
+echo "  scripts/setup/freeq-stop-macos.sh"
+echo "Captive Wi-Fi cleanup:"
+echo "  scripts/setup/freeq-stop-macos.sh --renew-dhcp"
 open "$SETUP_URL" >/dev/null 2>&1 || true

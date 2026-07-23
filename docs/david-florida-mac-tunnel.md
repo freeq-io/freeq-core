@@ -304,8 +304,19 @@ ping 10.66.0.1
 On either Mac:
 
 ```bash
-sudo kill "$(cat ~/.freeq/perf/freeqd.pid)"
+scripts/setup/freeq-stop-macos.sh
 ```
+
+On captive Wi-Fi, use the cleanup form so macOS renews DHCP after FreeQ removes
+the overlay host routes:
+
+```bash
+scripts/setup/freeq-stop-macos.sh --renew-dhcp
+```
+
+The macOS start helper records FreeQ-owned network changes in
+`~/.freeq/perf/freeq-network-state.env`. The stop helper uses that rollback
+ledger so it removes only routes FreeQ added during startup.
 
 ## If It Asks For Patrick's SSH Password
 

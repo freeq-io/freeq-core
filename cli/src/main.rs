@@ -5,20 +5,21 @@
 //! ## Commands
 //!
 //! ```text
-//! freeq init              Generate identity keypair and write initial config
-//! freeq up                Bring the daemon up (or start if not running)
-//! freeq down              Gracefully stop the daemon
+//! brew install freeq      Install FreeQ
+//! brew upgrade freeq      Update FreeQ
+//! freeq setup             Prepare this Mac and start the local setup node
+//! freeq gateway           Connect or reconnect to a gateway/peer file
+//! freeq stop              Stop FreeQ and roll networking back
 //! freeq status            Show node status and active tunnels
-//! freeq peer add          Add a peer (interactive or from flags)
-//! freeq peer remove <n>   Remove a peer by name
-//! freeq peer list         List all configured peers
-//! freeq key rotate        Rotate keys for all peers (or --peer <name>)
-//! freeq algorithm set     Hot-swap the active crypto algorithm
-//! freeq logs              Tail daemon logs
 //! ```
 
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
+use std::{
+    env,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 /// freeq — FreeQ post-quantum overlay network management CLI.
 #[derive(Parser, Debug)]
@@ -34,6 +35,15 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Prepare this Mac and start the local setup node.
+    Setup,
+
+    /// Connect or reconnect this Mac to the gateway/peer file in ~/FreeQ.
+    Gateway,
+
+    /// Stop FreeQ and roll this Mac back to normal networking.
+    Stop,
+
     /// Generate identity keypair and write initial config.
     Init {
         /// Config file path to create.
@@ -115,6 +125,21 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Setup => {
+            run_script(&["scripts", "install", "freeq-install-macos.sh"], &[])?;
+        }
+        Commands::Gateway => {
+            run_script(
+                &["scripts", "setup", "freeq-connect-macos.sh"],
+                &["--restart"],
+            )?;
+        }
+        Commands::Stop => {
+            run_script(
+                &["scripts", "setup", "freeq-stop-macos.sh"],
+                &["--renew-dhcp"],
+            )?;
+        }
         Commands::Status => {
             // TODO(v0.1): GET {api}/v1/status and pretty-print
             println!("freeq status — not yet implemented");
@@ -136,4 +161,79 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn run_script(relative_path: &[&str], args: &[&str]) -> Result<()> {
+    if env::consts::OS != "macos" {
+        bail!("this convenience action is currently implemented for macOS only");
+    }
+
+    let repo_root = find_freeq_root().context(
+        "could not find FreeQ scripts; set FREEQ_INSTALL_DIR to the freeq-core checkout",
+    )?;
+    let script = relative_path
+        .iter()
+        .fold(repo_root.clone(), |path, component| path.join(component));
+    if !script.exists() {
+        bail!("missing FreeQ helper script: {}", script.display());
+    }
+
+    let status = Command::new(&script)
+        .args(args)
+        .current_dir(&repo_root)
+        .status()
+        .with_context(|| format!("failed to run {}", script.display()))?;
+    if !status.success() {
+        bail!("{} exited with {}", script.display(), status);
+    }
+    Ok(())
+}
+
+fn find_freeq_root() -> Option<PathBuf> {
+    if let Ok(path) = env::var("FREEQ_INSTALL_DIR") {
+        if is_freeq_root(Path::new(&path)) {
+            return Some(PathBuf::from(path));
+        }
+    }
+
+    if let Some(path) = option_env!("FREEQ_PACKAGE_ROOT") {
+        if is_freeq_root(Path::new(path)) {
+            return Some(PathBuf::from(path));
+        }
+    }
+
+    if let Ok(exe) = env::current_exe() {
+        for ancestor in exe.ancestors() {
+            if is_freeq_root(ancestor) {
+                return Some(ancestor.to_path_buf());
+            }
+            let libexec = ancestor.join("libexec");
+            if is_freeq_root(&libexec) {
+                return Some(libexec);
+            }
+        }
+    }
+
+    if let Ok(cwd) = env::current_dir() {
+        for ancestor in cwd.ancestors() {
+            if is_freeq_root(ancestor) {
+                return Some(ancestor.to_path_buf());
+            }
+        }
+    }
+
+    let home = env::var_os("HOME")?;
+    let home_root = PathBuf::from(home).join("freeq-core");
+    if is_freeq_root(&home_root) {
+        return Some(home_root);
+    }
+
+    None
+}
+
+fn is_freeq_root(path: &Path) -> bool {
+    path.join("scripts/install/freeq-install-macos.sh")
+        .is_file()
+        && path.join("scripts/setup/freeq-connect-macos.sh").is_file()
+        && path.join("scripts/setup/freeq-stop-macos.sh").is_file()
 }

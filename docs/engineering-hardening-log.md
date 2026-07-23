@@ -710,6 +710,36 @@ Fix:
   pipeline.
 - `scripts/test-setup-flow.sh` asserts the MTU guardrail remains present.
 
+## 2026-07-22 Captive Wi-Fi Cleanup Finding
+
+After a macOS field tunnel test, `freeqd` exited cleanly and the `utun`
+interface disappeared, but the setup helper's local overlay host route remained
+installed as `10.66.0.1 -> 127.0.0.1`. Captive networks can also mark Wi-Fi as
+constrained until DHCP is renewed, which makes a plain `sudo kill` stop path too
+weak for hotel and airport portal recovery.
+
+Fix:
+
+- Added `scripts/setup/freeq-stop-macos.sh` to stop only a validated `freeqd`
+  pid, remove local and peer overlay host routes from the setup env files, and
+  optionally renew Wi-Fi DHCP with `--renew-dhcp`.
+- Updated macOS start/connect docs to direct operators to the cleanup helper
+  instead of a raw `sudo kill`.
+- The start script's `--restart` path now uses the same cleanup helper before
+  launching a replacement daemon.
+
+Follow-up hardening:
+
+- `freeq-start-macos.sh` now writes a rollback ledger at
+  `~/.freeq/perf/freeq-network-state.env` before adding FreeQ-owned host routes.
+- The start path refuses to overwrite pre-existing exact overlay host routes,
+  so it cannot silently take ownership of routes that existed before FreeQ.
+- If startup fails after `freeqd` is spawned, the script calls the stop helper to
+  kill the validated daemon pid, remove only routes recorded as FreeQ-added, and
+  renew DHCP when requested.
+- `freeq-stop-macos.sh` consumes the rollback ledger first and only falls back to
+  env-derived cleanup for older runs that predate the ledger.
+
 ## Suggested Next Issues
 
 These make sense as explicit repository issues because they are concrete,

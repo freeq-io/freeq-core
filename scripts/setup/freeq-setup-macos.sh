@@ -518,6 +518,8 @@ Useful commands:
   scripts/perf/freeq-perf-preflight-macos.sh
   scripts/setup/freeq-render-config.sh --help
   scripts/setup/freeq-start-macos.sh --help
+  scripts/setup/freeq-connect-macos.sh --restart
+  scripts/setup/freeq-stop-macos.sh --renew-dhcp
   scripts/perf/freeq-perf-run.sh --help
   scripts/perf/freeq-perf-bundle-results.sh
 
@@ -526,6 +528,9 @@ Next steps:
   2. Use the local setup page when it opens:
      http://127.0.0.1:6789/
   3. Create or join a 15-minute invite from that page.
+  4. To roll FreeQ back and resume normal networking:
+     cd "$INSTALL_DIR"
+     scripts/setup/freeq-stop-macos.sh --renew-dhcp
 
 Fallback compatibility files are available here:
   Send fallback peer file:

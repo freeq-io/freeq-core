@@ -12,14 +12,23 @@ fail() {
 assert_file_contains() {
   local file="$1"
   local pattern="$2"
-  rg -q "$pattern" "$file" || fail "expected $file to contain: $pattern"
+  if command -v rg >/dev/null 2>&1; then
+    rg -q "$pattern" "$file" || fail "expected $file to contain: $pattern"
+  else
+    grep -Eq "$pattern" "$file" || fail "expected $file to contain: $pattern"
+  fi
 }
 
 assert_no_match() {
   local pattern="$1"
   shift
-  if rg -n "$pattern" "$@" >/tmp/freeq-setup-flow-rg.out 2>/dev/null; then
-    cat /tmp/freeq-setup-flow-rg.out >&2
+  if command -v rg >/dev/null 2>&1; then
+    if rg -n "$pattern" "$@" >/tmp/freeq-setup-flow-search.out 2>/dev/null; then
+      cat /tmp/freeq-setup-flow-search.out >&2
+      fail "unexpected match for: $pattern"
+    fi
+  elif grep -ERn "$pattern" "$@" >/tmp/freeq-setup-flow-search.out 2>/dev/null; then
+    cat /tmp/freeq-setup-flow-search.out >&2
     fail "unexpected match for: $pattern"
   fi
 }
@@ -32,7 +41,7 @@ make_fake_command() {
 }
 
 TMP_ROOT="$(mktemp -d -t freeq-setup-flow.XXXXXX)"
-trap 'rm -rf "$TMP_ROOT" /tmp/freeq-setup-flow-rg.out' EXIT
+trap 'rm -rf "$TMP_ROOT" /tmp/freeq-setup-flow-search.out' EXIT
 
 echo "== setup flow: dry run =="
 DRY_HOME="$TMP_ROOT/dry-home"
@@ -68,7 +77,38 @@ scripts/install/freeq-install-macos.sh --dry-run > "$TMP_ROOT/simple-install.out
 assert_file_contains "$TMP_ROOT/simple-install.out" "FreeQ macOS installer"
 assert_file_contains "$TMP_ROOT/simple-install.out" "Dry run only"
 assert_file_contains "$TMP_ROOT/simple-install.out" "Local setup page:"
-assert_file_contains docs/simple-install.md "Install FreeQ Now"
+assert_file_contains docs/simple-install.md "brew install freeq"
+assert_file_contains docs/simple-install.md "Start, Connect, Roll Back"
+assert_file_contains docs/simple-install.md "FreeQ rollback result: PASS"
+assert_file_contains docs/simple-install.md "brew install freeq"
+assert_file_contains docs/simple-install.md "brew upgrade freeq"
+assert_file_contains docs/simple-install.md "freeq gateway"
+assert_file_contains docs/simple-install.md "freeq stop"
+assert_file_contains docs/setup-macos.md "Connect Through A Gateway When Needed"
+assert_file_contains docs/setup-macos.md "Roll Back To Normal Networking"
+assert_file_contains docs/setup-macos.md "brew install freeq"
+assert_file_contains docs/setup-macos.md "brew upgrade freeq"
+assert_file_contains docs/setup-macos.md "freeq gateway"
+assert_file_contains docs/setup-macos.md "freeq stop"
+assert_file_contains docs/perf-macos-quickstart.md "Gateway Or Relay Path"
+assert_file_contains docs/perf-macos-quickstart.md "Roll Back And Resume Normal Networking"
+assert_file_contains docs/perf-macos-quickstart.md "brew install freeq"
+assert_file_contains docs/perf-macos-quickstart.md "freeq gateway"
+assert_file_contains docs/perf-macos-quickstart.md "freeq stop"
+assert_file_contains docs/homebrew-install-maintenance-strategy.md "brew install freeq"
+assert_file_contains docs/homebrew-install-maintenance-strategy.md "freeq-io/tap/freeq"
+assert_file_contains docs/homebrew-install-maintenance-strategy.md "Homebrew core"
+assert_file_contains docs/homebrew-install-maintenance-strategy.md "macOS and Linux"
+assert_file_contains docs/homebrew-install-maintenance-strategy.md "supported Linux target"
+assert_file_contains docs/homebrew-install-maintenance-strategy.md "FreeQ Core owns"
+assert_file_contains docs/homebrew-install-maintenance-strategy.md "FreeQ Cloud"
+assert_file_contains docs/homebrew-install-maintenance-strategy.md "Shell installer"
+assert_file_contains docs/platform-installation-framework.md "Platform Matrix"
+assert_file_contains docs/platform-installation-framework.md "Linux gateway/server"
+assert_file_contains docs/platform-installation-framework.md "Windows workstation"
+assert_file_contains docs/platform-installation-framework.md "winget install FreeQ.FreeQ"
+assert_file_contains docs/platform-installation-framework.md "freeq service install"
+assert_file_contains docs/platform-installation-framework.md "Platform Stub Template"
 assert_file_contains docs/assets/index-DmLsYzhZ.js "Install FreeQ Now"
 assert_file_contains docs/assets/index-DmLsYzhZ.js "Public alpha install"
 assert_file_contains docs/assets/index-DmLsYzhZ.js "freeq-install-macos.sh"
@@ -169,6 +209,35 @@ PATH="$FAKE_BIN:$PATH" \
 scripts/perf/freeq-perf-run.sh --mode direct --label direct-test > "$TMP_ROOT/perf.out"
 assert_file_contains "$TMP_ROOT/results/direct-test/run.env" "target_host=peer.example.test"
 
+echo "== setup flow: macOS stop consumes rollback ledger =="
+STOP_FAKE_BIN="$TMP_ROOT/stop-fake-bin"
+mkdir -p "$STOP_FAKE_BIN"
+cat > "$STOP_FAKE_BIN/sudo" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$TMP_ROOT/stop-sudo.log"
+exit 0
+EOF
+chmod +x "$STOP_FAKE_BIN/sudo"
+cat > "$TMP_ROOT/freeq-network-state.env" <<'EOF'
+FREEQ_STATE_VERSION='1'
+FREEQ_PID_FILE='/tmp/freeq-test-missing.pid'
+FREEQ_LOCAL_IP='10.66.0.20'
+FREEQ_PEER_IP='10.66.0.21'
+FREEQ_WIFI_SERVICE='Wi-Fi'
+FREEQ_WIFI_DEVICE='en0'
+FREEQ_WIFI_CONFIG_MODE='DHCP Configuration'
+FREEQ_ADDED_LOCAL_ROUTE='1'
+FREEQ_ADDED_PEER_ROUTE='1'
+EOF
+PATH="$STOP_FAKE_BIN:$PATH" \
+  scripts/setup/freeq-stop-macos.sh --state-file "$TMP_ROOT/freeq-network-state.env" --renew-dhcp > "$TMP_ROOT/stop.out"
+assert_file_contains "$TMP_ROOT/stop.out" "FreeQ macOS tunnel cleanup complete"
+assert_file_contains "$TMP_ROOT/stop-sudo.log" "route -n delete -host 10.66.0.20"
+assert_file_contains "$TMP_ROOT/stop-sudo.log" "route -n delete -host 10.66.0.21"
+assert_file_contains "$TMP_ROOT/stop-sudo.log" "networksetup -setdhcp Wi-Fi"
+assert_file_contains "$TMP_ROOT/stop-sudo.log" "ipconfig set en0 DHCP"
+[ ! -e "$TMP_ROOT/freeq-network-state.env" ] || fail "stop helper did not remove rollback ledger"
+
 echo "== setup flow: guardrails =="
 assert_no_match "FREEQ_PEER_ENDPOINT|PEER_ENDPOINT|--peer-endpoint" \
   scripts/setup scripts/perf docs/perf-macos-quickstart.md docs/perf-harness.md tools/freeq-perf-identity/src/main.rs
@@ -181,14 +250,35 @@ assert_file_contains scripts/setup/freeq-setup-macos.sh "sh.rustup.rs"
 assert_file_contains scripts/setup/freeq-setup-macos.sh "brew install iperf3 jq"
 assert_file_contains scripts/setup/freeq-setup-macos.sh "FREEQ_PUBLIC_ENDPOINT=.*quote_shell"
 assert_file_contains scripts/setup/freeq-setup-macos.sh "FREEQ_PEER_SSH_USER=.*quote_shell"
+assert_file_contains scripts/setup/freeq-setup-macos.sh "freeq-stop-macos.sh --renew-dhcp"
 assert_file_contains scripts/install/freeq-install-macos.sh "http://127.0.0.1:6789/"
+assert_file_contains scripts/install/freeq-install-macos.sh "rollback"
+assert_file_contains scripts/install/freeq-install-macos.sh "FreeQ update status:"
+assert_file_contains scripts/install/freeq-install-macos.sh "FreeQ rollback result: PASS"
+assert_file_contains scripts/install/freeq-install-macos.sh "scripts/setup/freeq-stop-macos.sh --renew-dhcp"
+assert_file_contains scripts/install/freeq-install-macos.sh "freeq stop"
+assert_file_contains Formula/freeq.rb "brew upgrade freeq"
+assert_file_contains Formula/freeq.rb "freeq setup"
+assert_file_contains Formula/freeq.rb "freeq gateway"
+assert_file_contains Formula/freeq.rb "freeq stop"
+assert_no_match "freeq --install|freeq --update|freeq --gateway|freeq --stop" cli/src/main.rs Formula/freeq.rb docs/simple-install.md docs/setup-macos.md docs/perf-macos-quickstart.md
 assert_file_contains scripts/setup/freeq-start-macos.sh "Setup page:"
 assert_file_contains scripts/setup/freeq-start-macos.sh "nohup sudo target/release/freeqd"
 assert_file_contains scripts/setup/freeq-start-macos.sh "freeqd did not keep the local setup API online"
 assert_file_contains scripts/setup/freeq-start-macos.sh "FREEQ_TUN_MTU"
+assert_file_contains scripts/setup/freeq-start-macos.sh "freeq-network-state.env"
+assert_file_contains scripts/setup/freeq-start-macos.sh "require_no_preexisting_overlay_route"
+assert_file_contains scripts/setup/freeq-start-macos.sh "rollback_on_start_error"
 assert_file_contains scripts/setup/freeq-start-macos.sh 'ifconfig "\$interface" mtu "\$TUN_MTU"'
 assert_file_contains scripts/setup/freeq-start-macos.sh 'route -n add -host "\$local_ip" 127.0.0.1'
 assert_file_contains scripts/setup/freeq-start-macos.sh 'route -n add -host "\$peer_ip" -interface "\$interface"'
+assert_no_match 'route -n change -host "\$local_ip"|route -n change -host "\$peer_ip"' scripts/setup/freeq-start-macos.sh
+assert_file_contains scripts/setup/freeq-start-macos.sh "freeq-stop-macos.sh --renew-dhcp"
+assert_file_contains scripts/setup/freeq-stop-macos.sh "FREEQ_ADDED_LOCAL_ROUTE"
+assert_file_contains scripts/setup/freeq-stop-macos.sh "FREEQ_ADDED_PEER_ROUTE"
+assert_file_contains scripts/setup/freeq-stop-macos.sh 'route -n delete -host "\$ip"'
+assert_file_contains scripts/setup/freeq-stop-macos.sh 'networksetup -setdhcp "\$WIFI_SERVICE"'
+assert_file_contains scripts/setup/freeq-stop-macos.sh 'ipconfig set "\$WIFI_DEVICE" DHCP'
 assert_file_contains scripts/setup/freeq-connect-macos.sh "Building updated freeqd release binary"
 assert_file_contains scripts/setup/freeq-start-macos.sh "Building updated freeqd release binary"
 

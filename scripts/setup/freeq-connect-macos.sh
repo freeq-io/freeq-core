@@ -242,5 +242,8 @@ Send this node's peer file to the other node operator if needed:
   $SEND_DIR/<local-node-name>-peer.env
 
 Stop:
-  sudo kill "\$(cat ~/.freeq/perf/freeqd.pid)"
+  scripts/setup/freeq-stop-macos.sh
+
+Captive Wi-Fi cleanup:
+  scripts/setup/freeq-stop-macos.sh --renew-dhcp
 EOF
