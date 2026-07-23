@@ -156,6 +156,11 @@ requiring Device Manager or manual adapter cleanup.
 
 ## Linux Native Package Path
 
+The constrained Linux readiness proposal is documented in
+[`docs/linux-install-code-mill-brief.md`](linux-install-code-mill-brief.md).
+It is a planning and static-scaffold document only; it does not claim that
+Linux workstation or gateway installation is working.
+
 Linux native packages should be added after the Homebrew Linux path proves the
 CLI and rollback contract.
 
