@@ -394,6 +394,47 @@
       color: #593d00;
     }
 
+    .gateway-checks {
+      display: grid;
+      gap: 10px;
+    }
+
+    .check-row {
+      display: grid;
+      grid-template-columns: 112px 1fr;
+      gap: 12px;
+      align-items: start;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .check-row:last-child {
+      border-bottom: 0;
+    }
+
+    .check-title {
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .command-stack {
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .command-line {
+      display: block;
+      width: 100%;
+      padding: 9px 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #f8fafc;
+      color: var(--ink);
+      overflow-x: auto;
+      white-space: nowrap;
+    }
+
     #join-result {
       white-space: pre-wrap;
     }
@@ -564,6 +605,42 @@
         </div>
       </section>
 
+      <section class="panel full" aria-labelledby="gateway-heading">
+        <div class="panel-header">
+          <div>
+            <h2 id="gateway-heading">Gateway Path</h2>
+            <p class="muted" id="gateway-summary">Waiting for local status and peer registry</p>
+          </div>
+          <div id="gateway-result" class="badge warn">Checking</div>
+        </div>
+        <div class="panel-body">
+          <div class="gateway-checks">
+            <div class="check-row">
+              <div class="check-title">Local daemon</div>
+              <div id="gateway-local">Waiting for local API</div>
+            </div>
+            <div class="check-row">
+              <div class="check-title">Gateway peer</div>
+              <div id="gateway-peer">Waiting for peer registry</div>
+            </div>
+            <div class="check-row">
+              <div class="check-title">Traffic</div>
+              <div id="gateway-traffic">No overlay traffic observed yet</div>
+            </div>
+            <div class="check-row">
+              <div class="check-title">Next action</div>
+              <div id="gateway-next">Refresh status after starting FreeQ.</div>
+            </div>
+          </div>
+          <div class="command-stack" aria-label="Gateway commands">
+            <code class="command-line">freeq gateway status</code>
+            <code class="command-line">freeq gateway connect</code>
+            <code class="command-line">scripts/perf/freeq-bidirectional-smoke-macos.sh --connect-if-needed</code>
+            <code class="command-line">freeq stop</code>
+          </div>
+        </div>
+      </section>
+
       <section class="panel full" aria-labelledby="peer-heading">
         <div class="panel-header">
           <div>
@@ -611,9 +688,12 @@
     const apiPill = document.getElementById("api-pill");
     const apiPillText = document.getElementById("api-pill-text");
     const setupResult = document.getElementById("setup-result");
+    const gatewayResult = document.getElementById("gateway-result");
     const refreshButton = document.getElementById("refresh-button");
     const createInvitePanel = document.getElementById("create-invite-panel");
     const joinInvitePanel = document.getElementById("join-invite-panel");
+    let latestStatus = null;
+    let latestPeers = [];
 
     function setStatus(level, text) {
       apiPill.className = `status-pill ${level}`;
@@ -665,6 +745,7 @@
     }
 
     function renderStatus(status) {
+      latestStatus = status;
       document.getElementById("node-name").textContent = text(status.name, "Unknown");
       document.getElementById("uptime").textContent = formatUptime(status.uptime_secs);
       document.getElementById("peer-count").textContent = text(status.peer_count, "0");
@@ -705,6 +786,7 @@
     }
 
     function renderPeers(peers) {
+      latestPeers = Array.isArray(peers) ? peers : [];
       const rows = document.getElementById("peer-rows");
       const summary = document.getElementById("peer-summary");
       rows.innerHTML = "";
@@ -729,6 +811,84 @@
           row.appendChild(cell);
         }
         rows.appendChild(row);
+      }
+    }
+
+    function setGatewayResult(level, textValue) {
+      gatewayResult.className = `badge ${level}`;
+      gatewayResult.textContent = textValue;
+    }
+
+    function likelyGatewayPeer(peer) {
+      const endpoint = text(peer.endpoint, "");
+      const allowedIps = Array.isArray(peer.allowed_ips) ? peer.allowed_ips.join(", ") : "";
+      return endpoint.includes(":51820") || allowedIps.includes("/32") || peer.name.toLowerCase().includes("gateway");
+    }
+
+    function renderGatewayPath(status, peers) {
+      const local = document.getElementById("gateway-local");
+      const peer = document.getElementById("gateway-peer");
+      const traffic = document.getElementById("gateway-traffic");
+      const next = document.getElementById("gateway-next");
+      const summary = document.getElementById("gateway-summary");
+
+      if (!status) {
+        setGatewayResult("fail", "Offline");
+        summary.textContent = "Local API is not reachable";
+        local.textContent = "FreeQ is not running or the local API is unavailable.";
+        peer.textContent = "Peer registry unavailable until the local daemon starts.";
+        traffic.textContent = "No overlay traffic observed.";
+        next.textContent = "Run freeq gateway connect from the repo folder, then refresh this page.";
+        return;
+      }
+
+      const peerList = Array.isArray(peers) ? peers : [];
+      const gatewayPeer = peerList.find(likelyGatewayPeer) || peerList[0];
+      const packetCount = Number(status.packets_ingested || 0);
+      const encryptedBytes = Number(status.encrypted_bytes || 0);
+      const routeMisses = Number(status.route_misses || 0);
+      const tunnels = Number(status.tunnel_count || 0);
+      const peerCount = Number(status.peer_count || peerList.length || 0);
+      const hasInterface = Boolean(status.interface_name);
+      const hasTraffic = packetCount > 0 || encryptedBytes > 0;
+      const hasTransportError = text(status.last_error, "").toLowerCase().includes("transport");
+
+      local.textContent = hasInterface
+        ? `Running on ${status.interface_name} with MTU ${text(status.interface_mtu, "unknown")}.`
+        : "Local API is online, but the tunnel interface is not initialized.";
+
+      if (gatewayPeer) {
+        const endpoint = text(gatewayPeer.endpoint, "no endpoint");
+        const allowedIps = Array.isArray(gatewayPeer.allowed_ips) && gatewayPeer.allowed_ips.length > 0
+          ? gatewayPeer.allowed_ips.join(", ")
+          : "no allowed overlay IPs";
+        peer.textContent = `${text(gatewayPeer.name, "Configured peer")} at ${endpoint}; routes ${allowedIps}.`;
+      } else {
+        peer.textContent = "No gateway or peer file is currently visible to the local API.";
+      }
+
+      traffic.textContent = `${packetCount} packets, ${encryptedBytes} encrypted bytes, ${routeMisses} route misses, ${tunnels} active tunnel(s).`;
+
+      if (hasTraffic) {
+        setGatewayResult("pass", "Passing");
+        summary.textContent = "Overlay traffic has been observed";
+        next.textContent = "Run the bidirectional smoke test from both nodes to capture field-test proof.";
+      } else if (gatewayPeer && hasInterface && hasTransportError) {
+        setGatewayResult("fail", "Blocked");
+        summary.textContent = "Gateway peer is configured, but transport is failing";
+        next.textContent = "Check that this public IP is allowed in the gateway security group for UDP 51820, then reconnect.";
+      } else if (gatewayPeer && hasInterface && peerCount > 0) {
+        setGatewayResult("warn", "Ready");
+        summary.textContent = "Gateway peer is configured; traffic has not flowed yet";
+        next.textContent = "Run scripts/perf/freeq-bidirectional-smoke-macos.sh --connect-if-needed, then refresh this page.";
+      } else if (gatewayPeer) {
+        setGatewayResult("warn", "Needs Start");
+        summary.textContent = "Gateway peer exists, but the local tunnel is not active";
+        next.textContent = "Run freeq gateway connect, then refresh this page.";
+      } else {
+        setGatewayResult("fail", "No Peer");
+        summary.textContent = "No gateway peer is configured";
+        next.textContent = "Place one intended gateway peer.env file in ~/FreeQ/02-put-peer-file-here, then run freeq gateway status.";
       }
     }
 
@@ -785,13 +945,19 @@
         document.getElementById("last-refresh").textContent = `Last refreshed ${new Date().toLocaleTimeString()}`;
 
         try {
-          renderPeers(await getJson("/v1/peers"));
+          const peers = await getJson("/v1/peers");
+          renderPeers(peers);
         } catch (peerError) {
+          latestPeers = [];
           document.getElementById("peer-summary").textContent = peerError.message;
         }
+        renderGatewayPath(latestStatus, latestPeers);
       } catch (error) {
+        latestStatus = null;
+        latestPeers = [];
         setStatus("fail", "Local API offline");
         document.getElementById("last-refresh").textContent = error.message;
+        renderGatewayPath(null, []);
       } finally {
         refreshButton.disabled = false;
       }

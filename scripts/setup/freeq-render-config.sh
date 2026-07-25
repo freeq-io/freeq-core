@@ -56,6 +56,18 @@ validate_endpoint() {
   fi
 }
 
+validate_ip_prefix() {
+  python3 - "$1" <<'PY' >/dev/null 2>&1
+import ipaddress
+import sys
+
+try:
+    ipaddress.ip_network(sys.argv[1], strict=False)
+except ValueError:
+    raise SystemExit(1)
+PY
+}
+
 validate_socket_addr() {
   python3 - "$1" <<'PY' >/dev/null 2>&1
 import ipaddress
@@ -85,6 +97,26 @@ import json
 import sys
 
 print(json.dumps(sys.argv[1]))
+PY
+}
+
+toml_string_array() {
+  python3 - "$@" <<'PY'
+import json
+import sys
+
+print(", ".join(json.dumps(value) for value in sys.argv[1:]))
+PY
+}
+
+split_extra_allowed_ips() {
+  python3 - "${FREEQ_EXTRA_ALLOWED_IPS:-}" <<'PY'
+import re
+import sys
+
+for value in re.split(r"[\s,]+", sys.argv[1].strip()):
+    if value:
+        print(value)
 PY
 }
 
@@ -274,6 +306,16 @@ PEER_PUBLIC_ENDPOINT="$(required_env_value "$PEER_ENV" FREEQ_PUBLIC_ENDPOINT)"
 PEER_PUBLIC_KEY_B64="$(required_env_value "$PEER_ENV" FREEQ_PUBLIC_KEY_B64)"
 PEER_KEM_KEY_B64="$(required_env_value "$PEER_ENV" FREEQ_KEM_KEY_B64)"
 PEER_ALLOWED_IP="${PEER_NODE_ADDRESS%%/*}/32"
+PEER_ALLOWED_IPS=("$PEER_ALLOWED_IP")
+while IFS= read -r extra_allowed_ip; do
+  [ -n "$extra_allowed_ip" ] || continue
+  if ! validate_ip_prefix "$extra_allowed_ip"; then
+    echo "Invalid FREEQ_EXTRA_ALLOWED_IPS entry: $extra_allowed_ip" >&2
+    echo "Use comma- or space-separated CIDR prefixes such as 10.66.0.165/32." >&2
+    exit 1
+  fi
+  PEER_ALLOWED_IPS+=("$extra_allowed_ip")
+done < <(split_extra_allowed_ips)
 if ! validate_node_name "$PEER_NODE_NAME"; then
   echo "Invalid peer node name in peer.env: $PEER_NODE_NAME" >&2
   exit 1
@@ -303,7 +345,7 @@ PEER_NODE_NAME_TOML="$(toml_string "$PEER_NODE_NAME")"
 PEER_PUBLIC_ENDPOINT_TOML="$(toml_string "$PEER_PUBLIC_ENDPOINT")"
 PEER_PUBLIC_KEY_B64_TOML="$(toml_string "$PEER_PUBLIC_KEY_B64")"
 PEER_KEM_KEY_B64_TOML="$(toml_string "$PEER_KEM_KEY_B64")"
-PEER_ALLOWED_IP_TOML="$(toml_string "$PEER_ALLOWED_IP")"
+PEER_ALLOWED_IPS_TOML="$(toml_string_array "${PEER_ALLOWED_IPS[@]}")"
 
 cat >> "$OUTPUT_CONFIG" <<EOF
 
@@ -312,7 +354,7 @@ name = $PEER_NODE_NAME_TOML
 endpoint = $PEER_PUBLIC_ENDPOINT_TOML
 public_key = $PEER_PUBLIC_KEY_B64_TOML
 kem_key = $PEER_KEM_KEY_B64_TOML
-allowed_ips = [$PEER_ALLOWED_IP_TOML]
+allowed_ips = [$PEER_ALLOWED_IPS_TOML]
 key_rotation_secs = 3600
 EOF
 

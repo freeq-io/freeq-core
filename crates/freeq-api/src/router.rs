@@ -93,6 +93,7 @@ mod tests {
         let body = dashboard().await.0;
 
         assert!(body.contains("FreeQ Setup"));
+        assert!(body.contains("Gateway Path"));
         assert!(body.contains("/v1/status"));
         assert!(body.contains("/v1/peers"));
     }

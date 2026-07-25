@@ -19,6 +19,7 @@ CONFIGURE_INTERFACE=1
 RESTART=0
 SETUP_URL="${FREEQ_SETUP_URL:-http://127.0.0.1:6789/}"
 STATUS_URL="${SETUP_URL%/}/v1/status"
+EXTRA_ALLOWED_IPS="${FREEQ_EXTRA_ALLOWED_IPS:-}"
 
 usage() {
   cat <<'EOF'
@@ -239,6 +240,39 @@ except ValueError:
 PY
 }
 
+validate_ip_prefix() {
+  python3 - "$1" <<'PY' >/dev/null 2>&1
+import ipaddress
+import sys
+
+try:
+    ipaddress.ip_network(sys.argv[1], strict=False)
+except ValueError:
+    raise SystemExit(1)
+PY
+}
+
+prefix_host_ip() {
+  python3 - "$1" <<'PY'
+import ipaddress
+import sys
+
+network = ipaddress.ip_network(sys.argv[1], strict=False)
+print(network.network_address if network.prefixlen != network.max_prefixlen else network.network_address)
+PY
+}
+
+split_extra_allowed_ips() {
+  python3 - "$EXTRA_ALLOWED_IPS" <<'PY'
+import re
+import sys
+
+for value in re.split(r"[\s,]+", sys.argv[1].strip()):
+    if value:
+        print(value)
+PY
+}
+
 validate_mtu() {
   [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 576 ] && [ "$1" -le 1500 ]
 }
@@ -292,6 +326,7 @@ write_network_state() {
   local interface="$1"
   local local_ip="$2"
   local peer_ip="$3"
+  local extra_route_ips="$4"
   local wifi_mode
   wifi_mode="$(wifi_config_mode)"
   {
@@ -302,12 +337,14 @@ write_network_state() {
     echo "FREEQ_INTERFACE=$(quote_shell "$interface")"
     echo "FREEQ_LOCAL_IP=$(quote_shell "$local_ip")"
     echo "FREEQ_PEER_IP=$(quote_shell "$peer_ip")"
+    echo "FREEQ_EXTRA_ROUTE_IPS=$(quote_shell "$extra_route_ips")"
     echo "FREEQ_TUN_MTU=$(quote_shell "$TUN_MTU")"
     echo "FREEQ_WIFI_SERVICE=$(quote_shell "$WIFI_SERVICE")"
     echo "FREEQ_WIFI_DEVICE=$(quote_shell "$WIFI_DEVICE")"
     echo "FREEQ_WIFI_CONFIG_MODE=$(quote_shell "$wifi_mode")"
     echo "FREEQ_ADDED_LOCAL_ROUTE='0'"
     echo "FREEQ_ADDED_PEER_ROUTE='0'"
+    echo "FREEQ_ADDED_EXTRA_ROUTES='0'"
   } > "$NETWORK_STATE_FILE"
 }
 
@@ -364,6 +401,7 @@ fi
 ensure_freeqd_built
 
 if [ "$CONFIGURE_INTERFACE" -eq 1 ]; then
+  extra_route_ips=()
   if [ -z "$PEER_ENV" ]; then
     PEER_ENV="$(find_peer_env)"
     echo "Using peer env: $PEER_ENV"
@@ -391,6 +429,21 @@ if [ "$CONFIGURE_INTERFACE" -eq 1 ]; then
     echo "Invalid peer overlay address in $PEER_ENV: $peer_address" >&2
     exit 1
   fi
+
+  while IFS= read -r extra_allowed_ip; do
+    [ -n "$extra_allowed_ip" ] || continue
+    if ! validate_ip_prefix "$extra_allowed_ip"; then
+      echo "Invalid FREEQ_EXTRA_ALLOWED_IPS entry: $extra_allowed_ip" >&2
+      echo "Use comma- or space-separated CIDR prefixes such as 10.66.0.165/32." >&2
+      exit 1
+    fi
+    extra_ip="$(prefix_host_ip "$extra_allowed_ip")"
+    if ! validate_ip_addr "$extra_ip"; then
+      echo "Invalid extra overlay route IP from $extra_allowed_ip" >&2
+      exit 1
+    fi
+    extra_route_ips+=("$extra_ip")
+  done < <(split_extra_allowed_ips)
 
 fi
 
@@ -427,6 +480,9 @@ fi
 if [ "$CONFIGURE_INTERFACE" -eq 1 ]; then
   require_no_preexisting_overlay_route "$local_ip" "local"
   require_no_preexisting_overlay_route "$peer_ip" "peer"
+  for extra_ip in "${extra_route_ips[@]}"; do
+    require_no_preexisting_overlay_route "$extra_ip" "extra"
+  done
 fi
 
 : > "$LOG_FILE"
@@ -482,7 +538,7 @@ fi
 echo "Detected interface: $interface"
 
 if [ "$CONFIGURE_INTERFACE" -eq 1 ]; then
-  write_network_state "$interface" "$local_ip" "$peer_ip"
+  write_network_state "$interface" "$local_ip" "$peer_ip" "${extra_route_ips[*]:-}"
 
   echo "Configuring $interface local=$local_ip peer=$peer_ip mtu=$TUN_MTU"
   sudo ifconfig "$interface" "$local_ip" "$peer_ip" up
@@ -503,6 +559,22 @@ if [ "$CONFIGURE_INTERFACE" -eq 1 ]; then
     mark_state_flag FREEQ_ADDED_PEER_ROUTE 1
   else
     echo "WARN: could not pin peer overlay route for $peer_ip to $interface" >&2
+  fi
+
+  added_extra_route=0
+  for extra_ip in "${extra_route_ips[@]}"; do
+    if [ "$extra_ip" = "$local_ip" ] || [ "$extra_ip" = "$peer_ip" ]; then
+      continue
+    fi
+    if sudo route -n add -host "$extra_ip" -interface "$interface" >/dev/null 2>&1; then
+      echo "Added extra overlay route: $extra_ip -> $interface"
+      added_extra_route=1
+    else
+      echo "WARN: could not pin extra overlay route for $extra_ip to $interface" >&2
+    fi
+  done
+  if [ "$added_extra_route" -eq 1 ]; then
+    mark_state_flag FREEQ_ADDED_EXTRA_ROUTES 1
   fi
 fi
 

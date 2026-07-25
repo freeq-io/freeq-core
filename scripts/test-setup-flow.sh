@@ -189,7 +189,16 @@ scripts/setup/freeq-render-config.sh > "$TMP_ROOT/render.out" 2> "$TMP_ROOT/rend
 assert_file_contains "$TMP_ROOT/render.err" "Ignoring local node peer file"
 assert_file_contains "$TMP_ROOT/freeq.toml" 'name = "peer-mac"'
 assert_file_contains "$TMP_ROOT/freeq.toml" 'endpoint = "peer.example.test:51820"'
+assert_file_contains "$TMP_ROOT/freeq.toml" 'allowed_ips = \["10.66.0.21/32"\]'
 rm -f "$TMP_ROOT/setup/02-put-peer-file-here/local-mac-peer.env"
+
+echo "== setup flow: gateway extra allowed routes render =="
+FREEQ_SETUP_DIR="$TMP_ROOT/setup" \
+FREEQ_LOCAL_ENV="$TMP_ROOT/local/node.env" \
+FREEQ_CONFIG_OUT="$TMP_ROOT/freeq-extra-routes.toml" \
+FREEQ_EXTRA_ALLOWED_IPS="10.66.0.165/32,10.66.0.1/32" \
+scripts/setup/freeq-render-config.sh > "$TMP_ROOT/render-extra.out"
+assert_file_contains "$TMP_ROOT/freeq-extra-routes.toml" 'allowed_ips = \["10.66.0.21/32", "10.66.0.165/32", "10.66.0.1/32"\]'
 
 echo "== setup flow: listen-only config renders without peer file =="
 FREEQ_LOCAL_ENV="$TMP_ROOT/local/node.env" \

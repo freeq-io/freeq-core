@@ -188,18 +188,25 @@ stop_freeqd() {
 remove_overlay_routes() {
   local seen=" "
   local ip
-  local local_ip peer_ip added_local added_peer
+  local local_ip peer_ip extra_ips added_local added_peer added_extra
 
   if [ -f "$STATE_FILE" ]; then
     local_ip="$(state_value FREEQ_LOCAL_IP)"
     peer_ip="$(state_value FREEQ_PEER_IP)"
+    extra_ips="$(state_value FREEQ_EXTRA_ROUTE_IPS)"
     added_local="$(state_value FREEQ_ADDED_LOCAL_ROUTE)"
     added_peer="$(state_value FREEQ_ADDED_PEER_ROUTE)"
+    added_extra="$(state_value FREEQ_ADDED_EXTRA_ROUTES)"
     if [ "$added_local" = "1" ] && [ -n "$local_ip" ]; then
       OVERLAY_IPS+=("$local_ip")
     fi
     if [ "$added_peer" = "1" ] && [ -n "$peer_ip" ]; then
       OVERLAY_IPS+=("$peer_ip")
+    fi
+    if [ "$added_extra" = "1" ] && [ -n "$extra_ips" ]; then
+      for ip in $extra_ips; do
+        OVERLAY_IPS+=("$ip")
+      done
     fi
   else
     echo "No rollback ledger found: $STATE_FILE" >&2
