@@ -85,6 +85,7 @@ assert_file_contains docs/simple-install.md "brew upgrade freeq"
 assert_file_contains docs/simple-install.md "freeq gateway"
 assert_file_contains docs/simple-install.md "freeq gateway status"
 assert_file_contains docs/simple-install.md "A gateway is not required"
+assert_file_contains docs/simple-install.md "freeq doctor"
 assert_file_contains docs/simple-install.md "freeq stop"
 assert_file_contains docs/simple-install.md "freeq status"
 assert_file_contains docs/setup-macos.md "Connect Through A Gateway When Needed"
@@ -94,6 +95,7 @@ assert_file_contains docs/setup-macos.md "brew upgrade freeq"
 assert_file_contains docs/setup-macos.md "freeq gateway"
 assert_file_contains docs/setup-macos.md "freeq gateway status"
 assert_file_contains docs/setup-macos.md "A gateway is not required"
+assert_file_contains docs/setup-macos.md "freeq doctor"
 assert_file_contains docs/setup-macos.md "freeq stop"
 assert_file_contains docs/setup-macos.md "freeq status"
 assert_file_contains docs/perf-macos-quickstart.md "Gateway Or Relay Path"
@@ -102,6 +104,7 @@ assert_file_contains docs/perf-macos-quickstart.md "brew install freeq"
 assert_file_contains docs/perf-macos-quickstart.md "freeq gateway"
 assert_file_contains docs/perf-macos-quickstart.md "freeq gateway status"
 assert_file_contains docs/perf-macos-quickstart.md "A gateway is not required"
+assert_file_contains docs/perf-macos-quickstart.md "freeq doctor"
 assert_file_contains docs/perf-macos-quickstart.md "freeq stop"
 assert_file_contains docs/perf-macos-quickstart.md "freeq status"
 assert_file_contains docs/perf-macos-quickstart.md "freeq-bidirectional-smoke-macos.sh"
@@ -114,6 +117,7 @@ assert_file_contains docs/homebrew-install-maintenance-strategy.md "FreeQ Core o
 assert_file_contains docs/homebrew-install-maintenance-strategy.md "FreeQ Cloud"
 assert_file_contains docs/homebrew-install-maintenance-strategy.md "Shell installer"
 assert_file_contains docs/homebrew-install-maintenance-strategy.md "freeq gateway status"
+assert_file_contains docs/homebrew-install-maintenance-strategy.md "freeq doctor"
 assert_file_contains docs/platform-installation-framework.md "Platform Matrix"
 assert_file_contains docs/platform-installation-framework.md "Linux gateway/server"
 assert_file_contains docs/platform-installation-framework.md "Windows workstation"
@@ -184,6 +188,42 @@ assert_file_contains "$TMP_ROOT/listen-only.toml" 'name = "local-mac"'
 assert_file_contains "$TMP_ROOT/listen-only.toml" 'listen = "0.0.0.0:51820"'
 assert_no_match '^\[\[peer\]\]' "$TMP_ROOT/listen-only.toml"
 assert_file_contains "$TMP_ROOT/listen-only-render.out" "Rendered listen-only FreeQ config"
+
+echo "== setup flow: macOS doctor happy path =="
+DOCTOR_ROOT="$TMP_ROOT/doctor"
+DOCTOR_SETUP="$DOCTOR_ROOT/FreeQ"
+DOCTOR_BIN="$DOCTOR_ROOT/bin"
+mkdir -p "$DOCTOR_SETUP/01-send-this-file" "$DOCTOR_SETUP/02-put-peer-file-here" "$DOCTOR_BIN"
+cp "$TMP_ROOT/peer/peer.env" "$DOCTOR_SETUP/02-put-peer-file-here/peer-mac-peer.env"
+cp "$TMP_ROOT/local/peer.env" "$DOCTOR_SETUP/01-send-this-file/local-mac-peer.env"
+printf '%s\n' "FREEQ_NODE_NAME='local-mac'" > "$DOCTOR_SETUP/freeq-setup.conf"
+cp "$TMP_ROOT/listen-only.toml" "$DOCTOR_ROOT/freeq.toml"
+make_fake_command "$DOCTOR_BIN/freeq" "exit 0"
+make_fake_command "$DOCTOR_BIN/freeqd" "exit 0"
+make_fake_command "$DOCTOR_BIN/freeq-perf-identity" "exit 0"
+FREEQ_DOCTOR_OS=Darwin \
+FREEQ_SETUP_DIR="$DOCTOR_SETUP" \
+FREEQ_LOCAL_ENV="$TMP_ROOT/local/node.env" \
+FREEQ_CONFIG="$DOCTOR_ROOT/freeq.toml" \
+FREEQ_BIN_DIR="$DOCTOR_BIN" \
+scripts/setup/freeq-doctor-macos.sh > "$TMP_ROOT/doctor-happy.out"
+assert_file_contains "$TMP_ROOT/doctor-happy.out" "FreeQ doctor result: PASS"
+assert_file_contains "$TMP_ROOT/doctor-happy.out" "Peer env validation passed"
+
+echo "== setup flow: macOS doctor missing peer file =="
+DOCTOR_MISSING_SETUP="$TMP_ROOT/doctor-missing/FreeQ"
+mkdir -p "$DOCTOR_MISSING_SETUP/01-send-this-file" "$DOCTOR_MISSING_SETUP/02-put-peer-file-here"
+printf '%s\n' "FREEQ_NODE_NAME='local-mac'" > "$DOCTOR_MISSING_SETUP/freeq-setup.conf"
+if FREEQ_DOCTOR_OS=Darwin \
+  FREEQ_SETUP_DIR="$DOCTOR_MISSING_SETUP" \
+  FREEQ_LOCAL_ENV="$TMP_ROOT/local/node.env" \
+  FREEQ_CONFIG="$DOCTOR_ROOT/freeq.toml" \
+  FREEQ_BIN_DIR="$DOCTOR_BIN" \
+  scripts/setup/freeq-doctor-macos.sh > "$TMP_ROOT/doctor-missing.out"; then
+  fail "doctor accepted missing peer env"
+fi
+assert_file_contains "$TMP_ROOT/doctor-missing.out" "Received peer env missing"
+assert_file_contains "$TMP_ROOT/doctor-missing.out" "FreeQ doctor result: FAIL"
 
 echo "== setup flow: bad local listen fails before daemon start =="
 BAD_LOCAL_ENV="$TMP_ROOT/bad-local/node.env"
@@ -289,6 +329,7 @@ assert_file_contains Formula/freeq.rb "brew upgrade freeq"
 assert_file_contains Formula/freeq.rb "freeq setup"
 assert_file_contains Formula/freeq.rb "freeq gateway"
 assert_file_contains Formula/freeq.rb "freeq gateway status"
+assert_file_contains Formula/freeq.rb "freeq doctor"
 assert_file_contains Formula/freeq.rb "freeq stop"
 assert_no_match "freeq --install|freeq --update|freeq --gateway|freeq --stop" cli/src/main.rs Formula/freeq.rb docs/simple-install.md docs/setup-macos.md docs/perf-macos-quickstart.md
 assert_no_match "status .*not yet implemented" cli/src/main.rs

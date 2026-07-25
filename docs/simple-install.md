@@ -73,6 +73,12 @@ Check whether FreeQ sees the peer or gateway file and what endpoint it will use:
 freeq gateway status
 ```
 
+Check the whole local setup and see the next action if something is missing:
+
+```bash
+freeq doctor
+```
+
 Then start or restart FreeQ from Terminal:
 
 ```bash
@@ -129,6 +135,7 @@ Success means:
 - Homebrew installed or upgraded FreeQ.
 - FreeQ built successfully.
 - This Mac has a local FreeQ node identity.
+- `freeq doctor` reports local setup readiness.
 - FreeQ started.
 - The local FreeQ status check answered.
 - FreeQ can be rolled back with `freeq stop`.

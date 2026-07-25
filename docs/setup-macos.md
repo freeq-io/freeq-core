@@ -119,6 +119,12 @@ Check whether this local machine is running FreeQ:
 freeq status
 ```
 
+If you are not sure what is missing, run the local doctor:
+
+```bash
+freeq doctor
+```
+
 If there is an old FreeQ route or daemon from a previous run, `--restart` uses
 the rollback helper before starting the replacement daemon.
 

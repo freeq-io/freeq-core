@@ -25,6 +25,7 @@ class Freeq < Formula
 
       Connect to a gateway/peer file placed in ~/FreeQ:
         freeq gateway status
+        freeq doctor
         freeq gateway
 
       Stop FreeQ and roll networking back to normal:

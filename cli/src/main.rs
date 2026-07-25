@@ -10,6 +10,7 @@
 //! freeq setup             Prepare this Mac and start the local setup node
 //! freeq gateway           Connect or reconnect to a gateway/peer file
 //! freeq gateway status    Show gateway file readiness
+//! freeq doctor            Check local setup health and print next actions
 //! freeq stop              Stop FreeQ and roll networking back
 //! freeq status            Show node status and active tunnels
 //! ```
@@ -52,6 +53,9 @@ enum Commands {
 
     /// Stop FreeQ and roll this Mac back to normal networking.
     Stop,
+
+    /// Check local FreeQ setup health and print next actions.
+    Doctor,
 
     /// Generate identity keypair and write initial config.
     Init {
@@ -161,6 +165,9 @@ async fn main() -> Result<()> {
                 &["scripts", "setup", "freeq-stop-macos.sh"],
                 &["--renew-dhcp"],
             )?;
+        }
+        Commands::Doctor => {
+            run_script(&["scripts", "setup", "freeq-doctor-macos.sh"], &[])?;
         }
         Commands::Status => {
             print_status(&cli.api)?;
