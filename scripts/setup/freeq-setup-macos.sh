@@ -35,8 +35,73 @@ if not (1 <= port_int <= 65535):
 PY
 }
 
+socket_host() {
+  python3 - "$1" <<'PY'
+import sys
+
+value = sys.argv[1]
+if value.startswith("["):
+    host, _, _ = value[1:].partition("]:")
+else:
+    host, _, _ = value.rpartition(":")
+print(host)
+PY
+}
+
+socket_port() {
+  python3 - "$1" <<'PY'
+import sys
+
+value = sys.argv[1]
+if value.startswith("["):
+    _, _, port = value[1:].partition("]:")
+else:
+    _, _, port = value.rpartition(":")
+print(port)
+PY
+}
+
+listen_host_is_bindable() {
+  local host="$1"
+  case "$host" in
+    0.0.0.0|::|127.*|::1)
+      return 0
+      ;;
+  esac
+
+  if ! command -v ifconfig >/dev/null 2>&1; then
+    return 0
+  fi
+
+  ifconfig | awk -v host="$host" '
+    $1 == "inet" && $2 == host { found = 1 }
+    $1 == "inet6" {
+      split($2, parts, "%")
+      if (parts[1] == host) { found = 1 }
+    }
+    END { exit found ? 0 : 1 }
+  '
+}
+
 normalize_listen_addr() {
   if is_valid_socket_addr "$LISTEN_ADDR"; then
+    local host port
+    host="$(socket_host "$LISTEN_ADDR")"
+    port="$(socket_port "$LISTEN_ADDR")"
+    if listen_host_is_bindable "$host"; then
+      return 0
+    fi
+    echo "Local listen address uses an IP this Mac does not currently own: $LISTEN_ADDR"
+    echo "FreeQ can repair this by listening on all local interfaces: 0.0.0.0:$port"
+    echo "The local dashboard API remains bound to 127.0.0.1."
+    if [ "${FREEQ_ASSUME_DEFAULTS:-}" != "1" ] && [ -t 0 ]; then
+      if ! ask_yes_no "Use 0.0.0.0:$port for the FreeQ UDP listener?" "yes"; then
+        echo "Setup stopped. Rerun with a listen address assigned to this Mac." >&2
+        exit 1
+      fi
+    fi
+    echo "Using local bind address: 0.0.0.0:$port"
+    LISTEN_ADDR="0.0.0.0:$port"
     return 0
   fi
   echo "Invalid local listen address: $LISTEN_ADDR"

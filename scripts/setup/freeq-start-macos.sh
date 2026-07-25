@@ -196,6 +196,37 @@ if not (1 <= port_int <= 65535):
 PY
 }
 
+socket_host() {
+  python3 - "$1" <<'PY'
+import sys
+
+value = sys.argv[1]
+if value.startswith("["):
+    host, _, _ = value[1:].partition("]:")
+else:
+    host, _, _ = value.rpartition(":")
+print(host)
+PY
+}
+
+listen_host_is_bindable() {
+  local host="$1"
+  case "$host" in
+    0.0.0.0|::|127.*|::1)
+      return 0
+      ;;
+  esac
+
+  ifconfig | awk -v host="$host" '
+    $1 == "inet" && $2 == host { found = 1 }
+    $1 == "inet6" {
+      split($2, parts, "%")
+      if (parts[1] == host) { found = 1 }
+    }
+    END { exit found ? 0 : 1 }
+  '
+}
+
 validate_ip_addr() {
   python3 - "$1" <<'PY' >/dev/null 2>&1
 import ipaddress
@@ -315,6 +346,15 @@ LISTEN_VALUE="$(config_listen_addr)"
 if [ -z "$LISTEN_VALUE" ] || ! validate_socket_addr "$LISTEN_VALUE"; then
   echo "Config contains an invalid node.listen value: ${LISTEN_VALUE:-missing}" >&2
   echo "Rerun setup so FreeQ can use the safe default: 0.0.0.0:51820" >&2
+  exit 1
+fi
+LISTEN_HOST="$(socket_host "$LISTEN_VALUE")"
+if ! listen_host_is_bindable "$LISTEN_HOST"; then
+  echo "Config node.listen is valid syntax but this Mac does not own that IP: $LISTEN_VALUE" >&2
+  echo "Use the safe local bind address instead: 0.0.0.0:51820" >&2
+  echo "Repair and rerun:" >&2
+  echo "  FREEQ_LISTEN_ADDR=0.0.0.0:51820 scripts/setup/freeq-setup-macos.sh" >&2
+  echo "  freeq gateway connect" >&2
   exit 1
 fi
 if ! validate_mtu "$TUN_MTU"; then

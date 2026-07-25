@@ -69,6 +69,17 @@ scripts/setup/freeq-setup-macos.sh --dry-run > "$TMP_ROOT/bad-listen.out"
 assert_file_contains "$TMP_ROOT/bad-listen.out" "Invalid local listen address"
 assert_file_contains "$TMP_ROOT/bad-listen.out" "Listen address: 0.0.0.0:51820"
 
+echo "== setup flow: unassigned listen address resets before config =="
+UNASSIGNED_LISTEN_HOME="$TMP_ROOT/unassigned-listen-home"
+mkdir -p "$UNASSIGNED_LISTEN_HOME"
+FREEQ_ASSUME_DEFAULTS=1 \
+FREEQ_NODE_NAME=unassigned-listen \
+FREEQ_LISTEN_ADDR=203.0.113.10:51821 \
+HOME="$UNASSIGNED_LISTEN_HOME" \
+scripts/setup/freeq-setup-macos.sh --dry-run > "$TMP_ROOT/unassigned-listen.out"
+assert_file_contains "$TMP_ROOT/unassigned-listen.out" "does not currently own"
+assert_file_contains "$TMP_ROOT/unassigned-listen.out" "Listen address: 0.0.0.0:51821"
+
 echo "== setup flow: simple installer syntax and dry run =="
 bash -n scripts/install/freeq-install-macos.sh
 FREEQ_INSTALL_DIR="$TMP_ROOT/simple-install/freeq-core" \

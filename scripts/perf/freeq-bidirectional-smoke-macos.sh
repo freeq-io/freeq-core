@@ -11,6 +11,7 @@ API_URL="${FREEQ_API:-http://127.0.0.1:6789}"
 PING_COUNT="${FREEQ_BIDI_PING_COUNT:-3}"
 SSH_USER="${FREEQ_BIDI_SSH_USER:-}"
 SSH_PORT="${FREEQ_BIDI_SSH_PORT:-22}"
+AUTO_CONNECT="${FREEQ_BIDI_AUTO_CONNECT:-}"
 
 usage() {
   cat <<'EOF'
@@ -30,6 +31,8 @@ Options:
   --ssh-user USER     SSH user on the peer/gateway for the return-path ping
   --ssh-port PORT     SSH port on the peer/gateway public endpoint, default 22
   --ping-count N      ping count for each direction, default 3
+  --connect-if-needed start FreeQ with the existing gateway peer file if the
+                     local API is not reachable
   --help, -h          show this help
 
 Exit codes:
@@ -44,6 +47,7 @@ while [ "$#" -gt 0 ]; do
     --ssh-user) SSH_USER="$2"; shift 2 ;;
     --ssh-port) SSH_PORT="$2"; shift 2 ;;
     --ping-count) PING_COUNT="$2"; shift 2 ;;
+    --connect-if-needed) AUTO_CONNECT=1; shift ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
   esac
@@ -121,6 +125,47 @@ fetch_status() {
   curl -fsS --max-time 2 "$API_URL/v1/status"
 }
 
+ask_yes_no() {
+  local prompt="$1"
+  local default="${2:-no}"
+  local answer
+  if [ "${FREEQ_ASSUME_DEFAULTS:-}" = "1" ] || [ ! -t 0 ]; then
+    [ "$default" = "yes" ]
+    return $?
+  fi
+  if [ "$default" = "yes" ]; then
+    printf '%s [Y/n]: ' "$prompt" >&2
+  else
+    printf '%s [y/N]: ' "$prompt" >&2
+  fi
+  IFS= read -r answer || answer=""
+  case "$answer" in
+    y|Y|yes|YES) return 0 ;;
+    n|N|no|NO) return 1 ;;
+    "") [ "$default" = "yes" ] ;;
+    *) return 1 ;;
+  esac
+}
+
+connect_if_needed() {
+  if [ "$AUTO_CONNECT" = "1" ] || ask_yes_no "Local FreeQ is not running. Start gateway connection now?" "yes"; then
+    echo "Starting FreeQ gateway connection..."
+    if "$REPO_ROOT/scripts/setup/freeq-connect-macos.sh" --peer-env "$PEER_ENV" --restart; then
+      return 0
+    fi
+    echo "FAIL: FreeQ gateway connection did not start." >&2
+    echo "Inspect local daemon log if present:" >&2
+    echo "  $HOME/.freeq/perf/freeqd.log" >&2
+    echo "Rollback:" >&2
+    echo "  scripts/setup/freeq-stop-macos.sh --renew-dhcp" >&2
+    return 1
+  fi
+
+  echo "FAIL: local FreeQ API is not reachable at $API_URL/v1/status" >&2
+  echo "Run: freeq gateway connect" >&2
+  return 1
+}
+
 run_ping() {
   local label="$1"
   local host="$2"
@@ -158,9 +203,17 @@ echo "  Peer file: $PEER_ENV"
 echo
 
 if ! before_status="$(fetch_status 2>/dev/null)"; then
-  echo "FAIL: local FreeQ API is not reachable at $API_URL/v1/status" >&2
-  echo "Run: freeq gateway" >&2
-  exit 1
+  if ! connect_if_needed; then
+    exit 1
+  fi
+  if ! before_status="$(fetch_status 2>/dev/null)"; then
+    echo "FAIL: local FreeQ API is still not reachable at $API_URL/v1/status after gateway connect." >&2
+    echo "Inspect local daemon log if present:" >&2
+    echo "  $HOME/.freeq/perf/freeqd.log" >&2
+    echo "Rollback:" >&2
+    echo "  scripts/setup/freeq-stop-macos.sh --renew-dhcp" >&2
+    exit 1
+  fi
 fi
 
 echo "Local daemon before test:"
