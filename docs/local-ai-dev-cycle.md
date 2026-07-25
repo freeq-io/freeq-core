@@ -32,13 +32,13 @@ scripts/run-local-ai-stripes.sh --prepare --from 1 --to 10
 Run one stripe through a local model command that reads from stdin:
 
 ```bash
-LOCAL_AI_CMD='ollama run llama3.1:8b' scripts/run-local-ai-stripes.sh --run --from 2 --to 2
+LOCAL_AI_CMD='ollama run qwen2.5-coder:7b' scripts/run-local-ai-stripes.sh --run --from 2 --to 2
 ```
 
 Run the remaining stripes one at a time:
 
 ```bash
-LOCAL_AI_CMD='ollama run llama3.1:8b' scripts/run-local-ai-stripes.sh --run --from 2 --to 10
+LOCAL_AI_CMD='ollama run qwen2.5-coder:7b' scripts/run-local-ai-stripes.sh --run --from 2 --to 10
 ```
 
 The runner stops if it detects an existing local AI process, unless
@@ -255,4 +255,62 @@ Verify:
 ```bash
 bash -n scripts/setup/freeq-doctor-macos.sh scripts/test-setup-flow.sh
 scripts/test-setup-flow.sh
+```
+
+## 11. Brew-Style Operator Command Map
+
+Goal: give normal users one clear, durable command reference for install,
+update, setup, health checks, gateway/direct connection, status, and rollback.
+
+This is intentionally a fat documentation/harness stripe. It should not touch
+Rust, daemon behavior, cryptography, route management, sudo behavior, generated
+site assets, or platform installers.
+
+Prompt:
+
+```text
+Create docs/freeq-operator-command-map.md as the plain-English command map for
+FreeQ's brew-style user experience.
+
+Read README.md, docs/simple-install.md, docs/setup-macos.md,
+docs/perf-macos-quickstart.md, docs/homebrew-install-maintenance-strategy.md,
+docs/platform-installation-framework.md, scripts/setup/freeq-doctor-macos.sh,
+and scripts/test-setup-flow.sh before editing.
+
+The new doc should cover:
+  - brew install freeq
+  - brew upgrade freeq
+  - freeq setup
+  - freeq doctor
+  - freeq gateway status
+  - freeq gateway
+  - freeq status
+  - freeq stop
+  - when direct node-to-node is enough
+  - when a gateway/rendezvous point is needed
+  - what PASS, FAIL, and Next mean
+  - what FreeQ does not do: it does not replace radio-layer security, does not
+    secure arbitrary RF waveforms, and does not require a gateway when direct
+    node-to-node reachability exists
+
+Link this new command map from README.md, docs/simple-install.md,
+docs/setup-macos.md, docs/perf-macos-quickstart.md, and
+docs/homebrew-install-maintenance-strategy.md.
+
+Add guardrail assertions to scripts/test-setup-flow.sh that prove the new doc
+exists, is linked from the listed docs, and contains the core commands and the
+direct/gateway/non-RF-security language.
+
+Do not edit CLI Rust code, daemon code, networking scripts, generated docs/assets
+bundles, or Homebrew formula code in this stripe. If you think code is needed,
+stop and report why instead of changing code.
+```
+
+Verify:
+
+```bash
+bash -n scripts/test-setup-flow.sh
+scripts/test-setup-flow.sh
+rg -n "freeq-operator-command-map|freeq doctor|freeq gateway status|freeq stop|direct node-to-node|does not replace radio-layer security" README.md docs scripts/test-setup-flow.sh
+git diff --name-only
 ```
