@@ -362,6 +362,9 @@ assert_file_contains scripts/setup/freeq-stop-macos.sh 'route -n delete -host "\
 assert_file_contains scripts/setup/freeq-stop-macos.sh 'networksetup -setdhcp "\$WIFI_SERVICE"'
 assert_file_contains scripts/setup/freeq-stop-macos.sh 'ipconfig set "\$WIFI_DEVICE" DHCP'
 assert_file_contains scripts/setup/freeq-connect-macos.sh "Building updated freeqd release binary"
+assert_file_contains scripts/setup/freeq-connect-macos.sh "Repairing local setup identity with listen address"
+assert_file_contains scripts/setup/freeq-connect-macos.sh "FREEQ_LISTEN_ADDR"
+assert_file_contains scripts/setup/freeq-connect-macos.sh "The local dashboard API remains bound to 127.0.0.1."
 assert_file_contains scripts/setup/freeq-start-macos.sh "Building updated freeqd release binary"
 
 echo "setup flow checks passed"

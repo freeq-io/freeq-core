@@ -91,6 +91,124 @@ env_value() {
   ' "$file"
 }
 
+ask_yes_no() {
+  local prompt="$1"
+  local default="${2:-no}"
+  local answer
+  if [ "${FREEQ_ASSUME_DEFAULTS:-}" = "1" ] || [ ! -t 0 ]; then
+    [ "$default" = "yes" ]
+    return $?
+  fi
+  if [ "$default" = "yes" ]; then
+    printf '%s [Y/n]: ' "$prompt" >&2
+  else
+    printf '%s [y/N]: ' "$prompt" >&2
+  fi
+  IFS= read -r answer || answer=""
+  case "$answer" in
+    y|Y|yes|YES) return 0 ;;
+    n|N|no|NO) return 1 ;;
+    "") [ "$default" = "yes" ] ;;
+    *) return 1 ;;
+  esac
+}
+
+validate_socket_addr() {
+  python3 - "$1" <<'PY' >/dev/null 2>&1
+import ipaddress
+import sys
+
+value = sys.argv[1]
+if value.startswith("["):
+    host, sep, port = value[1:].partition("]:")
+else:
+    host, sep, port = value.rpartition(":")
+if not host or not sep or not port.isdigit():
+    raise SystemExit(1)
+ipaddress.ip_address(host)
+port_int = int(port)
+if not (1 <= port_int <= 65535):
+    raise SystemExit(1)
+PY
+}
+
+socket_host() {
+  python3 - "$1" <<'PY'
+import sys
+
+value = sys.argv[1]
+if value.startswith("["):
+    host, _, _ = value[1:].partition("]:")
+else:
+    host, _, _ = value.rpartition(":")
+print(host)
+PY
+}
+
+socket_port() {
+  python3 - "$1" <<'PY'
+import sys
+
+value = sys.argv[1]
+if value.startswith("["):
+    _, _, port = value[1:].partition("]:")
+else:
+    _, _, port = value.rpartition(":")
+print(port)
+PY
+}
+
+listen_host_is_bindable() {
+  local host="$1"
+  case "$host" in
+    0.0.0.0|::|127.*|::1)
+      return 0
+      ;;
+  esac
+
+  if ! command -v ifconfig >/dev/null 2>&1; then
+    return 0
+  fi
+
+  ifconfig | awk -v host="$host" '
+    $1 == "inet" && $2 == host { found = 1 }
+    $1 == "inet6" {
+      split($2, parts, "%")
+      if (parts[1] == host) { found = 1 }
+    }
+    END { exit found ? 0 : 1 }
+  '
+}
+
+repair_unbindable_local_listen() {
+  local listen host port repaired_listen
+  listen="$(env_value "$LOCAL_ENV" FREEQ_NODE_LISTEN)"
+  if [ -z "$listen" ] || ! validate_socket_addr "$listen"; then
+    return 0
+  fi
+
+  host="$(socket_host "$listen")"
+  if listen_host_is_bindable "$host"; then
+    return 0
+  fi
+
+  port="$(socket_port "$listen")"
+  repaired_listen="0.0.0.0:$port"
+  echo "Local listen address in node.env is not assigned to this Mac: $listen"
+  echo "FreeQ can repair this by listening on all local interfaces: $repaired_listen"
+  echo "The local dashboard API remains bound to 127.0.0.1."
+  if ! ask_yes_no "Repair the local FreeQ UDP listener now?" "yes"; then
+    echo "Gateway connect stopped. Rerun setup with a listen address assigned to this Mac." >&2
+    exit 1
+  fi
+  echo "Repairing local setup identity with listen address: $repaired_listen"
+  FREEQ_ASSUME_DEFAULTS=1 \
+  FREEQ_INSTALL_DIR="$REPO_ROOT" \
+  FREEQ_LISTEN_ADDR="$repaired_listen" \
+    "$SCRIPT_DIR/freeq-setup-macos.sh"
+  echo
+}
+
 select_remote_peer_env() {
   local candidates=("$@")
   local remote_candidates=()
@@ -206,6 +324,8 @@ if [ ! -f "$LOCAL_ENV" ]; then
 fi
 
 ensure_freeqd_built
+
+repair_unbindable_local_listen
 
 PEER_ENV="$(find_peer_env)"
 echo "Using peer env:"
