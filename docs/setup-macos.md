@@ -90,9 +90,12 @@ rollback helper to stop `freeqd`, remove FreeQ-owned routes, and renew DHCP.
 
 ## Connect Through A Gateway When Needed
 
+Direct peer-to-peer is the simplest path when both endpoints can reach each
+other. A gateway is not required for that case.
+
 Direct peer-to-peer may not work from hotel Wi-Fi, airport Wi-Fi, carrier-grade
-NAT, Starlink, or locked-down enterprise guest networks. In that case, use a
-reachable gateway or relay node as the peer.
+NAT, Starlink, cellular, or locked-down enterprise guest networks. In that
+case, use a reachable gateway or relay node as the peer.
 
 The local Mac steps do not change:
 

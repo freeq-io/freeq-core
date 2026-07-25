@@ -41,7 +41,30 @@ Every encrypted packet sent today over these protocols is a future liability.
 
 ## The solution
 
-FreeQ wraps all traffic between trusted endpoints in **hybrid post-quantum tunnels** using NIST-finalized standards. Every connection is:
+FreeQ protects routable digital traffic between known, trusted endpoints over
+whatever bearer is available: public internet, fiber, LTE, SATCOM, Starlink,
+Wi-Fi, tactical backhaul, or a private network.
+
+Gateways are optional. When two endpoints can reach each other directly, FreeQ
+can establish a direct node-to-node protected overlay:
+
+```text
+Node A -> FreeQ protected overlay -> Node B
+```
+
+When direct reachability is blocked by NAT, CGNAT, hotel Wi-Fi, airport Wi-Fi,
+Starlink, cellular networks, firewalls, or restricted guest networks, FreeQ can
+use a reachable gateway or rendezvous point:
+
+```text
+Node A -> FreeQ protected overlay -> gateway/rendezvous -> FreeQ protected overlay -> Node B
+```
+
+FreeQ does not secure arbitrary RF waveforms, replace approved radio-layer
+security, or substitute for required COMSEC. It adds a protected overlay for
+digital traffic that can be routed through FreeQ endpoints or gateways.
+
+FreeQ wraps routable traffic between trusted endpoints in **hybrid post-quantum tunnels** using NIST-finalized standards. Every connection is:
 
 - **Double-encrypted** — X25519 (classical) + ML-KEM-768 (FIPS 203, post-quantum). Security holds if *either* algorithm remains unbroken.
 - **Mutually authenticated** — ML-DSA-65 (FIPS 204) identity keys. FreeQ does not install a tunnel session or send a FreeQ handshake response unless the peer proves a registered identity. Full transport-level UDP cloaking requires the planned pre-QUIC admission gate.

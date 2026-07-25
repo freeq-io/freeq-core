@@ -124,9 +124,12 @@ That ledger is used later to remove only FreeQ-owned routes.
 
 ## Gateway Or Relay Path
 
+If the two Macs can reach each other directly, use the direct peer file. A gateway is not required for direct node-to-node FreeQ.
+
 If the two Macs cannot connect directly because one side is on hotel Wi-Fi,
-airport Wi-Fi, carrier-grade NAT, Starlink, or another restricted network, use a
-reachable gateway or relay peer file instead of a direct peer file.
+airport Wi-Fi, carrier-grade NAT, Starlink, cellular, or another restricted
+network, use a reachable gateway or relay peer file instead of a direct peer
+file.
 
 The local steps are the same:
 

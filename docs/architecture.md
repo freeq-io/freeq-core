@@ -32,6 +32,34 @@ to install FreeQ Core, bootstrap trust with a simple local artifact, start a
 node, and establish a protected direct tunnel without depending on a hosted
 control plane.
 
+## Connectivity Model: Direct First, Gateway When Needed
+
+FreeQ protects routable digital traffic between known, trusted endpoints across
+whatever bearer is available: public internet, fiber, LTE, SATCOM, Starlink,
+Wi-Fi, tactical backhaul, or private network.
+
+The simplest topology is direct node-to-node:
+
+```text
+Node A -> FreeQ protected overlay -> Node B
+```
+
+That path is preferred when both endpoints can reach each other. A gateway is not mandatory for FreeQ security.
+
+Some real networks block direct reachability. Common examples include NAT,
+CGNAT, hotel Wi-Fi, airport Wi-Fi, coffee shop Wi-Fi, cellular networks,
+Starlink, enterprise guest networks, and restrictive firewalls. In those cases,
+FreeQ can use a reachable gateway or rendezvous point:
+
+```text
+Node A -> FreeQ protected overlay -> gateway/rendezvous -> FreeQ protected overlay -> Node B
+```
+
+FreeQ sits above the bearer. It does not replace radios, SATCOM, fiber, LTE,
+Starlink, Wi-Fi, tactical backhaul, approved radio-layer security, or required
+COMSEC. It protects traffic that can be routed through FreeQ endpoints or
+gateways.
+
 FreeQ Cloud exists to replace the ugly parts of self-management with a polished
 management plane:
 

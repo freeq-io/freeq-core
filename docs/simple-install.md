@@ -67,7 +67,7 @@ Put the peer or gateway file you receive here:
 ~/FreeQ/02-put-peer-file-here
 ```
 
-Check whether FreeQ sees the gateway file and what endpoint it will use:
+Check whether FreeQ sees the peer or gateway file and what endpoint it will use:
 
 ```bash
 freeq gateway status
@@ -85,17 +85,21 @@ Check whether this local machine is running FreeQ:
 freeq status
 ```
 
+If direct peer-to-peer works, the peer file can describe the other endpoint
+directly. A gateway is not required.
+
 If direct peer-to-peer will not work because one side is on hotel Wi-Fi,
-carrier-grade NAT, Starlink, or another restricted network, use a reachable
-gateway or relay node as the peer file source. The local Mac flow is the same:
-place the gateway peer file in `~/FreeQ/02-put-peer-file-here`, then run:
+carrier-grade NAT, Starlink, cellular, airport Wi-Fi, or another restricted
+network, use a reachable gateway or relay node as the peer file source. The
+local Mac flow is the same: place the gateway peer file in
+`~/FreeQ/02-put-peer-file-here`, then run:
 
 ```bash
 freeq gateway status
 freeq gateway
 ```
 
-Check the active gateway path:
+Check the active local node:
 
 ```bash
 freeq status
