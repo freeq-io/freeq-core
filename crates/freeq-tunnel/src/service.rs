@@ -153,6 +153,53 @@ impl TunnelService {
         })
     }
 
+    /// Prepare an opaque payload for transport transmission to an explicit peer.
+    pub fn prepare_payload_for_peer_with_session(
+        &self,
+        peer_id: String,
+        payload: Bytes,
+        session_key: &[u8; 32],
+    ) -> Result<PreparedPeerPacket> {
+        let packet_id = self.tunnel.next_packet_id();
+        let PreparedTransportPacket {
+            packet_len,
+            encrypted_len,
+            frames,
+            ..
+        } = match self.tunnel.prepare_transport_payload_with_session(
+            payload.as_ref(),
+            session_key,
+            packet_id,
+        ) {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                match &err {
+                    TunnelError::BufferUnderflow | TunnelError::MalformedPacket(_) => {
+                        self.malformed_packet_errors.fetch_add(1, Ordering::Relaxed);
+                    }
+                    TunnelError::Crypto(_) => {
+                        self.crypto_errors.fetch_add(1, Ordering::Relaxed);
+                    }
+                    TunnelError::Transport(_) => {
+                        self.transport_errors.fetch_add(1, Ordering::Relaxed);
+                    }
+                    TunnelError::Interface(_)
+                    | TunnelError::Io(_)
+                    | TunnelError::NoRoute { .. } => {}
+                }
+                return Err(err);
+            }
+        };
+
+        Ok(PreparedPeerPacket {
+            peer_id,
+            packet_len,
+            encrypted_len,
+            frames_emitted: frames.len(),
+            frames,
+        })
+    }
+
     /// Decrypt one reassembled transport payload back into an L3 packet.
     pub fn receive_transport_packet(&self, packet: Bytes) -> Result<Bytes> {
         let session_key = self.tunnel.test_session_key();
@@ -168,6 +215,37 @@ impl TunnelService {
         match self
             .tunnel
             .receive_transport_packet_with_session(packet.as_ref(), session_key)
+        {
+            Ok(plaintext) => Ok(plaintext),
+            Err(err) => {
+                match &err {
+                    TunnelError::BufferUnderflow | TunnelError::MalformedPacket(_) => {
+                        self.malformed_packet_errors.fetch_add(1, Ordering::Relaxed);
+                    }
+                    TunnelError::Crypto(_) => {
+                        self.crypto_errors.fetch_add(1, Ordering::Relaxed);
+                    }
+                    TunnelError::Transport(_) => {
+                        self.transport_errors.fetch_add(1, Ordering::Relaxed);
+                    }
+                    TunnelError::Interface(_)
+                    | TunnelError::Io(_)
+                    | TunnelError::NoRoute { .. } => {}
+                }
+                Err(err)
+            }
+        }
+    }
+
+    /// Decrypt one reassembled transport payload without assuming it is an IPv4 packet.
+    pub fn receive_transport_payload_with_session(
+        &self,
+        packet: Bytes,
+        session_key: &[u8; 32],
+    ) -> Result<Bytes> {
+        match self
+            .tunnel
+            .receive_transport_payload_with_session(packet.as_ref(), session_key)
         {
             Ok(plaintext) => Ok(plaintext),
             Err(err) => {

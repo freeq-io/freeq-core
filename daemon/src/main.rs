@@ -21,10 +21,11 @@ use bytes::Bytes;
 use clap::Parser;
 use ipnetwork::IpNetwork;
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
@@ -35,6 +36,10 @@ const HANDSHAKE_INIT_PACKET_ID: u64 = 0;
 const HANDSHAKE_RESPONSE_PACKET_ID: u64 = 1;
 const HANDSHAKE_KEM_PACKET_ID: u64 = 2;
 const HANDSHAKE_CONFIRM_PACKET_ID: u64 = 3;
+const RELAY_MAGIC: &[u8; 4] = b"FQRL";
+const RELAY_VERSION: u8 = 1;
+const RELAY_HEADER_LEN: usize = 23;
+const RELAY_AAD_CONTEXT: &[u8] = b"freeq-e2e-relay/v1";
 
 /// freeqd — FreeQ post-quantum overlay network daemon.
 #[derive(Parser, Debug)]
@@ -130,6 +135,7 @@ async fn main() -> Result<()> {
     )
     .await?;
     let peer_addrs = parse_peer_socket_addrs(&config)?;
+    let e2e_relay_key = load_e2e_relay_key()?;
     let peer_registry = Arc::new(build_peer_registry(&config)?);
     let tun = Arc::new(open_tun_interface(&config).await?);
     let (packet_ingress_tx, packet_ingress_rx) = mpsc::channel(DATAPLANE_CHANNEL_CAPACITY);
@@ -148,6 +154,8 @@ async fn main() -> Result<()> {
         identity: Arc::new(identity),
         peer_registry,
         api_state: api_state.clone(),
+        e2e_relay_key,
+        e2e_relay_counter: Arc::new(AtomicU64::new(0)),
     };
     let _dataplane_runtime =
         spawn_dataplane_runtime(dataplane_shared, packet_ingress_rx, packet_egress_tx);
@@ -265,7 +273,6 @@ struct ActivePeerSession {
     connection: freeq_transport::connection::PeerConnection,
     outbound_key: [u8; 32],
     inbound_key: [u8; 32],
-    outbound_counter: std::sync::atomic::AtomicU64,
 }
 
 #[derive(Clone)]
@@ -277,6 +284,8 @@ struct DataplaneShared {
     identity: Arc<freeq_crypto::sign::IdentityKeypair>,
     peer_registry: Arc<freeq_auth::registry::PeerRegistry>,
     api_state: freeq_api::ApiState,
+    e2e_relay_key: Option<[u8; 32]>,
+    e2e_relay_counter: Arc<AtomicU64>,
 }
 
 #[allow(dead_code)]
@@ -488,9 +497,8 @@ async fn run_accept_loop(shared: DataplaneShared, packet_egress: PacketEgress) {
                 tracing::info!(peer = %peer_name, "inbound peer session established");
                 tokio::spawn(run_connection_receiver(
                     session,
-                    Arc::clone(&shared.tunnel_service),
+                    shared.clone(),
                     packet_egress.clone(),
-                    shared.api_state.clone(),
                     peer_name,
                 ));
             }
@@ -526,46 +534,16 @@ async fn run_egress_loop(
     packet_egress: PacketEgress,
 ) {
     while let Some(packet) = packet_ingress.recv().await {
-        let routed_packet = match route_packet_for_peer(&shared.tunnel_service, packet) {
+        let mut routed_packet = match route_packet_for_peer(&shared.tunnel_service, packet) {
             Ok(routed_packet) => routed_packet,
             Err(err) => {
                 record_tunnel_error(&shared.api_state, &err).await;
                 continue;
             }
         };
-
-        let Some(&peer_addr) = shared.peer_addrs.get(&routed_packet.peer_id) else {
-            shared
-                .api_state
-                .record_error(
-                    freeq_api::ErrorKind::Transport,
-                    format!(
-                        "missing transport address for peer '{}'",
-                        routed_packet.peer_id
-                    ),
-                )
-                .await;
-            continue;
-        };
-
-        let (session, created_session) = match get_or_create_outbound_session(
-            &shared.active_sessions,
-            shared.endpoint.clone(),
-            shared.identity.as_ref(),
-            shared.peer_registry.as_ref(),
-            &routed_packet.peer_id,
-            peer_addr,
-        )
-        .await
-        {
-            Ok(session) => session,
+        routed_packet.packet = match maybe_wrap_e2e_relay_packet(&shared, routed_packet.packet) {
+            Ok(packet) => packet,
             Err(err) => {
-                tracing::warn!(
-                    peer = %routed_packet.peer_id,
-                    endpoint = %peer_addr,
-                    error = %err,
-                    "outbound peer session failed"
-                );
                 shared
                     .api_state
                     .record_error(freeq_api::ErrorKind::Transport, err.to_string())
@@ -574,53 +552,8 @@ async fn run_egress_loop(
             }
         };
 
-        if created_session {
-            tracing::info!(
-                peer = %routed_packet.peer_id,
-                "outbound peer receive loop attached"
-            );
-            tokio::spawn(run_connection_receiver(
-                Arc::clone(&session),
-                Arc::clone(&shared.tunnel_service),
-                packet_egress.clone(),
-                shared.api_state.clone(),
-                routed_packet.peer_id.clone(),
-            ));
-        }
-
-        let packet_id = session
-            .outbound_counter
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let prepared = match shared.tunnel_service.prepare_peer_packet_with_session(
-            routed_packet.packet,
-            &session.outbound_key,
-            packet_id,
-        ) {
-            Ok(prepared) => prepared,
-            Err(err) => {
-                record_tunnel_error(&shared.api_state, &err).await;
-                continue;
-            }
-        };
-
-        let mut send_failed = false;
-        for frame in prepared.frames {
-            if let Err(err) = session.connection.send(frame).await {
-                shared
-                    .api_state
-                    .record_error(freeq_api::ErrorKind::Transport, err.to_string())
-                    .await;
-                send_failed = true;
-                break;
-            }
-        }
-
-        if send_failed {
-            shared
-                .active_sessions
-                .lock()
-                .await
-                .remove(&prepared.peer_id);
+        if let Some((session, peer_id)) = transmit_routed_packet(&shared, routed_packet).await {
+            spawn_connection_receiver(session, shared.clone(), packet_egress.clone(), peer_id);
         }
     }
 }
@@ -628,9 +561,8 @@ async fn run_egress_loop(
 #[allow(dead_code)]
 async fn run_connection_receiver(
     session: Arc<ActivePeerSession>,
-    tunnel_service: Arc<freeq_tunnel::TunnelService>,
+    shared: DataplaneShared,
     packet_egress: PacketEgress,
-    api_state: freeq_api::ApiState,
     peer_name: String,
 ) {
     let mut reassembler = freeq_transport::frame::FrameReassembler::default();
@@ -641,7 +573,8 @@ async fn run_connection_receiver(
                 let rebuilt_packet = match reassembler.push_frame(&frame) {
                     Ok(packet) => packet,
                     Err(err) => {
-                        api_state
+                        shared
+                            .api_state
                             .record_error(freeq_api::ErrorKind::Transport, err.to_string())
                             .await;
                         continue;
@@ -652,15 +585,76 @@ async fn run_connection_receiver(
                     continue;
                 };
 
-                let plaintext = match tunnel_service
-                    .receive_transport_packet_with_session(rebuilt_packet, &session.inbound_key)
+                let plaintext = match shared
+                    .tunnel_service
+                    .receive_transport_payload_with_session(rebuilt_packet, &session.inbound_key)
                 {
                     Ok(plaintext) => plaintext,
                     Err(err) => {
-                        record_tunnel_error(&api_state, &err).await;
+                        record_tunnel_error(&shared.api_state, &err).await;
                         continue;
                     }
                 };
+
+                if let Some(relay) = parse_relay_envelope(&plaintext) {
+                    if let Some(key) = shared.e2e_relay_key {
+                        match decrypt_relay_payload(key, relay) {
+                            Ok(inner_packet) => {
+                                if packet_egress.send(inner_packet).await.is_err() {
+                                    tracing::warn!(peer = %peer_name, "packet egress receiver dropped");
+                                    return;
+                                }
+                            }
+                            Err(err) => {
+                                shared
+                                    .api_state
+                                    .record_error(freeq_api::ErrorKind::Crypto, err.to_string())
+                                    .await;
+                            }
+                        }
+                    } else {
+                        let destination = IpAddr::V4(relay.destination);
+                        let Some(next_peer) = shared.tunnel_service.resolve_peer(destination)
+                        else {
+                            shared
+                                .api_state
+                                .record_error(
+                                    freeq_api::ErrorKind::Transport,
+                                    format!("no relay route to {}", relay.destination),
+                                )
+                                .await;
+                            continue;
+                        };
+                        if next_peer != peer_name {
+                            if let Some((session, peer_id)) = transmit_routed_packet(
+                                &shared,
+                                RoutedPacket {
+                                    peer_id: next_peer.to_string(),
+                                    packet: plaintext,
+                                },
+                            )
+                            .await
+                            {
+                                spawn_connection_receiver(
+                                    session,
+                                    shared.clone(),
+                                    packet_egress.clone(),
+                                    peer_id,
+                                );
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                if let Ok(routed_packet) =
+                    route_packet_for_peer(&shared.tunnel_service, plaintext.clone())
+                {
+                    if routed_packet.peer_id != peer_name {
+                        transmit_routed_packet(&shared, routed_packet).await;
+                        continue;
+                    }
+                }
 
                 if packet_egress.send(plaintext).await.is_err() {
                     tracing::warn!(peer = %peer_name, "packet egress receiver dropped");
@@ -669,7 +663,8 @@ async fn run_connection_receiver(
             }
             Err(freeq_transport::TransportError::Timeout) => continue,
             Err(err) => {
-                api_state
+                shared
+                    .api_state
                     .record_error(freeq_api::ErrorKind::Transport, err.to_string())
                     .await;
                 tracing::warn!(peer = %peer_name, error = %err, "transport receive loop stopped");
@@ -677,6 +672,248 @@ async fn run_connection_receiver(
             }
         }
     }
+}
+
+fn spawn_connection_receiver(
+    session: Arc<ActivePeerSession>,
+    shared: DataplaneShared,
+    packet_egress: PacketEgress,
+    peer_id: String,
+) {
+    tracing::info!(peer = %peer_id, "outbound peer receive loop attached");
+    tokio::spawn(run_connection_receiver(
+        session,
+        shared,
+        packet_egress,
+        peer_id,
+    ));
+}
+
+async fn transmit_routed_packet(
+    shared: &DataplaneShared,
+    routed_packet: RoutedPacket,
+) -> Option<(Arc<ActivePeerSession>, String)> {
+    let Some(&peer_addr) = shared.peer_addrs.get(&routed_packet.peer_id) else {
+        let existing_session = {
+            shared
+                .active_sessions
+                .lock()
+                .await
+                .get(&routed_packet.peer_id)
+                .cloned()
+        };
+        if let Some(session) = existing_session {
+            transmit_on_session(shared, session, routed_packet).await;
+            return None;
+        }
+        shared
+            .api_state
+            .record_error(
+                freeq_api::ErrorKind::Transport,
+                format!(
+                    "missing transport address for peer '{}'",
+                    routed_packet.peer_id
+                ),
+            )
+            .await;
+        return None;
+    };
+
+    let (session, created_session) = match get_or_create_outbound_session(
+        &shared.active_sessions,
+        shared.endpoint.clone(),
+        shared.identity.as_ref(),
+        shared.peer_registry.as_ref(),
+        &routed_packet.peer_id,
+        peer_addr,
+    )
+    .await
+    {
+        Ok(session) => session,
+        Err(err) => {
+            tracing::warn!(
+                peer = %routed_packet.peer_id,
+                endpoint = %peer_addr,
+                error = %err,
+                "outbound peer session failed"
+            );
+            shared
+                .api_state
+                .record_error(freeq_api::ErrorKind::Transport, err.to_string())
+                .await;
+            return None;
+        }
+    };
+
+    let peer_id = routed_packet.peer_id.clone();
+    let created_receiver = created_session.then(|| (Arc::clone(&session), peer_id));
+
+    if transmit_on_session(shared, session, routed_packet).await {
+        return created_receiver;
+    }
+    None
+}
+
+async fn transmit_on_session(
+    shared: &DataplaneShared,
+    session: Arc<ActivePeerSession>,
+    routed_packet: RoutedPacket,
+) -> bool {
+    let prepared = match shared.tunnel_service.prepare_payload_for_peer_with_session(
+        routed_packet.peer_id.clone(),
+        routed_packet.packet,
+        &session.outbound_key,
+    ) {
+        Ok(prepared) => prepared,
+        Err(err) => {
+            record_tunnel_error(&shared.api_state, &err).await;
+            return false;
+        }
+    };
+
+    let mut send_failed = false;
+    for frame in prepared.frames {
+        if let Err(err) = session.connection.send(frame).await {
+            shared
+                .api_state
+                .record_error(freeq_api::ErrorKind::Transport, err.to_string())
+                .await;
+            send_failed = true;
+            break;
+        }
+    }
+
+    if send_failed {
+        shared
+            .active_sessions
+            .lock()
+            .await
+            .remove(&prepared.peer_id);
+        return false;
+    }
+    true
+}
+
+struct RelayEnvelope<'a> {
+    destination: Ipv4Addr,
+    nonce: [u8; freeq_crypto::bulk::NONCE_LEN],
+    plaintext_len: u16,
+    ciphertext: &'a [u8],
+}
+
+fn load_e2e_relay_key() -> Result<Option<[u8; 32]>> {
+    let Some(value) = std::env::var_os("FREEQ_E2E_RELAY_KEY_B64") else {
+        return Ok(None);
+    };
+    let raw = value.to_string_lossy();
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(raw.trim())
+        .map_err(|err| anyhow::anyhow!("FREEQ_E2E_RELAY_KEY_B64 is not valid base64: {err}"))?;
+    let key: [u8; 32] = bytes.try_into().map_err(|bytes: Vec<u8>| {
+        anyhow::anyhow!(
+            "FREEQ_E2E_RELAY_KEY_B64 must decode to 32 bytes, got {}",
+            bytes.len()
+        )
+    })?;
+    tracing::info!("end-to-end opaque relay mode enabled");
+    Ok(Some(key))
+}
+
+fn maybe_wrap_e2e_relay_packet(shared: &DataplaneShared, packet: Bytes) -> Result<Bytes> {
+    let Some(key) = shared.e2e_relay_key else {
+        return Ok(packet);
+    };
+    if parse_relay_envelope(&packet).is_some() {
+        return Ok(packet);
+    }
+    let header = freeq_tunnel::packet::parse_ipv4_header(packet.as_ref())?;
+    let counter = shared.e2e_relay_counter.fetch_add(1, Ordering::Relaxed);
+    Ok(build_relay_envelope(
+        key,
+        counter,
+        header.destination,
+        packet.as_ref(),
+    )?)
+}
+
+fn build_relay_envelope(
+    key: [u8; 32],
+    counter: u64,
+    destination: Ipv4Addr,
+    plaintext: &[u8],
+) -> freeq_crypto::Result<Bytes> {
+    let plaintext_len =
+        u16::try_from(plaintext.len()).map_err(|_| freeq_crypto::CryptoError::KdfLength)?;
+    let mut nonce = [0u8; freeq_crypto::bulk::NONCE_LEN];
+    nonce[4..].copy_from_slice(&counter.to_be_bytes());
+    let aad = relay_aad(destination, &nonce, plaintext_len);
+    let ciphertext = freeq_crypto::bulk::encrypt(
+        &freeq_crypto::agility::AlgorithmSuite::default().bulk,
+        &key,
+        &nonce,
+        &aad,
+        plaintext,
+    )?;
+    let mut envelope = Vec::with_capacity(RELAY_HEADER_LEN + ciphertext.len());
+    envelope.extend_from_slice(RELAY_MAGIC);
+    envelope.push(RELAY_VERSION);
+    envelope.extend_from_slice(&nonce);
+    envelope.extend_from_slice(&destination.octets());
+    envelope.extend_from_slice(&plaintext_len.to_be_bytes());
+    envelope.extend_from_slice(&ciphertext);
+    Ok(Bytes::from(envelope))
+}
+
+fn parse_relay_envelope(packet: &[u8]) -> Option<RelayEnvelope<'_>> {
+    if packet.len() < RELAY_HEADER_LEN || &packet[0..4] != RELAY_MAGIC || packet[4] != RELAY_VERSION
+    {
+        return None;
+    }
+    let mut nonce = [0u8; freeq_crypto::bulk::NONCE_LEN];
+    nonce.copy_from_slice(&packet[5..17]);
+    let destination = Ipv4Addr::new(packet[17], packet[18], packet[19], packet[20]);
+    let plaintext_len = u16::from_be_bytes([packet[21], packet[22]]);
+    Some(RelayEnvelope {
+        destination,
+        nonce,
+        plaintext_len,
+        ciphertext: &packet[RELAY_HEADER_LEN..],
+    })
+}
+
+fn decrypt_relay_payload(key: [u8; 32], relay: RelayEnvelope<'_>) -> freeq_crypto::Result<Bytes> {
+    if relay.ciphertext.len() < freeq_crypto::bulk::TAG_LEN {
+        return Err(freeq_crypto::CryptoError::AeadAuthFailure);
+    }
+    let aad = relay_aad(relay.destination, &relay.nonce, relay.plaintext_len);
+    let plaintext = freeq_crypto::bulk::decrypt(
+        &freeq_crypto::agility::AlgorithmSuite::default().bulk,
+        &key,
+        &relay.nonce,
+        &aad,
+        relay.ciphertext,
+    )?;
+    if plaintext.len() != usize::from(relay.plaintext_len) {
+        return Err(freeq_crypto::CryptoError::AeadAuthFailure);
+    }
+    Ok(Bytes::from(plaintext))
+}
+
+fn relay_aad(
+    destination: Ipv4Addr,
+    nonce: &[u8; freeq_crypto::bulk::NONCE_LEN],
+    plaintext_len: u16,
+) -> Vec<u8> {
+    let mut aad = Vec::with_capacity(RELAY_AAD_CONTEXT.len() + 1 + nonce.len() + 6);
+    aad.extend_from_slice(RELAY_AAD_CONTEXT);
+    aad.push(RELAY_VERSION);
+    aad.extend_from_slice(nonce);
+    aad.extend_from_slice(&destination.octets());
+    aad.extend_from_slice(&plaintext_len.to_be_bytes());
+    aad
 }
 
 struct RoutedPacket {
@@ -769,7 +1006,6 @@ async fn establish_outbound_session(
         connection,
         outbound_key: keys.outbound,
         inbound_key: keys.inbound,
-        outbound_counter: std::sync::atomic::AtomicU64::new(0),
     })
 }
 
@@ -809,7 +1045,6 @@ async fn accept_inbound_session(
             connection,
             outbound_key: keys.outbound,
             inbound_key: keys.inbound,
-            outbound_counter: std::sync::atomic::AtomicU64::new(0),
         }),
     ))
 }
@@ -998,6 +1233,7 @@ mod tests {
     use base64::Engine as _;
     use bytes::Bytes;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::sync::atomic::AtomicU64;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::{mpsc, Mutex};
@@ -1309,6 +1545,8 @@ mod tests {
                     build_peer_registry(&sender_config).expect("sender registry"),
                 ),
                 api_state: sender_state.clone(),
+                e2e_relay_key: None,
+                e2e_relay_counter: Arc::new(AtomicU64::new(0)),
             },
             sender_tun_rx,
             sender_out_tx,
@@ -1326,6 +1564,8 @@ mod tests {
                     build_peer_registry(&receiver_config).expect("receiver registry"),
                 ),
                 api_state: receiver_state.clone(),
+                e2e_relay_key: None,
+                e2e_relay_counter: Arc::new(AtomicU64::new(0)),
             },
             receiver_in_rx,
             receiver_tun_tx,
@@ -1408,6 +1648,205 @@ mod tests {
         server_endpoint.close().await;
     }
 
+    #[tokio::test]
+    async fn dataplane_runtime_relays_packet_between_gateway_peers() {
+        let gateway_endpoint = freeq_transport::endpoint::Endpoint::bind(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+        ))
+        .await
+        .expect("bind gateway endpoint");
+        let patrick_endpoint = freeq_transport::endpoint::Endpoint::bind(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+        ))
+        .await
+        .expect("bind patrick endpoint");
+        let david_endpoint = freeq_transport::endpoint::Endpoint::bind(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+        ))
+        .await
+        .expect("bind david endpoint");
+
+        let gateway_identity = generate_identity_bytes();
+        let patrick_identity = generate_identity_bytes();
+        let david_identity = generate_identity_bytes();
+
+        let gateway_addr = gateway_endpoint.local_addr().expect("gateway addr");
+        let patrick_addr = patrick_endpoint.local_addr().expect("patrick addr");
+        let david_addr = david_endpoint.local_addr().expect("david addr");
+
+        let patrick_config = config_with_socket_peer(
+            gateway_addr,
+            "patrick",
+            "gateway",
+            &gateway_identity.public_key_b64,
+            &gateway_identity.kem_key_b64,
+            "10.0.0.2/32",
+        );
+        let david_config = config_with_socket_peer(
+            gateway_addr,
+            "david",
+            "gateway",
+            &gateway_identity.public_key_b64,
+            &gateway_identity.kem_key_b64,
+            "10.0.0.1/32",
+        );
+        let gateway_config = gateway_config_with_two_peers(
+            patrick_addr,
+            david_addr,
+            &patrick_identity,
+            &david_identity,
+        );
+
+        let shared_keys =
+            freeq_crypto::FreeQKeyPair::generate_ephemeral_test_pair().expect("shared tunnel keys");
+        let relay_key = [9u8; 32];
+        let patrick_service = Arc::new(
+            init_tunnel_service_with_keys(&patrick_config, shared_keys.clone())
+                .expect("patrick tunnel"),
+        );
+        let david_service = Arc::new(
+            init_tunnel_service_with_keys(&david_config, shared_keys.clone())
+                .expect("david tunnel"),
+        );
+        let gateway_service = Arc::new(
+            init_tunnel_service_with_keys(&gateway_config, shared_keys).expect("gateway tunnel"),
+        );
+
+        let patrick_state = init_api_state(&patrick_config, patrick_service.as_ref()).await;
+        let david_state = init_api_state(&david_config, david_service.as_ref()).await;
+        let gateway_state = init_api_state(&gateway_config, gateway_service.as_ref()).await;
+
+        let (patrick_tun_tx, patrick_tun_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
+        let (patrick_out_tx, mut patrick_out_rx) =
+            mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
+        let (david_tun_tx, david_tun_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
+        let (david_out_tx, mut david_out_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
+        let (_gateway_tun_tx, gateway_tun_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
+        let (gateway_out_tx, mut gateway_out_rx) =
+            mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
+
+        let _patrick_runtime = spawn_dataplane_runtime(
+            DataplaneShared {
+                endpoint: patrick_endpoint.clone(),
+                tunnel_service: Arc::clone(&patrick_service),
+                peer_addrs: Arc::new(
+                    parse_peer_socket_addrs(&patrick_config).expect("patrick peers"),
+                ),
+                active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+                identity: Arc::new(patrick_identity.keypair),
+                peer_registry: Arc::new(
+                    build_peer_registry(&patrick_config).expect("patrick registry"),
+                ),
+                api_state: patrick_state.clone(),
+                e2e_relay_key: Some(relay_key),
+                e2e_relay_counter: Arc::new(AtomicU64::new(0)),
+            },
+            patrick_tun_rx,
+            patrick_out_tx,
+        );
+        let _david_runtime = spawn_dataplane_runtime(
+            DataplaneShared {
+                endpoint: david_endpoint.clone(),
+                tunnel_service: Arc::clone(&david_service),
+                peer_addrs: Arc::new(parse_peer_socket_addrs(&david_config).expect("david peers")),
+                active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+                identity: Arc::new(david_identity.keypair),
+                peer_registry: Arc::new(
+                    build_peer_registry(&david_config).expect("david registry"),
+                ),
+                api_state: david_state.clone(),
+                e2e_relay_key: Some(relay_key),
+                e2e_relay_counter: Arc::new(AtomicU64::new(0)),
+            },
+            david_tun_rx,
+            david_out_tx,
+        );
+        let _gateway_runtime = spawn_dataplane_runtime(
+            DataplaneShared {
+                endpoint: gateway_endpoint.clone(),
+                tunnel_service: Arc::clone(&gateway_service),
+                peer_addrs: Arc::new(
+                    parse_peer_socket_addrs(&gateway_config).expect("gateway peers"),
+                ),
+                active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+                identity: Arc::new(gateway_identity.keypair),
+                peer_registry: Arc::new(
+                    build_peer_registry(&gateway_config).expect("gateway registry"),
+                ),
+                api_state: gateway_state.clone(),
+                e2e_relay_key: None,
+                e2e_relay_counter: Arc::new(AtomicU64::new(0)),
+            },
+            gateway_tun_rx,
+            gateway_out_tx,
+        );
+
+        let patrick_to_david = Bytes::from(test_ipv4_packet_with_source_dest(
+            1180,
+            [10, 0, 0, 1],
+            [10, 0, 0, 2],
+        ));
+        patrick_tun_tx
+            .send(patrick_to_david.clone())
+            .await
+            .expect("send patrick packet");
+        let david_received = tokio::time::timeout(Duration::from_secs(5), david_out_rx.recv())
+            .await
+            .expect("david receive timeout")
+            .expect("david packet");
+        assert_eq!(david_received, patrick_to_david);
+
+        let david_to_patrick = Bytes::from(test_ipv4_packet_with_source_dest(
+            1180,
+            [10, 0, 0, 2],
+            [10, 0, 0, 1],
+        ));
+        david_tun_tx
+            .send(david_to_patrick.clone())
+            .await
+            .expect("send david packet");
+        let patrick_received = match tokio::time::timeout(
+            Duration::from_secs(5),
+            patrick_out_rx.recv(),
+        )
+        .await
+        {
+            Ok(Some(packet)) => packet,
+            Ok(None) => panic!("patrick packet channel closed"),
+            Err(err) => {
+                refresh_api_state(&patrick_state, patrick_service.as_ref()).await;
+                refresh_api_state(&david_state, david_service.as_ref()).await;
+                refresh_api_state(&gateway_state, gateway_service.as_ref()).await;
+                let patrick_snapshot = patrick_state.snapshot().await;
+                let david_snapshot = david_state.snapshot().await;
+                let gateway_snapshot = gateway_state.snapshot().await;
+                panic!(
+                        "patrick receive timeout: {err}; patrick={:?}/{:?}; david={:?}/{:?}; gateway={:?}/{:?}",
+                        patrick_snapshot.last_error,
+                        patrick_snapshot.tunnel,
+                        david_snapshot.last_error,
+                        david_snapshot.tunnel,
+                        gateway_snapshot.last_error,
+                        gateway_snapshot.tunnel,
+                    );
+            }
+        };
+        assert_eq!(patrick_received, david_to_patrick);
+
+        assert!(gateway_out_rx.try_recv().is_err());
+
+        refresh_api_state(&gateway_state, gateway_service.as_ref()).await;
+        let gateway_snapshot = gateway_state.snapshot().await;
+        assert_eq!(gateway_snapshot.tunnel.route_misses, 0);
+
+        patrick_endpoint.close().await;
+        david_endpoint.close().await;
+        gateway_endpoint.close().await;
+    }
+
     fn test_ipv4_packet(len: usize, destination: [u8; 4]) -> Vec<u8> {
         test_ipv4_packet_with_source_dest(len, [10, 0, 0, 1], destination)
     }
@@ -1457,6 +1896,48 @@ mod tests {
             "#
         ))
         .expect("socket config should deserialize")
+    }
+
+    fn gateway_config_with_two_peers(
+        patrick_addr: SocketAddr,
+        david_addr: SocketAddr,
+        patrick_identity: &GeneratedIdentity,
+        david_identity: &GeneratedIdentity,
+    ) -> freeq_config::Config {
+        toml::from_str(&format!(
+            r#"
+            [node]
+            name = "gateway"
+            listen = "127.0.0.1:0"
+            address = "10.0.0.254/24"
+            key_path = "/tmp/gateway.key"
+            algorithm = "ml-kem-768"
+            sign = "ml-dsa-65"
+            api_enabled = false
+            api_addr = "127.0.0.1:6789"
+
+            [[peer]]
+            name = "patrick"
+            endpoint = "{patrick_addr}"
+            public_key = "{patrick_public_key}"
+            kem_key = "{patrick_kem_key}"
+            allowed_ips = ["10.0.0.1/32"]
+            key_rotation_secs = 3600
+
+            [[peer]]
+            name = "david"
+            endpoint = "{david_addr}"
+            public_key = "{david_public_key}"
+            kem_key = "{david_kem_key}"
+            allowed_ips = ["10.0.0.2/32"]
+            key_rotation_secs = 3600
+            "#,
+            patrick_public_key = patrick_identity.public_key_b64,
+            patrick_kem_key = patrick_identity.kem_key_b64,
+            david_public_key = david_identity.public_key_b64,
+            david_kem_key = david_identity.kem_key_b64,
+        ))
+        .expect("gateway config should deserialize")
     }
 
     struct GeneratedIdentity {

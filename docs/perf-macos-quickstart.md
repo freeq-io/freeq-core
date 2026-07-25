@@ -159,6 +159,21 @@ run the full return-path test from this Mac:
 scripts/perf/freeq-bidirectional-smoke-macos.sh --ssh-user ubuntu
 ```
 
+For client-to-client data through a gateway, use opaque relay mode so the
+gateway forwards ciphertext without holding the end-to-end payload key. Generate
+one 32-byte key on one client, send it to the other client over a trusted side
+channel, and set it only on the two endpoint Macs:
+
+```bash
+openssl rand -base64 32
+export FREEQ_E2E_RELAY_KEY_B64='<the-shared-client-key>'
+export FREEQ_EXTRA_ALLOWED_IPS='<other-client-overlay-ip>/32'
+freeq gateway connect
+```
+
+Do not set `FREEQ_E2E_RELAY_KEY_B64` on the gateway. The gateway only needs
+routes for each client overlay IP.
+
 ## Step 5: Run Tests
 
 Open a second Terminal window.

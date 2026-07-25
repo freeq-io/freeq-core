@@ -490,7 +490,11 @@ echo "Checking sudo access..."
 sudo -v
 
 echo "Starting freeqd..."
-nohup sudo target/release/freeqd --config "$CONFIG" --foreground > "$LOG_FILE" 2>&1 &
+sudo_env=()
+if [ -n "${FREEQ_E2E_RELAY_KEY_B64:-}" ]; then
+  sudo_env+=(FREEQ_E2E_RELAY_KEY_B64="$FREEQ_E2E_RELAY_KEY_B64")
+fi
+nohup sudo env "${sudo_env[@]}" target/release/freeqd --config "$CONFIG" --foreground > "$LOG_FILE" 2>&1 &
 pid="$!"
 echo "$pid" > "$PID_FILE"
 echo "freeqd pid: $pid"

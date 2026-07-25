@@ -133,10 +133,34 @@ impl TunnelInterface {
             )));
         }
 
+        self.prepare_transport_payload_with_session(packet, session_key, packet_id)
+    }
+
+    /// Prepare one opaque payload for transport transmission using an explicit session key.
+    pub fn prepare_transport_payload_with_session(
+        &self,
+        payload: &[u8],
+        session_key: &[u8; 32],
+        packet_id: u64,
+    ) -> Result<PreparedTransportPacket> {
+        let payload_limit = self.config.mtu + 128;
+        if payload.len() > payload_limit {
+            return Err(TunnelError::MalformedPacket(format!(
+                "payload length {} exceeds transport payload limit {}",
+                payload.len(),
+                payload_limit
+            )));
+        }
+        let total_length = u16::try_from(payload.len()).map_err(|_| {
+            TunnelError::MalformedPacket(format!(
+                "payload length {} exceeds transport envelope limit",
+                payload.len()
+            ))
+        })?;
         let nonce = nonce_from_counter(packet_id);
-        let aad = aad_for_packet(header.total_length);
-        let ciphertext = bulk::encrypt(&self.suite.bulk, session_key, &nonce, &aad, packet)?;
-        let envelope = build_transport_envelope(packet_id, header.total_length, &ciphertext);
+        let aad = aad_for_packet(total_length);
+        let ciphertext = bulk::encrypt(&self.suite.bulk, session_key, &nonce, &aad, payload)?;
+        let envelope = build_transport_envelope(packet_id, total_length, &ciphertext);
         let frames = freeq_transport::frame::chunk_packet_with_id(
             packet_id,
             &envelope,
@@ -151,7 +175,7 @@ impl TunnelInterface {
 
         Ok(PreparedTransportPacket {
             packet_id,
-            packet_len: packet.len(),
+            packet_len: payload.len(),
             encrypted_len: ciphertext.len(),
             frames,
         })
@@ -168,6 +192,26 @@ impl TunnelInterface {
         packet: &[u8],
         session_key: &[u8; 32],
     ) -> Result<Bytes> {
+        let plaintext = self.receive_transport_payload_with_session(packet, session_key)?;
+
+        let header = parse_ipv4_header(&plaintext)?;
+        if usize::from(header.total_length) != plaintext.len() {
+            return Err(TunnelError::MalformedPacket(format!(
+                "IPv4 total length {} does not match payload length {}",
+                header.total_length,
+                plaintext.len()
+            )));
+        }
+
+        Ok(plaintext)
+    }
+
+    /// Decrypt one reassembled transport payload without assuming it is an IPv4 packet.
+    pub fn receive_transport_payload_with_session(
+        &self,
+        packet: &[u8],
+        session_key: &[u8; 32],
+    ) -> Result<Bytes> {
         let (packet_id, total_length, ciphertext) = parse_transport_envelope(packet)?;
         let nonce = nonce_from_counter(packet_id);
         let aad = aad_for_packet(total_length);
@@ -178,14 +222,6 @@ impl TunnelInterface {
                 "decrypted packet length {} does not match envelope length {}",
                 plaintext.len(),
                 total_length
-            )));
-        }
-
-        let header = parse_ipv4_header(&plaintext)?;
-        if header.total_length != total_length {
-            return Err(TunnelError::MalformedPacket(format!(
-                "IPv4 total length {} does not match envelope length {}",
-                header.total_length, total_length
             )));
         }
 

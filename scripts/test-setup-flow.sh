@@ -354,7 +354,8 @@ assert_file_contains Formula/freeq.rb "freeq stop"
 assert_no_match "freeq --install|freeq --update|freeq --gateway|freeq --stop" cli/src/main.rs Formula/freeq.rb docs/simple-install.md docs/setup-macos.md docs/perf-macos-quickstart.md
 assert_no_match "status .*not yet implemented" cli/src/main.rs
 assert_file_contains scripts/setup/freeq-start-macos.sh "Setup page:"
-assert_file_contains scripts/setup/freeq-start-macos.sh "nohup sudo target/release/freeqd"
+assert_file_contains scripts/setup/freeq-start-macos.sh "nohup sudo env"
+assert_file_contains scripts/setup/freeq-start-macos.sh "FREEQ_E2E_RELAY_KEY_B64"
 assert_file_contains scripts/setup/freeq-start-macos.sh "freeqd did not keep the local setup API online"
 assert_file_contains scripts/setup/freeq-start-macos.sh "FREEQ_TUN_MTU"
 assert_file_contains scripts/setup/freeq-start-macos.sh "freeq-network-state.env"
