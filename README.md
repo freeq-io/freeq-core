@@ -63,6 +63,17 @@ Node A --outbound only--> gateway relay <--outbound only-- Node B
 In relay mode, each leaf connects outbound to the gateway. The gateway must not
 depend on dialing back into a leaf behind CGNAT or a restrictive local router.
 
+Local relay development should use the Podman lab before asking a remote field
+tester to help:
+
+```bash
+scripts/podman/freeq-podman-relay-lab.sh --all
+```
+
+The lab runs Linux installer preflight checks and the in-memory gateway relay
+runtime proof. Full Linux TUN and route acceptance remains a separate
+privileged host test.
+
 FreeQ does not secure arbitrary RF waveforms, replace approved radio-layer
 security, or substitute for required COMSEC. It adds a protected overlay for
 digital traffic that can be routed through FreeQ endpoints or gateways.
