@@ -849,6 +849,7 @@
       const routeMisses = Number(status.route_misses || 0);
       const tunnels = Number(status.tunnel_count || 0);
       const peerCount = Number(status.peer_count || peerList.length || 0);
+      const hasConfiguredPeer = peerCount > 0 || Boolean(gatewayPeer);
       const hasInterface = Boolean(status.interface_name);
       const hasTraffic = packetCount > 0 || encryptedBytes > 0;
       const hasTransportError = text(status.last_error, "").toLowerCase().includes("transport");
@@ -863,6 +864,8 @@
           ? gatewayPeer.allowed_ips.join(", ")
           : "no allowed overlay IPs";
         peer.textContent = `${text(gatewayPeer.name, "Configured peer")} at ${endpoint}; routes ${allowedIps}.`;
+      } else if (peerCount > 0) {
+        peer.textContent = `${peerCount} peer(s) configured. Detailed gateway metadata is not visible to this local API yet.`;
       } else {
         peer.textContent = "No gateway or peer file is currently visible to the local API.";
       }
@@ -873,11 +876,11 @@
         setGatewayResult("pass", "Passing");
         summary.textContent = "Overlay traffic has been observed";
         next.textContent = "Run the bidirectional smoke test from both nodes to capture field-test proof.";
-      } else if (gatewayPeer && hasInterface && hasTransportError) {
+      } else if (hasConfiguredPeer && hasInterface && hasTransportError) {
         setGatewayResult("fail", "Blocked");
         summary.textContent = "Gateway peer is configured, but transport is failing";
         next.textContent = "Check that this public IP is allowed in the gateway security group for UDP 51820, then reconnect.";
-      } else if (gatewayPeer && hasInterface && peerCount > 0) {
+      } else if (hasConfiguredPeer && hasInterface && peerCount > 0) {
         setGatewayResult("warn", "Ready");
         summary.textContent = "Gateway peer is configured; traffic has not flowed yet";
         next.textContent = "Run scripts/perf/freeq-bidirectional-smoke-macos.sh --connect-if-needed, then refresh this page.";
