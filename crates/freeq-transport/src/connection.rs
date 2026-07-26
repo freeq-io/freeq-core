@@ -5,9 +5,9 @@ use bytes::Bytes;
 use std::time::Duration;
 
 /// Default timeouts used for transport send/receive operations.
-pub const QUIC_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+pub const QUIC_IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 /// Keepalive interval to keep NAT mappings warm.
-pub const QUIC_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+pub const QUIC_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 
 /// A live QUIC connection to a single remote FreeQ peer.
 #[derive(Clone, Debug)]
