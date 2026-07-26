@@ -150,6 +150,7 @@ async fn main() -> Result<()> {
         endpoint: endpoint.clone(),
         tunnel_service: Arc::clone(&tunnel_service),
         peer_addrs: Arc::new(peer_addrs),
+        direct_peer_hosts: Arc::new(direct_peer_hosts(&config)),
         active_sessions: Arc::new(Mutex::new(HashMap::new())),
         identity: Arc::new(identity),
         peer_registry,
@@ -280,6 +281,7 @@ struct DataplaneShared {
     endpoint: freeq_transport::endpoint::Endpoint,
     tunnel_service: Arc<freeq_tunnel::TunnelService>,
     peer_addrs: Arc<HashMap<String, SocketAddr>>,
+    direct_peer_hosts: Arc<HashMap<String, IpAddr>>,
     active_sessions: Arc<Mutex<HashMap<String, Arc<ActivePeerSession>>>>,
     identity: Arc<freeq_crypto::sign::IdentityKeypair>,
     peer_registry: Arc<freeq_auth::registry::PeerRegistry>,
@@ -306,6 +308,28 @@ fn parse_peer_socket_addrs(config: &freeq_config::Config) -> Result<HashMap<Stri
     }
 
     Ok(peers)
+}
+
+fn direct_peer_hosts(config: &freeq_config::Config) -> HashMap<String, IpAddr> {
+    let mut hosts = HashMap::with_capacity(config.peer.len());
+    for peer in &config.peer {
+        let Some(first_allowed_ip) = peer.allowed_ips.first() else {
+            continue;
+        };
+        let Ok(network) = first_allowed_ip.parse::<IpNetwork>() else {
+            continue;
+        };
+        match network {
+            IpNetwork::V4(network) if network.prefix() == 32 => {
+                hosts.insert(peer.name.clone(), IpAddr::V4(network.ip()));
+            }
+            IpNetwork::V6(network) if network.prefix() == 128 => {
+                hosts.insert(peer.name.clone(), IpAddr::V6(network.ip()));
+            }
+            _ => {}
+        }
+    }
+    hosts
 }
 
 fn endpoint_bind_mode(
@@ -541,7 +565,11 @@ async fn run_egress_loop(
                 continue;
             }
         };
-        routed_packet.packet = match maybe_wrap_e2e_relay_packet(&shared, routed_packet.packet) {
+        routed_packet.packet = match maybe_wrap_e2e_relay_packet(
+            &shared,
+            &routed_packet.peer_id,
+            routed_packet.packet,
+        ) {
             Ok(packet) => packet,
             Err(err) => {
                 shared
@@ -822,7 +850,11 @@ fn load_e2e_relay_key() -> Result<Option<[u8; 32]>> {
     Ok(Some(key))
 }
 
-fn maybe_wrap_e2e_relay_packet(shared: &DataplaneShared, packet: Bytes) -> Result<Bytes> {
+fn maybe_wrap_e2e_relay_packet(
+    shared: &DataplaneShared,
+    peer_id: &str,
+    packet: Bytes,
+) -> Result<Bytes> {
     let Some(key) = shared.e2e_relay_key else {
         return Ok(packet);
     };
@@ -830,6 +862,13 @@ fn maybe_wrap_e2e_relay_packet(shared: &DataplaneShared, packet: Bytes) -> Resul
         return Ok(packet);
     }
     let header = freeq_tunnel::packet::parse_ipv4_header(packet.as_ref())?;
+    if shared
+        .direct_peer_hosts
+        .get(peer_id)
+        .is_some_and(|direct_host| *direct_host == IpAddr::V4(header.destination))
+    {
+        return Ok(packet);
+    }
     let counter = shared.e2e_relay_counter.fetch_add(1, Ordering::Relaxed);
     Ok(build_relay_envelope(
         key,
@@ -1539,6 +1578,7 @@ mod tests {
                 peer_addrs: Arc::new(
                     parse_peer_socket_addrs(&sender_config).expect("sender peers"),
                 ),
+                direct_peer_hosts: Arc::new(crate::direct_peer_hosts(&sender_config)),
                 active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 identity: Arc::new(sender_identity.keypair),
                 peer_registry: Arc::new(
@@ -1558,6 +1598,7 @@ mod tests {
                 peer_addrs: Arc::new(
                     parse_peer_socket_addrs(&receiver_config).expect("receiver peers"),
                 ),
+                direct_peer_hosts: Arc::new(crate::direct_peer_hosts(&receiver_config)),
                 active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 identity: Arc::new(receiver_identity.keypair),
                 peer_registry: Arc::new(
@@ -1677,21 +1718,21 @@ mod tests {
         let patrick_addr = patrick_endpoint.local_addr().expect("patrick addr");
         let david_addr = david_endpoint.local_addr().expect("david addr");
 
-        let patrick_config = config_with_socket_peer(
+        let patrick_config = config_with_socket_peer_allowed_ips(
             gateway_addr,
             "patrick",
             "gateway",
             &gateway_identity.public_key_b64,
             &gateway_identity.kem_key_b64,
-            "10.0.0.2/32",
+            &["10.0.0.254/32", "10.0.0.2/32"],
         );
-        let david_config = config_with_socket_peer(
+        let david_config = config_with_socket_peer_allowed_ips(
             gateway_addr,
             "david",
             "gateway",
             &gateway_identity.public_key_b64,
             &gateway_identity.kem_key_b64,
-            "10.0.0.1/32",
+            &["10.0.0.254/32", "10.0.0.1/32"],
         );
         let gateway_config = gateway_config_with_two_peers(
             patrick_addr,
@@ -1735,6 +1776,7 @@ mod tests {
                 peer_addrs: Arc::new(
                     parse_peer_socket_addrs(&patrick_config).expect("patrick peers"),
                 ),
+                direct_peer_hosts: Arc::new(crate::direct_peer_hosts(&patrick_config)),
                 active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 identity: Arc::new(patrick_identity.keypair),
                 peer_registry: Arc::new(
@@ -1752,6 +1794,7 @@ mod tests {
                 endpoint: david_endpoint.clone(),
                 tunnel_service: Arc::clone(&david_service),
                 peer_addrs: Arc::new(parse_peer_socket_addrs(&david_config).expect("david peers")),
+                direct_peer_hosts: Arc::new(crate::direct_peer_hosts(&david_config)),
                 active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 identity: Arc::new(david_identity.keypair),
                 peer_registry: Arc::new(
@@ -1771,6 +1814,7 @@ mod tests {
                 peer_addrs: Arc::new(
                     parse_peer_socket_addrs(&gateway_config).expect("gateway peers"),
                 ),
+                direct_peer_hosts: Arc::new(crate::direct_peer_hosts(&gateway_config)),
                 active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 identity: Arc::new(gateway_identity.keypair),
                 peer_registry: Arc::new(
@@ -1892,6 +1936,43 @@ mod tests {
             public_key = "{peer_public_key_b64}"
             kem_key = "{peer_kem_key_b64}"
             allowed_ips = ["{peer_allowed_ip}"]
+            key_rotation_secs = 3600
+            "#
+        ))
+        .expect("socket config should deserialize")
+    }
+
+    fn config_with_socket_peer_allowed_ips(
+        peer_addr: SocketAddr,
+        node_name: &str,
+        peer_name: &str,
+        peer_public_key_b64: &str,
+        peer_kem_key_b64: &str,
+        peer_allowed_ips: &[&str],
+    ) -> freeq_config::Config {
+        let allowed_ips = peer_allowed_ips
+            .iter()
+            .map(|allowed_ip| format!(r#""{allowed_ip}""#))
+            .collect::<Vec<_>>()
+            .join(", ");
+        toml::from_str(&format!(
+            r#"
+            [node]
+            name = "{node_name}"
+            listen = "127.0.0.1:0"
+            address = "10.0.0.1/24"
+            key_path = "/tmp/{node_name}.key"
+            algorithm = "ml-kem-768"
+            sign = "ml-dsa-65"
+            api_enabled = false
+            api_addr = "127.0.0.1:6789"
+
+            [[peer]]
+            name = "{peer_name}"
+            endpoint = "{peer_addr}"
+            public_key = "{peer_public_key_b64}"
+            kem_key = "{peer_kem_key_b64}"
+            allowed_ips = [{allowed_ips}]
             key_rotation_secs = 3600
             "#
         ))
