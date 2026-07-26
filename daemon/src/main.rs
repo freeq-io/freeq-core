@@ -1016,8 +1016,8 @@ async fn get_or_create_outbound_session(
     peer_name: &str,
     peer_addr: SocketAddr,
 ) -> Result<(Arc<ActivePeerSession>, bool)> {
-    {
-        let mut sessions = active_sessions.lock().await;
+    let stale_session = {
+        let sessions = active_sessions.lock().await;
         if let Some(session) = sessions.get(peer_name).cloned() {
             if session.is_fresh(SESSION_STALE_AFTER) {
                 return Ok((session, false));
@@ -1027,13 +1027,30 @@ async fn get_or_create_outbound_session(
                 stale_after_secs = SESSION_STALE_AFTER.as_secs(),
                 "replacing stale peer session"
             );
-            sessions.remove(peer_name);
+            Some(session)
+        } else {
+            None
         }
-    }
+    };
 
-    let session = Arc::new(
-        establish_outbound_session(endpoint, identity, peer_registry, peer_name, peer_addr).await?,
-    );
+    let session =
+        match establish_outbound_session(endpoint, identity, peer_registry, peer_name, peer_addr)
+            .await
+        {
+            Ok(session) => Arc::new(session),
+            Err(err) => {
+                if let Some(session) = stale_session {
+                    tracing::warn!(
+                        peer = %peer_name,
+                        endpoint = %peer_addr,
+                        error = %err,
+                        "stale peer session refresh failed; reusing existing session"
+                    );
+                    return Ok((session, false));
+                }
+                return Err(err);
+            }
+        };
     active_sessions
         .lock()
         .await
