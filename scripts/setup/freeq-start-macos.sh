@@ -480,7 +480,7 @@ fi
 if [ "$CONFIGURE_INTERFACE" -eq 1 ]; then
   require_no_preexisting_overlay_route "$local_ip" "local"
   require_no_preexisting_overlay_route "$peer_ip" "peer"
-  for extra_ip in "${extra_route_ips[@]}"; do
+  for extra_ip in ${extra_route_ips[@]+"${extra_route_ips[@]}"}; do
     require_no_preexisting_overlay_route "$extra_ip" "extra"
   done
 fi
@@ -566,7 +566,7 @@ if [ "$CONFIGURE_INTERFACE" -eq 1 ]; then
   fi
 
   added_extra_route=0
-  for extra_ip in "${extra_route_ips[@]}"; do
+  for extra_ip in ${extra_route_ips[@]+"${extra_route_ips[@]}"}; do
     if [ "$extra_ip" = "$local_ip" ] || [ "$extra_ip" = "$peer_ip" ]; then
       continue
     fi
