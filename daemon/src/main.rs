@@ -26,8 +26,8 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Mutex};
 
 const API_STATE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
@@ -36,6 +36,7 @@ const HANDSHAKE_INIT_PACKET_ID: u64 = 0;
 const HANDSHAKE_RESPONSE_PACKET_ID: u64 = 1;
 const HANDSHAKE_KEM_PACKET_ID: u64 = 2;
 const HANDSHAKE_CONFIRM_PACKET_ID: u64 = 3;
+const SESSION_STALE_AFTER: Duration = Duration::from_secs(30);
 const RELAY_MAGIC: &[u8; 4] = b"FQRL";
 const RELAY_VERSION: u8 = 1;
 const RELAY_HEADER_LEN: usize = 23;
@@ -274,6 +275,37 @@ struct ActivePeerSession {
     connection: freeq_transport::connection::PeerConnection,
     outbound_key: [u8; 32],
     inbound_key: [u8; 32],
+    last_received: StdMutex<Instant>,
+}
+
+impl ActivePeerSession {
+    fn new(
+        connection: freeq_transport::connection::PeerConnection,
+        outbound_key: [u8; 32],
+        inbound_key: [u8; 32],
+    ) -> Self {
+        Self {
+            connection,
+            outbound_key,
+            inbound_key,
+            last_received: StdMutex::new(Instant::now()),
+        }
+    }
+
+    fn mark_received(&self) {
+        if let Ok(mut last_received) = self.last_received.lock() {
+            *last_received = Instant::now();
+        }
+    }
+
+    fn is_fresh(&self, max_age: Duration) -> bool {
+        self.connection.is_alive()
+            && self
+                .last_received
+                .lock()
+                .map(|last_received| last_received.elapsed() <= max_age)
+                .unwrap_or(false)
+    }
 }
 
 #[derive(Clone)]
@@ -598,6 +630,7 @@ async fn run_connection_receiver(
     loop {
         match session.connection.recv().await {
             Ok(frame) => {
+                session.mark_received();
                 let rebuilt_packet = match reassembler.push_frame(&frame) {
                     Ok(packet) => packet,
                     Err(err) => {
@@ -983,8 +1016,19 @@ async fn get_or_create_outbound_session(
     peer_name: &str,
     peer_addr: SocketAddr,
 ) -> Result<(Arc<ActivePeerSession>, bool)> {
-    if let Some(session) = active_sessions.lock().await.get(peer_name).cloned() {
-        return Ok((session, false));
+    {
+        let mut sessions = active_sessions.lock().await;
+        if let Some(session) = sessions.get(peer_name).cloned() {
+            if session.is_fresh(SESSION_STALE_AFTER) {
+                return Ok((session, false));
+            }
+            tracing::info!(
+                peer = %peer_name,
+                stale_after_secs = SESSION_STALE_AFTER.as_secs(),
+                "replacing stale peer session"
+            );
+            sessions.remove(peer_name);
+        }
     }
 
     let session = Arc::new(
@@ -1041,11 +1085,11 @@ async fn establish_outbound_session(
     freeq_auth::handshake::verify_key_confirmation(&keys, responder_confirmation.as_ref())?;
     tracing::info!(peer = %peer_name, endpoint = %peer_addr, "outbound peer session established");
 
-    Ok(ActivePeerSession {
+    Ok(ActivePeerSession::new(
         connection,
-        outbound_key: keys.outbound,
-        inbound_key: keys.inbound,
-    })
+        keys.outbound,
+        keys.inbound,
+    ))
 }
 
 async fn accept_inbound_session(
@@ -1080,11 +1124,11 @@ async fn accept_inbound_session(
 
     Ok((
         peer_name,
-        Arc::new(ActivePeerSession {
+        Arc::new(ActivePeerSession::new(
             connection,
-            outbound_key: keys.outbound,
-            inbound_key: keys.inbound,
-        }),
+            keys.outbound,
+            keys.inbound,
+        )),
     ))
 }
 
