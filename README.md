@@ -54,11 +54,14 @@ Node A -> FreeQ protected overlay -> Node B
 
 When direct reachability is blocked by NAT, CGNAT, hotel Wi-Fi, airport Wi-Fi,
 Starlink, cellular networks, firewalls, or restricted guest networks, FreeQ can
-use a reachable gateway or rendezvous point:
+use a reachable gateway relay:
 
 ```text
-Node A -> FreeQ protected overlay -> gateway/rendezvous -> FreeQ protected overlay -> Node B
+Node A --outbound only--> gateway relay <--outbound only-- Node B
 ```
+
+In relay mode, each leaf connects outbound to the gateway. The gateway must not
+depend on dialing back into a leaf behind CGNAT or a restrictive local router.
 
 FreeQ does not secure arbitrary RF waveforms, replace approved radio-layer
 security, or substitute for required COMSEC. It adds a protected overlay for
