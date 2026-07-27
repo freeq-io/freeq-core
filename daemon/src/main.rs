@@ -20,7 +20,7 @@ use base64::Engine as _;
 use bytes::Bytes;
 use clap::Parser;
 use ipnetwork::IpNetwork;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -32,6 +32,7 @@ use tokio::sync::{mpsc, Mutex};
 
 const API_STATE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const DATAPLANE_CHANNEL_CAPACITY: usize = 256;
+const OUTBOUND_SESSION_MAINTAIN_INTERVAL: Duration = Duration::from_secs(5);
 const HANDSHAKE_INIT_PACKET_ID: u64 = 0;
 const HANDSHAKE_RESPONSE_PACKET_ID: u64 = 1;
 const HANDSHAKE_KEM_PACKET_ID: u64 = 2;
@@ -152,6 +153,7 @@ async fn main() -> Result<()> {
         tunnel_service: Arc::clone(&tunnel_service),
         peer_addrs: Arc::new(peer_addrs),
         direct_peer_hosts: Arc::new(direct_peer_hosts(&config)),
+        proactive_peer_ids: Arc::new(proactive_gateway_client_peers(&config)),
         active_sessions: Arc::new(Mutex::new(HashMap::new())),
         identity: Arc::new(identity),
         peer_registry,
@@ -263,6 +265,7 @@ impl PacketIo {
 #[allow(dead_code)]
 struct DataplaneRuntime {
     _accept_task: tokio::task::JoinHandle<()>,
+    _outbound_task: tokio::task::JoinHandle<()>,
     _egress_task: tokio::task::JoinHandle<()>,
 }
 
@@ -314,6 +317,7 @@ struct DataplaneShared {
     tunnel_service: Arc<freeq_tunnel::TunnelService>,
     peer_addrs: Arc<HashMap<String, SocketAddr>>,
     direct_peer_hosts: Arc<HashMap<String, IpAddr>>,
+    proactive_peer_ids: Arc<HashSet<String>>,
     active_sessions: Arc<Mutex<HashMap<String, Arc<ActivePeerSession>>>>,
     identity: Arc<freeq_crypto::sign::IdentityKeypair>,
     peer_registry: Arc<freeq_auth::registry::PeerRegistry>,
@@ -362,6 +366,15 @@ fn direct_peer_hosts(config: &freeq_config::Config) -> HashMap<String, IpAddr> {
         }
     }
     hosts
+}
+
+fn proactive_gateway_client_peers(config: &freeq_config::Config) -> HashSet<String> {
+    config
+        .peer
+        .iter()
+        .filter(|peer| peer.allowed_ips.len() > 1)
+        .map(|peer| peer.name.clone())
+        .collect()
 }
 
 fn endpoint_bind_mode(
@@ -511,11 +524,64 @@ fn spawn_dataplane_runtime(
     packet_egress: PacketEgress,
 ) -> DataplaneRuntime {
     let accept_task = tokio::spawn(run_accept_loop(shared.clone(), packet_egress.clone()));
+    let outbound_task = tokio::spawn(run_outbound_session_maintainer(
+        shared.clone(),
+        packet_egress.clone(),
+    ));
     let egress_task = tokio::spawn(run_egress_loop(shared, packet_ingress, packet_egress));
 
     DataplaneRuntime {
         _accept_task: accept_task,
+        _outbound_task: outbound_task,
         _egress_task: egress_task,
+    }
+}
+
+#[allow(dead_code)]
+async fn run_outbound_session_maintainer(shared: DataplaneShared, packet_egress: PacketEgress) {
+    if shared.proactive_peer_ids.is_empty() {
+        return;
+    }
+
+    loop {
+        for peer_id in shared.proactive_peer_ids.iter() {
+            let Some(&peer_addr) = shared.peer_addrs.get(peer_id) else {
+                continue;
+            };
+            match get_or_create_outbound_session(
+                &shared.active_sessions,
+                shared.endpoint.clone(),
+                shared.identity.as_ref(),
+                shared.peer_registry.as_ref(),
+                peer_id,
+                peer_addr,
+            )
+            .await
+            {
+                Ok((session, true)) => {
+                    spawn_connection_receiver(
+                        session,
+                        shared.clone(),
+                        packet_egress.clone(),
+                        peer_id.clone(),
+                    );
+                }
+                Ok((_session, false)) => {}
+                Err(err) => {
+                    tracing::warn!(
+                        peer = %peer_id,
+                        endpoint = %peer_addr,
+                        error = %err,
+                        "proactive outbound peer session failed"
+                    );
+                    shared
+                        .api_state
+                        .record_error(freeq_api::ErrorKind::Transport, err.to_string())
+                        .await;
+                }
+            }
+        }
+        tokio::time::sleep(OUTBOUND_SESSION_MAINTAIN_INTERVAL).await;
     }
 }
 
@@ -754,19 +820,20 @@ async fn transmit_routed_packet(
     shared: &DataplaneShared,
     routed_packet: RoutedPacket,
 ) -> Option<(Arc<ActivePeerSession>, String)> {
+    let existing_session = {
+        shared
+            .active_sessions
+            .lock()
+            .await
+            .get(&routed_packet.peer_id)
+            .cloned()
+    };
+    if let Some(session) = existing_session {
+        transmit_on_session(shared, session, routed_packet).await;
+        return None;
+    }
+
     let Some(&peer_addr) = shared.peer_addrs.get(&routed_packet.peer_id) else {
-        let existing_session = {
-            shared
-                .active_sessions
-                .lock()
-                .await
-                .get(&routed_packet.peer_id)
-                .cloned()
-        };
-        if let Some(session) = existing_session {
-            transmit_on_session(shared, session, routed_packet).await;
-            return None;
-        }
         shared
             .api_state
             .record_error(
@@ -1640,6 +1707,7 @@ mod tests {
                     parse_peer_socket_addrs(&sender_config).expect("sender peers"),
                 ),
                 direct_peer_hosts: Arc::new(crate::direct_peer_hosts(&sender_config)),
+                proactive_peer_ids: Arc::new(crate::proactive_gateway_client_peers(&sender_config)),
                 active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 identity: Arc::new(sender_identity.keypair),
                 peer_registry: Arc::new(
@@ -1660,6 +1728,9 @@ mod tests {
                     parse_peer_socket_addrs(&receiver_config).expect("receiver peers"),
                 ),
                 direct_peer_hosts: Arc::new(crate::direct_peer_hosts(&receiver_config)),
+                proactive_peer_ids: Arc::new(crate::proactive_gateway_client_peers(
+                    &receiver_config,
+                )),
                 active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 identity: Arc::new(receiver_identity.keypair),
                 peer_registry: Arc::new(
@@ -1776,8 +1847,6 @@ mod tests {
         let david_identity = generate_identity_bytes();
 
         let gateway_addr = gateway_endpoint.local_addr().expect("gateway addr");
-        let patrick_addr = patrick_endpoint.local_addr().expect("patrick addr");
-        let david_addr = david_endpoint.local_addr().expect("david addr");
 
         let patrick_config = config_with_socket_peer_allowed_ips(
             gateway_addr,
@@ -1796,8 +1865,8 @@ mod tests {
             &["10.0.0.254/32", "10.0.0.1/32"],
         );
         let gateway_config = gateway_config_with_two_peers(
-            patrick_addr,
-            david_addr,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)), 51820),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 11)), 51820),
             &patrick_identity,
             &david_identity,
         );
@@ -1838,6 +1907,9 @@ mod tests {
                     parse_peer_socket_addrs(&patrick_config).expect("patrick peers"),
                 ),
                 direct_peer_hosts: Arc::new(crate::direct_peer_hosts(&patrick_config)),
+                proactive_peer_ids: Arc::new(crate::proactive_gateway_client_peers(
+                    &patrick_config,
+                )),
                 active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 identity: Arc::new(patrick_identity.keypair),
                 peer_registry: Arc::new(
@@ -1856,6 +1928,7 @@ mod tests {
                 tunnel_service: Arc::clone(&david_service),
                 peer_addrs: Arc::new(parse_peer_socket_addrs(&david_config).expect("david peers")),
                 direct_peer_hosts: Arc::new(crate::direct_peer_hosts(&david_config)),
+                proactive_peer_ids: Arc::new(crate::proactive_gateway_client_peers(&david_config)),
                 active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 identity: Arc::new(david_identity.keypair),
                 peer_registry: Arc::new(
@@ -1876,6 +1949,9 @@ mod tests {
                     parse_peer_socket_addrs(&gateway_config).expect("gateway peers"),
                 ),
                 direct_peer_hosts: Arc::new(crate::direct_peer_hosts(&gateway_config)),
+                proactive_peer_ids: Arc::new(crate::proactive_gateway_client_peers(
+                    &gateway_config,
+                )),
                 active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 identity: Arc::new(gateway_identity.keypair),
                 peer_registry: Arc::new(
@@ -1888,6 +1964,8 @@ mod tests {
             gateway_tun_rx,
             gateway_out_tx,
         );
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
 
         let patrick_to_david = Bytes::from(test_ipv4_packet_with_source_dest(
             1180,
