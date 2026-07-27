@@ -6,6 +6,10 @@ FreeQ must become a self-healing network, not a collection of scripts that
 start a daemon and leave the operator to diagnose the real state. Every direct
 and relay decision should be guided by the principles below.
 
+Security is the top objective. Reliability, convenience, and performance are
+not allowed to create a path for unauthorized access, metadata leakage, key
+exposure, route hijacking, downgrade, replay, or gateway impersonation.
+
 ## Product Rule
 
 FreeQ must not report success until the specific user goal is true.
@@ -20,6 +24,33 @@ For example:
   path
 
 Process state is not network health.
+
+## Security-First Invariants
+
+The redesign must preserve these invariants:
+
+- A gateway is used only when one or both leaves cannot accept inbound traffic,
+  such as hotel Wi-Fi, airport Wi-Fi, Starlink CGNAT, LTE, enterprise guest
+  networks, or other non-dialable networks.
+- The gateway must never assume it can call, dial, or open a fresh inbound
+  connection to a leaf node. Port forwarding is not available in the relay
+  threat model.
+- Leaves initiate outbound sessions to the gateway. The gateway forwards only
+  across already-authenticated, active leaf sessions.
+- The gateway must authenticate leaf identity before accepting traffic from a
+  session.
+- The gateway must authorize every forwarded destination. It must never act as
+  an open proxy, packet reflector, or route amplifier.
+- The gateway must not require the end-to-end payload key for leaf-to-leaf
+  confidentiality.
+- Relay metadata must be minimized, redacted in logs, and retained only for
+  operational health, abuse prevention, audit, and support evidence.
+- Failure handling must be fail-closed. Ambiguous key, identity, route, or
+  session state must stop forwarding rather than guessing.
+- Automatic repair must not weaken authentication, skip authorization, expose
+  secrets, widen routes, or leave stale privileged state behind.
+- Rollback must remove only FreeQ-owned routes, processes, state files, and
+  network changes.
 
 ## Ten Required Capabilities
 
@@ -123,6 +154,7 @@ Relay mode:
 - leaves connect outbound to a gateway
 - gateway forwards only between authenticated active leaf sessions
 - gateway must not need the end-to-end payload key
+- gateway never dials a non-dialable leaf as a fallback
 
 ## No Manual Secret Rituals
 
@@ -145,6 +177,9 @@ The redesigned gateway/direct system is not supported until these pass:
 - clean rollback to normal networking
 - direct path success when direct connectivity is available
 - relay path success with both leaves behind non-dialable networks
+- tests prove the gateway never dials a leaf in relay mode
+- tests prove the gateway cannot be used as an open proxy or reflector
+- tests prove unauthorized destinations are rejected fail-closed
 - blocked gateway network produces `GATEWAY_UNREACHABLE` or
   `LOCAL_NETWORK_BLOCKING_UDP`
 - missing remote leaf produces `WAITING_FOR_REMOTE_LEAF`

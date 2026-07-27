@@ -49,12 +49,13 @@ Gateway relay properties:
 
 - each leaf establishes and maintains an outbound session to the public gateway
 - the gateway accepts leaf sessions
-- the gateway does not depend on dialing back into a leaf node
+- the gateway must never dial back into a leaf node in relay mode
 - leaf public endpoints behind CGNAT are not reliable routing targets
 - the gateway routes packets only across authenticated, active leaf sessions
 
 The gateway is a rendezvous relay for the data plane, not a fallback direct
-dialer.
+dialer. If a design expects the gateway to call a leaf behind hotel Wi-Fi,
+Starlink CGNAT, LTE, airport Wi-Fi, or a guest network, that design is wrong.
 
 ## Required Gateway Session Table
 
