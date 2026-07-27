@@ -32,7 +32,7 @@ to install FreeQ Core, bootstrap trust with a simple local artifact, start a
 node, and establish a protected direct tunnel without depending on a hosted
 control plane.
 
-## Connectivity Model: Direct First, Gateway Relay When Needed
+## Connectivity Model: Direct First, Self-Healing Relay When Needed
 
 FreeQ protects routable digital traffic between known, trusted endpoints across
 whatever bearer is available: public internet, fiber, LTE, SATCOM, Starlink,
@@ -41,7 +41,7 @@ Wi-Fi, tactical backhaul, or private network.
 FreeQ has two separate connectivity lanes:
 
 - direct peer connection when both nodes can reach each other
-- gateway relay when one or both leaf nodes cannot accept inbound traffic
+- self-healing relay when one or both leaf nodes cannot accept inbound traffic
 
 The simplest topology is direct node-to-node:
 
@@ -54,25 +54,35 @@ That path is preferred when both endpoints can reach each other. A gateway is no
 Some real networks block direct reachability. Common examples include NAT,
 CGNAT, hotel Wi-Fi, airport Wi-Fi, coffee shop Wi-Fi, cellular networks,
 Starlink, enterprise guest networks, and restrictive firewalls. In those cases,
-FreeQ uses a public gateway relay:
+FreeQ needs a public relay path:
 
 ```text
 Node A --outbound only--> gateway relay <--outbound only-- Node B
 ```
 
-The gateway relay must not depend on dialing back into a leaf node. Leaves
-behind CGNAT or restrictive local routers are reached only through their
+The relay must not depend on dialing back into a leaf node. Leaves behind CGNAT
+or restrictive local routers are reached only through their
 already-authenticated outbound sessions to the gateway. Rendezvous metadata can
 help nodes discover direct candidates, but relay is packet forwarding through
 active gateway sessions.
+
+The first manual gateway implementation is archived as legacy learning. It is
+not the product target because it required manual relay keys, manual route
+decisions, repeated restarts, raw ping interpretation, and fragile status. The
+replacement architecture is a self-healing network manager with explicit state
+for gateway reachability, session establishment, relay key proof, route
+installation, TUN packet observation, active peer presence, bidirectional
+probes, reconnect/backoff, clear failure state, and full rollback.
 
 FreeQ sits above the bearer. It does not replace radios, SATCOM, fiber, LTE,
 Starlink, Wi-Fi, tactical backhaul, approved radio-layer security, or required
 COMSEC. It protects traffic that can be routed through FreeQ endpoints or
 gateways.
 
-The detailed lane split is documented in
-[`docs/gateway-relay-architecture.md`](gateway-relay-architecture.md).
+The redesign mandate is documented in
+[`docs/self-healing-network-redesign.md`](self-healing-network-redesign.md).
+The legacy gateway lessons are preserved in
+[`docs/gateway-legacy-lessons.md`](gateway-legacy-lessons.md).
 
 FreeQ Cloud exists to replace the ugly parts of self-management with a polished
 management plane:

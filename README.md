@@ -53,18 +53,31 @@ Node A -> FreeQ protected overlay -> Node B
 ```
 
 When direct reachability is blocked by NAT, CGNAT, hotel Wi-Fi, airport Wi-Fi,
-Starlink, cellular networks, firewalls, or restricted guest networks, FreeQ can
-use a reachable gateway relay:
+Starlink, cellular networks, firewalls, or restricted guest networks, FreeQ
+needs a self-healing relay path:
 
 ```text
 Node A --outbound only--> gateway relay <--outbound only-- Node B
 ```
 
-In relay mode, each leaf connects outbound to the gateway. The gateway must not
-depend on dialing back into a leaf behind CGNAT or a restrictive local router.
+The first manual AWS gateway field test is now archived as legacy learning. It
+proved the relay concept, but it was too fragile: manual relay keys, manual
+extra routes, ambiguous status, and no self-healing. The replacement design is
+documented in
+[`docs/self-healing-network-redesign.md`](docs/self-healing-network-redesign.md).
 
-Local relay development should use the Podman lab before asking a remote field
-tester to help:
+In relay mode, each leaf must connect outbound to the gateway. The gateway must
+not depend on dialing back into a leaf behind CGNAT or a restrictive local
+router. FreeQ must not report relay success until gateway reachability, session
+establishment, route installation, TUN packet observation, active peer presence,
+and a bidirectional probe are all understood.
+
+Legacy relay development lessons are preserved here:
+
+[`docs/gateway-legacy-lessons.md`](docs/gateway-legacy-lessons.md)
+
+Local relay development may still use the Podman lab before asking a remote
+field tester to help:
 
 ```bash
 scripts/podman/freeq-podman-relay-lab.sh --all

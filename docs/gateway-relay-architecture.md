@@ -1,6 +1,16 @@
 # FreeQ Direct and Gateway Relay Architecture
 
-Status: design baseline
+Status: legacy design baseline and learning artifact
+
+This document preserves the first direct/relay lane split and field-test
+lessons. It is not the target product workflow. The next implementation must be
+guided by the self-healing network redesign in
+[`docs/self-healing-network-redesign.md`](self-healing-network-redesign.md).
+
+The legacy AWS gateway path proved that relay is technically possible, but it
+also proved that a manual gateway flow is too fragile for users. Do not build
+new user-facing behavior around manual relay keys, manual extra routes, raw
+ping interpretation, or "daemon running" as a success state.
 
 FreeQ has two separate connectivity lanes. They must not be blended in code,
 documentation, setup scripts, or product language.
