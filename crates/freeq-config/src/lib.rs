@@ -22,6 +22,13 @@
 //! public_key  = "base64encodedMLDSApublickey..."
 //! kem_key     = "base64encodedMLKEMpublickey..."
 //! allowed_ips = ["10.0.0.2/32"]
+//! # mode defaults to "direct" when omitted
+//!
+//! # Gateway relay leaf (gateway config only — never dialed):
+//! # mode = "relay_leaf"
+//! #
+//! # Leaf gateway-client (outbound-only to a public gateway):
+//! # mode = "gateway_client"
 //! ```
 
 #![forbid(unsafe_code)]
@@ -37,7 +44,7 @@ use std::path::Path;
 
 pub use error::ConfigError;
 pub use node::NodeConfig;
-pub use peer::PeerConfig;
+pub use peer::{PeerConfig, PeerMode};
 
 /// The root configuration structure loaded from `freeq.toml`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -99,6 +106,18 @@ impl Config {
                 validate_endpoint(&format!("peer.{}.endpoint", peer.name), endpoint)?;
             }
 
+            match peer.effective_mode() {
+                PeerMode::GatewayClient if peer.endpoint.is_none() => {
+                    return Err(ConfigError::Invalid(format!(
+                        "peer.{} with mode gateway_client requires an endpoint",
+                        peer.name
+                    )));
+                }
+                // RelayLeaf may carry a documentation-only endpoint; dialing
+                // is forbidden via PeerConfig::is_dialable regardless.
+                PeerMode::Direct | PeerMode::GatewayClient | PeerMode::RelayLeaf => {}
+            }
+
             if peer.key_rotation_secs == 0 {
                 return Err(ConfigError::Invalid(format!(
                     "peer.{}.key_rotation_secs must be greater than zero",
@@ -108,6 +127,40 @@ impl Config {
 
             for allowed_ip in &peer.allowed_ips {
                 parse_ip_network(&format!("peer.{}.allowed_ips", peer.name), allowed_ip)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate that this config is suitable for the `freeq-gateway` binary.
+    ///
+    /// Gateway peers must be [`PeerMode::RelayLeaf`] (accept-only). The gateway
+    /// never dials leaves; destination sessions must already exist as inbound
+    /// authenticated sessions or packets are dropped as "remote leaf offline".
+    pub fn validate_for_gateway(&self) -> Result<(), ConfigError> {
+        self.validate()?;
+
+        if self.peer.is_empty() {
+            return Err(ConfigError::Invalid(
+                "gateway config must list at least one relay_leaf peer".into(),
+            ));
+        }
+
+        for peer in &self.peer {
+            if peer.effective_mode() != PeerMode::RelayLeaf {
+                return Err(ConfigError::Invalid(format!(
+                    "gateway peer '{}' must have mode = \"relay_leaf\" (got {:?}); \
+                     the gateway never dials leaves",
+                    peer.name,
+                    peer.effective_mode()
+                )));
+            }
+            if peer.is_dialable() {
+                return Err(ConfigError::Invalid(format!(
+                    "gateway peer '{}' is dialable; relay_leaf peers must never be dialed",
+                    peer.name
+                )));
             }
         }
 
@@ -281,5 +334,98 @@ mod tests {
         config.node.allow_unsafe_api_bind = true;
 
         config.validate().expect("config should validate");
+    }
+
+    #[test]
+    fn missing_peer_mode_defaults_to_direct() {
+        let config = sample_config();
+        assert_eq!(config.peer[0].mode, None);
+        assert_eq!(config.peer[0].effective_mode(), super::PeerMode::Direct);
+        assert!(config.peer[0].is_dialable());
+    }
+
+    #[test]
+    fn validate_accepts_explicit_direct_mode() {
+        let mut config = sample_config();
+        config.peer[0].mode = Some(super::PeerMode::Direct);
+        config.validate().expect("config should validate");
+    }
+
+    #[test]
+    fn validate_accepts_gateway_client_with_endpoint() {
+        let mut config = sample_config();
+        config.peer[0].mode = Some(super::PeerMode::GatewayClient);
+        config.validate().expect("config should validate");
+        assert!(config.peer[0].is_dialable());
+    }
+
+    #[test]
+    fn validate_rejects_gateway_client_without_endpoint() {
+        let mut config = sample_config();
+        config.peer[0].mode = Some(super::PeerMode::GatewayClient);
+        config.peer[0].endpoint = None;
+
+        let err = config.validate().expect_err("config should fail");
+        assert!(err.to_string().contains("gateway_client"));
+        assert!(err.to_string().contains("endpoint"));
+        assert!(!config.peer[0].is_dialable());
+    }
+
+    #[test]
+    fn validate_accepts_relay_leaf_without_endpoint() {
+        let mut config = sample_config();
+        config.peer[0].mode = Some(super::PeerMode::RelayLeaf);
+        config.peer[0].endpoint = None;
+
+        config.validate().expect("config should validate");
+        assert!(!config.peer[0].is_dialable());
+    }
+
+    #[test]
+    fn relay_leaf_with_endpoint_is_not_dialable() {
+        let mut config = sample_config();
+        config.peer[0].mode = Some(super::PeerMode::RelayLeaf);
+        // endpoint may remain for documentation / ops notes
+        assert!(config.peer[0].endpoint.is_some());
+        assert!(!config.peer[0].is_dialable());
+        config.validate().expect("config should validate");
+    }
+
+    #[test]
+    fn peer_mode_deserializes_snake_case() {
+        let peer: super::PeerConfig = toml::from_str(
+            r#"
+            name = "leaf-a"
+            public_key = "AQIDBA=="
+            kem_key = "BQYHCA=="
+            mode = "relay_leaf"
+            "#,
+        )
+        .expect("peer should deserialize");
+        assert_eq!(peer.effective_mode(), super::PeerMode::RelayLeaf);
+    }
+
+    #[test]
+    fn validate_for_gateway_requires_relay_leaf_peers() {
+        let mut config = sample_config();
+        let err = config
+            .validate_for_gateway()
+            .expect_err("direct peer must fail gateway validation");
+        assert!(err.to_string().contains("relay_leaf"));
+
+        config.peer[0].mode = Some(super::PeerMode::RelayLeaf);
+        config
+            .validate_for_gateway()
+            .expect("relay_leaf peers should pass gateway validation");
+    }
+
+    #[test]
+    fn validate_for_gateway_rejects_empty_peer_list() {
+        let mut config = sample_config();
+        config.peer.clear();
+        let err = config
+            .validate_for_gateway()
+            .expect_err("empty peer list must fail");
+        assert!(err.to_string().contains("at least one"));
     }
 }

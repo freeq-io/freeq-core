@@ -8,6 +8,7 @@ members = [
     "crates/freeq-api",
     "daemon",
     "cli",
+    "gateway",
     "tools/freeq-soak-test",
     "tools/freeq-perf-identity",
 ]

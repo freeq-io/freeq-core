@@ -44,10 +44,10 @@ This document outlines testing strategy for FreeQ, focusing on:
 
 ### Phase 2: Battlefield / Intermittent Connectivity (High Priority)
 
-- [ ] Connection loss → Suspended state
-- [ ] Fast reconnect when back in range (drone scenario)
-- [ ] Session resumption using tickets
-- [ ] Long suspension (15–30 minutes) + reconnect
+- [x] Connection loss → drop dead session (never reuse); full re-handshake on rejoin
+- [x] Fast reconnect when back in range (drone scenario) — budget **≤3s** authenticated rejoin (`BATTLEFIELD_REJOIN_BUDGET`); see `battlefield_rejoin_*` freeqd tests
+- [ ] Session resumption using tickets (intentionally deferred: security prefers full HS after long loss)
+- [ ] Long suspension (15–30 minutes) + reconnect (rejoin path same as fast reconnect; soak coverage still open)
 - [ ] High packet loss (10–40%) simulation
 - [ ] Network flapping (on/off every 30 seconds)
 

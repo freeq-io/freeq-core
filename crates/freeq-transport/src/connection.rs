@@ -1,13 +1,35 @@
 //! Per-peer QUIC connection state + datagram transport.
+//!
+//! # Battlefield path-loss timing
+//!
+//! FreeQ targets **authenticated rejoin within 3 seconds** after a path becomes
+//! usable again (DoW intermittent-link objective). Path-loss detection and
+//! keepalives are therefore aggressive:
+//!
+//! - keepalives every [`QUIC_KEEPALIVE_INTERVAL`] so NAT mappings stay warm and
+//!   dead paths are noticed quickly
+//! - idle timeout [`QUIC_IDLE_TIMEOUT`] so a blackholed path cannot look "up"
+//!   for minutes
+//!
+//! Security over performance: a flap causes a **full** FreeQ handshake on
+//! rejoin, never a silent reuse of dead session keys.
 
 use crate::{Result, TransportError};
 use bytes::Bytes;
 use std::time::Duration;
 
-/// Default timeouts used for transport send/receive operations.
-pub const QUIC_IDLE_TIMEOUT: Duration = Duration::from_secs(600);
-/// Keepalive interval to keep NAT mappings warm.
-pub const QUIC_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+/// QUIC max idle time without progress.
+///
+/// Sized for battlefield path-loss detection: a blackholed UDP path must not
+/// appear healthy for long. Keepalives are shorter than this so healthy
+/// sessions stay open.
+pub const QUIC_IDLE_TIMEOUT: Duration = Duration::from_millis(1_500);
+
+/// Keepalive interval to keep NAT mappings warm and surface dead paths.
+pub const QUIC_KEEPALIVE_INTERVAL: Duration = Duration::from_millis(400);
+
+/// Operator budget: authenticated rejoin after known path loss / restore.
+pub const BATTLEFIELD_REJOIN_BUDGET: Duration = Duration::from_secs(3);
 
 /// A live QUIC connection to a single remote FreeQ peer.
 #[derive(Clone, Debug)]

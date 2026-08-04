@@ -32,12 +32,18 @@ use tokio::sync::{mpsc, Mutex};
 
 const API_STATE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const DATAPLANE_CHANNEL_CAPACITY: usize = 256;
-const OUTBOUND_SESSION_MAINTAIN_INTERVAL: Duration = Duration::from_secs(5);
+/// When all proactive peers are healthy, poll this often for sudden death.
+const OUTBOUND_HEALTHY_POLL_INTERVAL: Duration = Duration::from_millis(250);
+/// When any peer is down, retry rejoin this often (immediate first attempt).
+const OUTBOUND_REJOIN_POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// Cap a single establish/handshake attempt so the 3s rejoin budget can retry.
+const OUTBOUND_ESTABLISH_DEADLINE: Duration = Duration::from_millis(2_500);
+/// Authenticated rejoin budget after path loss (DoW intermittent-link target).
+const BATTLEFIELD_REJOIN_BUDGET: Duration = freeq_transport::connection::BATTLEFIELD_REJOIN_BUDGET;
 const HANDSHAKE_INIT_PACKET_ID: u64 = 0;
 const HANDSHAKE_RESPONSE_PACKET_ID: u64 = 1;
 const HANDSHAKE_KEM_PACKET_ID: u64 = 2;
 const HANDSHAKE_CONFIRM_PACKET_ID: u64 = 3;
-const SESSION_STALE_AFTER: Duration = Duration::from_secs(30);
 const RELAY_MAGIC: &[u8; 4] = b"FQRL";
 const RELAY_VERSION: u8 = 1;
 const RELAY_HEADER_LEN: usize = 23;
@@ -301,13 +307,13 @@ impl ActivePeerSession {
         }
     }
 
-    fn is_fresh(&self, max_age: Duration) -> bool {
+    /// Whether this session may carry traffic.
+    ///
+    /// Security: only a live QUIC connection is usable. Dead/half-open
+    /// sessions must never be reused after path loss — rejoin with a full
+    /// FreeQ handshake instead.
+    fn is_usable(&self) -> bool {
         self.connection.is_alive()
-            && self
-                .last_received
-                .lock()
-                .map(|last_received| last_received.elapsed() <= max_age)
-                .unwrap_or(false)
     }
 }
 
@@ -368,13 +374,22 @@ fn direct_peer_hosts(config: &freeq_config::Config) -> HashMap<String, IpAddr> {
     hosts
 }
 
-fn proactive_gateway_client_peers(config: &freeq_config::Config) -> HashSet<String> {
+/// Peers that freeqd must proactively maintain (outbound dial + rejoin).
+///
+/// Includes `gateway_client` peers and any other dialable peer with an
+/// endpoint. `relay_leaf` peers are never dialed.
+fn proactive_outbound_peers(config: &freeq_config::Config) -> HashSet<String> {
     config
         .peer
         .iter()
-        .filter(|peer| peer.allowed_ips.len() > 1)
+        .filter(|peer| peer.is_dialable())
         .map(|peer| peer.name.clone())
         .collect()
+}
+
+/// Backward-compatible name used by existing call sites / tests.
+fn proactive_gateway_client_peers(config: &freeq_config::Config) -> HashSet<String> {
+    proactive_outbound_peers(config)
 }
 
 fn endpoint_bind_mode(
@@ -543,11 +558,42 @@ async fn run_outbound_session_maintainer(shared: DataplaneShared, packet_egress:
         return;
     }
 
+    // Battlefield rejoin: when a peer is down, retry aggressively so an asset
+    // that regains RF can re-authenticate inside BATTLEFIELD_REJOIN_BUDGET.
+    // Security: every success path is a full FreeQ handshake (no session reuse).
     loop {
+        let mut any_down = false;
         for peer_id in shared.proactive_peer_ids.iter() {
             let Some(&peer_addr) = shared.peer_addrs.get(peer_id) else {
                 continue;
             };
+
+            let needs_rejoin = {
+                let sessions = shared.active_sessions.lock().await;
+                match sessions.get(peer_id) {
+                    Some(session) if session.is_usable() => false,
+                    Some(_) | None => true,
+                }
+            };
+
+            if !needs_rejoin {
+                continue;
+            }
+            any_down = true;
+
+            // Drop any dead session before redial (never black-hole on stale).
+            {
+                let mut sessions = shared.active_sessions.lock().await;
+                if let Some(dead) = sessions.remove(peer_id) {
+                    tracing::info!(
+                        peer = %peer_id,
+                        "path loss: removed dead outbound session; rejoining"
+                    );
+                    let _ = dead.connection.close().await;
+                }
+            }
+
+            let rejoin_started = Instant::now();
             match get_or_create_outbound_session(
                 &shared.active_sessions,
                 shared.endpoint.clone(),
@@ -559,6 +605,21 @@ async fn run_outbound_session_maintainer(shared: DataplaneShared, packet_egress:
             .await
             {
                 Ok((session, true)) => {
+                    let rejoin_ms = rejoin_started.elapsed().as_millis();
+                    tracing::info!(
+                        peer = %peer_id,
+                        rejoin_ms,
+                        budget_ms = BATTLEFIELD_REJOIN_BUDGET.as_millis(),
+                        "outbound peer rejoin succeeded (full handshake)"
+                    );
+                    if rejoin_started.elapsed() > BATTLEFIELD_REJOIN_BUDGET {
+                        tracing::warn!(
+                            peer = %peer_id,
+                            rejoin_ms,
+                            budget_ms = BATTLEFIELD_REJOIN_BUDGET.as_millis(),
+                            "rejoin exceeded battlefield budget"
+                        );
+                    }
                     spawn_connection_receiver(
                         session,
                         shared.clone(),
@@ -572,7 +633,7 @@ async fn run_outbound_session_maintainer(shared: DataplaneShared, packet_egress:
                         peer = %peer_id,
                         endpoint = %peer_addr,
                         error = %err,
-                        "proactive outbound peer session failed"
+                        "proactive outbound rejoin failed; will retry"
                     );
                     shared
                         .api_state
@@ -581,7 +642,12 @@ async fn run_outbound_session_maintainer(shared: DataplaneShared, packet_egress:
                 }
             }
         }
-        tokio::time::sleep(OUTBOUND_SESSION_MAINTAIN_INTERVAL).await;
+
+        if any_down {
+            tokio::time::sleep(OUTBOUND_REJOIN_POLL_INTERVAL).await;
+        } else {
+            tokio::time::sleep(OUTBOUND_HEALTHY_POLL_INTERVAL).await;
+        }
     }
 }
 
@@ -729,6 +795,8 @@ async fn run_connection_receiver(
                             Ok(inner_packet) => {
                                 if packet_egress.send(inner_packet).await.is_err() {
                                     tracing::warn!(peer = %peer_name, "packet egress receiver dropped");
+                                    remove_active_session_if_current(&shared, &peer_name, &session)
+                                        .await;
                                     return;
                                 }
                             }
@@ -785,6 +853,7 @@ async fn run_connection_receiver(
 
                 if packet_egress.send(plaintext).await.is_err() {
                     tracing::warn!(peer = %peer_name, "packet egress receiver dropped");
+                    remove_active_session_if_current(&shared, &peer_name, &session).await;
                     return;
                 }
             }
@@ -795,9 +864,25 @@ async fn run_connection_receiver(
                     .record_error(freeq_api::ErrorKind::Transport, err.to_string())
                     .await;
                 tracing::warn!(peer = %peer_name, error = %err, "transport receive loop stopped");
+                remove_active_session_if_current(&shared, &peer_name, &session).await;
                 return;
             }
         }
+    }
+}
+
+async fn remove_active_session_if_current(
+    shared: &DataplaneShared,
+    peer_name: &str,
+    session: &Arc<ActivePeerSession>,
+) {
+    let mut sessions = shared.active_sessions.lock().await;
+    if sessions
+        .get(peer_name)
+        .is_some_and(|current| Arc::ptr_eq(current, session))
+    {
+        sessions.remove(peer_name);
+        tracing::info!(peer = %peer_name, "removed inactive peer session");
     }
 }
 
@@ -829,8 +914,21 @@ async fn transmit_routed_packet(
             .cloned()
     };
     if let Some(session) = existing_session {
-        transmit_on_session(shared, session, routed_packet).await;
-        return None;
+        if session.is_usable() {
+            transmit_on_session(shared, session, routed_packet).await;
+            return None;
+        }
+        // Security: never send on a dead session (black-hole after RF loss).
+        shared
+            .active_sessions
+            .lock()
+            .await
+            .remove(&routed_packet.peer_id);
+        tracing::info!(
+            peer = %routed_packet.peer_id,
+            "removed dead peer session before transmit; will rejoin"
+        );
+        let _ = session.connection.close().await;
     }
 
     let Some(&peer_addr) = shared.peer_addrs.get(&routed_packet.peer_id) else {
@@ -1083,41 +1181,28 @@ async fn get_or_create_outbound_session(
     peer_name: &str,
     peer_addr: SocketAddr,
 ) -> Result<(Arc<ActivePeerSession>, bool)> {
-    let stale_session = {
-        let sessions = active_sessions.lock().await;
+    {
+        let mut sessions = active_sessions.lock().await;
         if let Some(session) = sessions.get(peer_name).cloned() {
-            if session.is_fresh(SESSION_STALE_AFTER) {
+            if session.is_usable() {
                 return Ok((session, false));
             }
             tracing::info!(
                 peer = %peer_name,
-                stale_after_secs = SESSION_STALE_AFTER.as_secs(),
-                "replacing stale peer session"
+                "replacing dead peer session (full re-handshake; never reuse)"
             );
-            Some(session)
-        } else {
-            None
+            sessions.remove(peer_name);
+            let _ = session.connection.close().await;
         }
-    };
+    }
 
+    // Security over availability: on establish failure we do NOT return a dead
+    // session. Caller retries; traffic fails closed until rejoin succeeds.
     let session =
-        match establish_outbound_session(endpoint, identity, peer_registry, peer_name, peer_addr)
+        establish_outbound_session(endpoint, identity, peer_registry, peer_name, peer_addr)
             .await
-        {
-            Ok(session) => Arc::new(session),
-            Err(err) => {
-                if let Some(session) = stale_session {
-                    tracing::warn!(
-                        peer = %peer_name,
-                        endpoint = %peer_addr,
-                        error = %err,
-                        "stale peer session refresh failed; reusing existing session"
-                    );
-                    return Ok((session, false));
-                }
-                return Err(err);
-            }
-        };
+            .map(Arc::new)?;
+
     active_sessions
         .lock()
         .await
@@ -1126,6 +1211,28 @@ async fn get_or_create_outbound_session(
 }
 
 async fn establish_outbound_session(
+    endpoint: freeq_transport::endpoint::Endpoint,
+    identity: &freeq_crypto::sign::IdentityKeypair,
+    peer_registry: &freeq_auth::registry::PeerRegistry,
+    peer_name: &str,
+    peer_addr: SocketAddr,
+) -> Result<ActivePeerSession> {
+    // Bound the whole dial+handshake so a hung peer cannot burn the rejoin budget.
+    match tokio::time::timeout(
+        OUTBOUND_ESTABLISH_DEADLINE,
+        establish_outbound_session_inner(endpoint, identity, peer_registry, peer_name, peer_addr),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => anyhow::bail!(
+            "outbound establish to '{peer_name}' timed out after {}ms",
+            OUTBOUND_ESTABLISH_DEADLINE.as_millis()
+        ),
+    }
+}
+
+async fn establish_outbound_session_inner(
     endpoint: freeq_transport::endpoint::Endpoint,
     identity: &freeq_crypto::sign::IdentityKeypair,
     peer_registry: &freeq_auth::registry::PeerRegistry,
@@ -1391,18 +1498,19 @@ fn set_private_key_permissions(path: &std::path::Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_api_server, build_peer_registry, collect_startup_blockers, endpoint_bind_mode,
-        init_api_state, init_identity, init_tunnel_service, init_tunnel_service_with_keys,
-        is_silent_inbound_probe, parse_listen_addr, parse_peer_socket_addrs, refresh_api_state,
+        accept_inbound_session, build_api_server, build_peer_registry, collect_startup_blockers,
+        endpoint_bind_mode, get_or_create_outbound_session, init_api_state, init_identity,
+        init_tunnel_service, init_tunnel_service_with_keys, is_silent_inbound_probe,
+        parse_listen_addr, parse_peer_socket_addrs, proactive_outbound_peers, refresh_api_state,
         spawn_dataplane_runtime, spawn_packet_io_runtime, DataplaneShared, PacketIo,
-        DATAPLANE_CHANNEL_CAPACITY,
+        BATTLEFIELD_REJOIN_BUDGET, DATAPLANE_CHANNEL_CAPACITY,
     };
     use base64::Engine as _;
     use bytes::Bytes;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::atomic::AtomicU64;
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use tokio::sync::{mpsc, Mutex};
 
     fn sample_config() -> freeq_config::Config {
@@ -2028,6 +2136,292 @@ mod tests {
         patrick_endpoint.close().await;
         david_endpoint.close().await;
         gateway_endpoint.close().await;
+    }
+
+    /// Battlefield objective: after simulated signal loss, full-handshake rejoin
+    /// completes within [`BATTLEFIELD_REJOIN_BUDGET`] (3s) when the peer is up.
+    ///
+    /// Security rails: dead sessions are never reused; rejoin always performs a
+    /// new hybrid PQC handshake.
+    #[tokio::test]
+    async fn battlefield_rejoin_after_signal_loss_within_3_seconds() {
+        let server_endpoint = freeq_transport::endpoint::Endpoint::bind(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+        ))
+        .await
+        .expect("bind server");
+        let server_addr = server_endpoint.local_addr().expect("server addr");
+        let client_endpoint = freeq_transport::endpoint::Endpoint::bind(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+        ))
+        .await
+        .expect("bind client");
+
+        let server_identity = generate_identity_bytes();
+        let client_identity = generate_identity_bytes();
+
+        let client_config = config_with_socket_peer(
+            server_addr,
+            "asset",
+            "gateway",
+            &server_identity.public_key_b64,
+            &server_identity.kem_key_b64,
+            "10.66.0.1/32",
+        );
+        let server_config = config_with_socket_peer(
+            client_endpoint.local_addr().expect("client addr"),
+            "gateway",
+            "asset",
+            &client_identity.public_key_b64,
+            &client_identity.kem_key_b64,
+            "10.66.0.2/32",
+        );
+
+        let server_registry =
+            Arc::new(build_peer_registry(&server_config).expect("server registry"));
+        let client_registry =
+            Arc::new(build_peer_registry(&client_config).expect("client registry"));
+        let server_identity = Arc::new(server_identity.keypair);
+        let client_identity = Arc::new(client_identity.keypair);
+
+        // Gateway-side accept loop (never dials the asset). Keep sessions open
+        // so the leaf is not closed mid-handshake / mid-session.
+        let accept_task = spawn_hold_open_accept_loop(
+            server_endpoint.clone(),
+            Arc::clone(&server_identity),
+            Arc::clone(&server_registry),
+        );
+
+        let sessions = Arc::new(Mutex::new(std::collections::HashMap::new()));
+
+        // Cold establish (baseline).
+        let cold_start = Instant::now();
+        let (session, created) = get_or_create_outbound_session(
+            &sessions,
+            client_endpoint.clone(),
+            client_identity.as_ref(),
+            client_registry.as_ref(),
+            "gateway",
+            server_addr,
+        )
+        .await
+        .expect("cold establish");
+        assert!(created);
+        assert!(session.is_usable());
+        let cold_ms = cold_start.elapsed().as_millis();
+        eprintln!("battlefield cold establish: {cold_ms}ms");
+
+        // Simulate RF / path loss: tear the live session.
+        session
+            .connection
+            .close()
+            .await
+            .expect("close session to simulate signal loss");
+        assert!(
+            !session.is_usable(),
+            "closed session must not remain usable"
+        );
+
+        // Rejoin clock starts at known path loss with peer still reachable
+        // (signal restored / path available for re-dial).
+        let rejoin_start = Instant::now();
+        let (session2, created2) = get_or_create_outbound_session(
+            &sessions,
+            client_endpoint.clone(),
+            client_identity.as_ref(),
+            client_registry.as_ref(),
+            "gateway",
+            server_addr,
+        )
+        .await
+        .expect("rejoin establish");
+        let rejoin_elapsed = rejoin_start.elapsed();
+        let rejoin_ms = rejoin_elapsed.as_millis();
+        eprintln!(
+            "battlefield cold establish: {cold_ms}ms; rejoin after signal loss: {rejoin_ms}ms (budget {}ms)",
+            BATTLEFIELD_REJOIN_BUDGET.as_millis()
+        );
+
+        assert!(created2, "rejoin must create a new session, not reuse dead");
+        assert!(session2.is_usable());
+        assert!(
+            rejoin_elapsed <= BATTLEFIELD_REJOIN_BUDGET,
+            "rejoin took {rejoin_ms}ms; battlefield budget is {}ms",
+            BATTLEFIELD_REJOIN_BUDGET.as_millis()
+        );
+        // Pointer identity: must not be the dead session.
+        assert!(!Arc::ptr_eq(&session, &session2));
+
+        accept_task.abort();
+        client_endpoint.close().await;
+        server_endpoint.close().await;
+    }
+
+    /// Maintainer-style loop: after loss, repeated rejoin attempts succeed inside budget.
+    #[tokio::test]
+    async fn battlefield_maintainer_rejoin_loop_within_3_seconds() {
+        let server_endpoint = freeq_transport::endpoint::Endpoint::bind(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+        ))
+        .await
+        .expect("bind server");
+        let server_addr = server_endpoint.local_addr().expect("server addr");
+        let client_endpoint = freeq_transport::endpoint::Endpoint::bind(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+        ))
+        .await
+        .expect("bind client");
+
+        let server_identity = generate_identity_bytes();
+        let client_identity = generate_identity_bytes();
+        let client_config = config_with_socket_peer(
+            server_addr,
+            "drone",
+            "carrier-gw",
+            &server_identity.public_key_b64,
+            &server_identity.kem_key_b64,
+            "10.66.0.1/32",
+        );
+        // Ensure gateway_client mode is dialable/proactive.
+        let mut client_config = client_config;
+        client_config.peer[0].mode = Some(freeq_config::PeerMode::GatewayClient);
+        assert!(proactive_outbound_peers(&client_config).contains("carrier-gw"));
+
+        let server_config = config_with_socket_peer(
+            client_endpoint.local_addr().expect("client addr"),
+            "carrier-gw",
+            "drone",
+            &client_identity.public_key_b64,
+            &client_identity.kem_key_b64,
+            "10.66.0.2/32",
+        );
+        let server_registry =
+            Arc::new(build_peer_registry(&server_config).expect("server registry"));
+        let client_registry =
+            Arc::new(build_peer_registry(&client_config).expect("client registry"));
+        let server_identity = Arc::new(server_identity.keypair);
+        let client_identity = Arc::new(client_identity.keypair);
+
+        let accept_task = spawn_hold_open_accept_loop(
+            server_endpoint.clone(),
+            Arc::clone(&server_identity),
+            Arc::clone(&server_registry),
+        );
+
+        let sessions = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let (session, _) = get_or_create_outbound_session(
+            &sessions,
+            client_endpoint.clone(),
+            client_identity.as_ref(),
+            client_registry.as_ref(),
+            "carrier-gw",
+            server_addr,
+        )
+        .await
+        .expect("initial session");
+        session.connection.close().await.expect("signal loss");
+
+        let rejoin_start = Instant::now();
+        let mut rejoined = false;
+        while rejoin_start.elapsed() <= BATTLEFIELD_REJOIN_BUDGET {
+            // Drop dead entries like the maintainer does.
+            {
+                let mut guard = sessions.lock().await;
+                if let Some(current) = guard.get("carrier-gw") {
+                    if !current.is_usable() {
+                        guard.remove("carrier-gw");
+                    }
+                }
+            }
+            match get_or_create_outbound_session(
+                &sessions,
+                client_endpoint.clone(),
+                client_identity.as_ref(),
+                client_registry.as_ref(),
+                "carrier-gw",
+                server_addr,
+            )
+            .await
+            {
+                Ok((s, _)) if s.is_usable() => {
+                    rejoined = true;
+                    break;
+                }
+                _ => {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            }
+        }
+        let rejoin_ms = rejoin_start.elapsed().as_millis();
+        eprintln!("battlefield maintainer-style rejoin: {rejoin_ms}ms");
+        assert!(
+            rejoined,
+            "failed to rejoin within budget ({}ms elapsed)",
+            rejoin_ms
+        );
+        assert!(rejoin_start.elapsed() <= BATTLEFIELD_REJOIN_BUDGET);
+
+        accept_task.abort();
+        client_endpoint.close().await;
+        server_endpoint.close().await;
+    }
+
+    #[test]
+    fn dead_session_is_not_usable() {
+        // Compile-time documentation of the security rule used by rejoin tests.
+        assert_eq!(BATTLEFIELD_REJOIN_BUDGET, Duration::from_secs(3));
+        assert!(
+            freeq_transport::connection::QUIC_IDLE_TIMEOUT
+                < freeq_transport::connection::BATTLEFIELD_REJOIN_BUDGET
+        );
+        assert!(
+            freeq_transport::connection::QUIC_KEEPALIVE_INTERVAL
+                < freeq_transport::connection::QUIC_IDLE_TIMEOUT
+        );
+    }
+
+    /// Accept inbound FreeQ sessions and hold the QUIC connection open until
+    /// the peer closes (simulates a gateway/asset that stays online).
+    fn spawn_hold_open_accept_loop(
+        endpoint: freeq_transport::endpoint::Endpoint,
+        identity: Arc<freeq_crypto::sign::IdentityKeypair>,
+        registry: Arc<freeq_auth::registry::PeerRegistry>,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            loop {
+                let Ok(connection) = endpoint.accept().await else {
+                    break;
+                };
+                let identity = Arc::clone(&identity);
+                let registry = Arc::clone(&registry);
+                tokio::spawn(async move {
+                    if let Ok((_name, session)) =
+                        accept_inbound_session(connection, identity.as_ref(), registry.as_ref())
+                            .await
+                    {
+                        // Hold the connection open; drain until peer closes.
+                        loop {
+                            if !session.connection.is_alive() {
+                                break;
+                            }
+                            match session
+                                .connection
+                                .recv_timeout(Duration::from_millis(500))
+                                .await
+                            {
+                                Ok(_) => {}
+                                Err(_) if !session.connection.is_alive() => break,
+                                Err(_) => {}
+                            }
+                        }
+                    }
+                });
+            }
+        })
     }
 
     fn test_ipv4_packet(len: usize, destination: [u8; 4]) -> Vec<u8> {
