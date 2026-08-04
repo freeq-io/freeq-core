@@ -184,6 +184,7 @@ impl SessionTable {
     }
 
     /// Snapshot of currently online node IDs (sorted for stable status).
+    #[allow(dead_code)] // retained for simple status/admin callers
     pub async fn online_nodes(&self) -> Vec<NodeId> {
         let mut nodes: Vec<NodeId> = self.inner.read().await.keys().cloned().collect();
         nodes.sort();

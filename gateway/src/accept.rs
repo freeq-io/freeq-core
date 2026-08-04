@@ -26,7 +26,7 @@
 //!   future code paths accidentally.
 
 use crate::session_table::{ActiveSession, NodeId, SessionTable};
-use crate::status::{GatewayDiagnostics, GatewayState};
+use crate::status::{GatewayDiagnostics, GatewayState, LeafSessionSnapshot};
 use anyhow::Result;
 use base64::Engine as _;
 use bytes::Bytes;
@@ -235,6 +235,7 @@ async fn run_accept_loop(
                                     "handshake concurrency limit reached ({MAX_CONCURRENT_HANDSHAKES}); dropping inbound"
                                 );
                                 tracing::warn!("{reason}");
+                                runtime.diagnostics.inc_handshake_rejected_at_limit();
                                 runtime.diagnostics.inc_handshake_failed();
                                 runtime.diagnostics.record_error(reason).await;
                                 let _ = connection.close().await;
@@ -242,13 +243,16 @@ async fn run_accept_loop(
                             }
                         };
 
+                        runtime.diagnostics.inc_handshake_in_flight();
                         let runtime = Arc::clone(&runtime);
                         tokio::spawn(async move {
                             let _permit = permit;
+                            let diagnostics = Arc::clone(&runtime.diagnostics);
                             if let Err(err) = handle_inbound(runtime, connection).await {
                                 // handle_inbound records metrics itself
                                 let _ = err;
                             }
+                            diagnostics.dec_handshake_in_flight();
                         });
                     }
                     Err(err) => {
@@ -340,7 +344,7 @@ async fn handle_inbound(runtime: Arc<GatewayRuntime>, connection: PeerConnection
     if let Some(previous) = runtime.sessions.insert(node_id.clone(), session).await {
         runtime.diagnostics.inc_session_replaced();
         tracing::info!(
-            peer = %node_id,
+            peer = %log_safe_peer(&node_id),
             previous_generation = previous.generation,
             generation,
             "replaced previous inbound session for leaf"
@@ -349,14 +353,12 @@ async fn handle_inbound(runtime: Arc<GatewayRuntime>, connection: PeerConnection
     }
 
     runtime.diagnostics.inc_session_established();
-    runtime
-        .diagnostics
-        .set_online_nodes(runtime.sessions.online_nodes().await)
-        .await;
+    refresh_session_diagnostics(&runtime).await;
 
     let online = runtime.sessions.len().await;
+    let log_node_id = log_safe_peer(&node_id);
     tracing::info!(
-        peer = %node_id,
+        peer = %log_node_id,
         generation,
         remote = %remote,
         online,
@@ -373,7 +375,7 @@ async fn handle_inbound(runtime: Arc<GatewayRuntime>, connection: PeerConnection
     // Ensure we still watch the generation we just installed.
     if session.generation != generation {
         tracing::info!(
-            peer = %node_id,
+            peer = %log_safe_peer(&node_id),
             expected = generation,
             actual = session.generation,
             "newer session already replaced this one; watcher exiting"
@@ -427,7 +429,7 @@ async fn watch_session(runtime: Arc<GatewayRuntime>, node_id: NodeId, session: A
                     continue;
                 }
                 tracing::info!(
-                    peer = %node_id,
+                    peer = %log_safe_peer(&node_id),
                     generation,
                     error = %err,
                     "leaf session receive ended"
@@ -444,20 +446,17 @@ async fn watch_session(runtime: Arc<GatewayRuntime>, node_id: NodeId, session: A
     {
         let _ = removed.connection.close().await;
         runtime.diagnostics.inc_session_removed();
-        runtime
-            .diagnostics
-            .set_online_nodes(runtime.sessions.online_nodes().await)
-            .await;
+        refresh_session_diagnostics(&runtime).await;
         let online = runtime.sessions.len().await;
         tracing::info!(
-            peer = %node_id,
+            peer = %log_safe_peer(&node_id),
             generation,
             online,
             "leaf session removed (closed or timed out)"
         );
     } else {
         tracing::debug!(
-            peer = %node_id,
+            peer = %log_safe_peer(&node_id),
             generation,
             "session already replaced or removed; stale watcher done"
         );
@@ -477,14 +476,16 @@ async fn forward_leaf_payload(
     ) {
         Ok(payload) => payload,
         Err(err) => {
+            runtime.diagnostics.inc_relay_decrypt_error();
             runtime
                 .diagnostics
                 .record_error(format!(
-                    "failed to decrypt inbound relay payload from {source_node}: {err}"
+                    "failed to decrypt inbound relay payload from {}: {err}",
+                    log_safe_peer(source_node)
                 ))
                 .await;
             tracing::warn!(
-                peer = %source_node,
+                peer = %log_safe_peer(source_node),
                 generation = source_generation,
                 error = %err,
                 "failed to decrypt inbound relay payload"
@@ -494,14 +495,16 @@ async fn forward_leaf_payload(
     };
 
     let Some(envelope) = parse_relay_envelope(&relay_payload) else {
+        runtime.diagnostics.inc_relay_envelope_drop();
         runtime
             .diagnostics
             .record_error(format!(
-                "non-relay payload received from {source_node}; dropped"
+                "non-relay payload received from {}; dropped",
+                log_safe_peer(source_node)
             ))
             .await;
         tracing::warn!(
-            peer = %source_node,
+            peer = %log_safe_peer(source_node),
             generation = source_generation,
             "dropped non-relay payload on gateway leaf session"
         );
@@ -513,6 +516,7 @@ async fn forward_leaf_payload(
         .lookup(IpAddr::V4(envelope.destination))
         .map(str::to_string)
     else {
+        runtime.diagnostics.inc_relay_no_route_drop();
         runtime.diagnostics.inc_remote_leaf_offline_drop();
         runtime
             .diagnostics
@@ -522,7 +526,7 @@ async fn forward_leaf_payload(
             ))
             .await;
         tracing::warn!(
-            peer = %source_node,
+            peer = %log_safe_peer(source_node),
             destination = %envelope.destination,
             "remote leaf offline: no configured route"
         );
@@ -530,15 +534,17 @@ async fn forward_leaf_payload(
     };
 
     if destination_node == source_node {
+        runtime.diagnostics.inc_relay_loop_drop();
         runtime
             .diagnostics
             .record_error(format!(
-                "dropping relay loop from {source_node} to {}",
+                "dropping relay loop from {} to {}",
+                log_safe_peer(source_node),
                 envelope.destination
             ))
             .await;
         tracing::warn!(
-            peer = %source_node,
+            peer = %log_safe_peer(source_node),
             destination = %envelope.destination,
             "dropped relay loop back to source leaf"
         );
@@ -550,12 +556,13 @@ async fn forward_leaf_payload(
         runtime
             .diagnostics
             .record_error(format!(
-                "remote leaf offline: {destination_node} not connected"
+                "remote leaf offline: {} not connected",
+                log_safe_peer(&destination_node)
             ))
             .await;
         tracing::warn!(
-            peer = %source_node,
-            destination_peer = %destination_node,
+            peer = %log_safe_peer(source_node),
+            destination_peer = %log_safe_peer(&destination_node),
             destination = %envelope.destination,
             "remote leaf offline"
         );
@@ -567,12 +574,13 @@ async fn forward_leaf_payload(
         runtime
             .diagnostics
             .record_error(format!(
-                "remote leaf offline: {destination_node} session not alive"
+                "remote leaf offline: {} session not alive",
+                log_safe_peer(&destination_node)
             ))
             .await;
         tracing::warn!(
-            peer = %source_node,
-            destination_peer = %destination_node,
+            peer = %log_safe_peer(source_node),
+            destination_peer = %log_safe_peer(&destination_node),
             destination = %envelope.destination,
             "remote leaf session not alive"
         );
@@ -586,15 +594,17 @@ async fn forward_leaf_payload(
     ) {
         Ok(prepared) => prepared,
         Err(err) => {
+            runtime.diagnostics.inc_relay_prepare_error();
             runtime
                 .diagnostics
                 .record_error(format!(
-                    "failed to prepare relay payload for {destination_node}: {err}"
+                    "failed to prepare relay payload for {}: {err}",
+                    log_safe_peer(&destination_node)
                 ))
                 .await;
             tracing::warn!(
-                peer = %source_node,
-                destination_peer = %destination_node,
+                peer = %log_safe_peer(source_node),
+                destination_peer = %log_safe_peer(&destination_node),
                 error = %err,
                 "failed to prepare outbound relay payload"
             );
@@ -604,15 +614,17 @@ async fn forward_leaf_payload(
 
     for frame in prepared.frames {
         if let Err(err) = destination_session.connection.send(frame).await {
+            runtime.diagnostics.inc_relay_send_error();
             runtime
                 .diagnostics
                 .record_error(format!(
-                    "failed to forward relay payload to {destination_node}: {err}"
+                    "failed to forward relay payload to {}: {err}",
+                    log_safe_peer(&destination_node)
                 ))
                 .await;
             tracing::warn!(
-                peer = %source_node,
-                destination_peer = %destination_node,
+                peer = %log_safe_peer(source_node),
+                destination_peer = %log_safe_peer(&destination_node),
                 error = %err,
                 "failed to forward relay payload"
             );
@@ -620,9 +632,10 @@ async fn forward_leaf_payload(
         }
     }
 
+    runtime.diagnostics.inc_datagram_forwarded();
     tracing::trace!(
-        peer = %source_node,
-        destination_peer = %destination_node,
+        peer = %log_safe_peer(source_node),
+        destination_peer = %log_safe_peer(&destination_node),
         destination = %envelope.destination,
         "forwarded opaque relay payload"
     );
@@ -659,21 +672,15 @@ async fn run_session_reaper(runtime: Arc<GatewayRuntime>, mut shutdown: watch::R
                         runtime.diagnostics.inc_session_reaped();
                         runtime.diagnostics.inc_session_removed();
                         tracing::info!(
-                            peer = %node_id,
+                            peer = %log_safe_peer(node_id),
                             generation,
                             "reaped dead leaf session"
                         );
                     }
-                    runtime
-                        .diagnostics
-                        .set_online_nodes(runtime.sessions.online_nodes().await)
-                        .await;
+                    refresh_session_diagnostics(&runtime).await;
                 } else {
                     // Keep status online_nodes fresh even when no reaps.
-                    runtime
-                        .diagnostics
-                        .set_online_nodes(runtime.sessions.online_nodes().await)
-                        .await;
+                    refresh_session_diagnostics(&runtime).await;
                 }
             }
         }
@@ -820,6 +827,40 @@ pub fn build_peer_registry(config: &freeq_config::Config) -> Result<PeerRegistry
         })?;
     }
     Ok(registry)
+}
+
+async fn refresh_session_diagnostics(runtime: &GatewayRuntime) {
+    let snapshots = runtime
+        .sessions
+        .session_infos()
+        .await
+        .into_iter()
+        .map(|session| LeafSessionSnapshot {
+            node_id: log_safe_peer(&session.node_id),
+            generation: session.generation,
+            age_secs: session.age_secs,
+            idle_secs: session.idle_secs,
+            alive: session.alive,
+        })
+        .collect();
+    runtime
+        .diagnostics
+        .set_online_leaf_sessions(snapshots)
+        .await;
+}
+
+fn log_safe_peer(peer: &str) -> String {
+    let mut escaped = String::with_capacity(peer.len());
+    for ch in peer.chars() {
+        match ch {
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            c if c.is_control() => escaped.push('?'),
+            c => escaped.push(c),
+        }
+    }
+    escaped
 }
 
 #[cfg(test)]

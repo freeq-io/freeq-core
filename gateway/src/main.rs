@@ -124,6 +124,9 @@ async fn main() -> Result<()> {
     let status_addr = parse_optional_status_addr(&args.status_addr)?;
 
     let diagnostics = GatewayDiagnostics::new(
+        env!("CARGO_PKG_VERSION"),
+        build_id(),
+        format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
         config.node.name.clone(),
         listen_addr.to_string(),
         status_addr.map(|a| a.to_string()),
@@ -242,6 +245,13 @@ fn parse_optional_status_addr(value: &str) -> Result<Option<SocketAddr>> {
         );
     }
     Ok(Some(addr))
+}
+
+fn build_id() -> Option<String> {
+    option_env!("FREEQ_BUILD_ID")
+        .or(option_env!("GIT_SHA"))
+        .or(option_env!("VERGEN_GIT_SHA"))
+        .map(str::to_string)
 }
 
 fn build_relay_router(config: &freeq_config::Config) -> Result<freeq_tunnel::router::Router> {
