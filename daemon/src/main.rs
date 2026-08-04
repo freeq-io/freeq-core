@@ -20,6 +20,7 @@ use base64::Engine as _;
 use bytes::Bytes;
 use clap::Parser;
 use ipnetwork::IpNetwork;
+use rand::RngCore;
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 #[cfg(unix)]
@@ -48,6 +49,17 @@ const RELAY_MAGIC: &[u8; 4] = b"FQRL";
 const RELAY_VERSION: u8 = 1;
 const RELAY_HEADER_LEN: usize = 23;
 const RELAY_AAD_CONTEXT: &[u8] = b"freeq-e2e-relay/v1";
+const PAIR_MAGIC: &[u8; 4] = b"FQPK";
+const PAIR_CHUNK_MAGIC: &[u8; 4] = b"FQPC";
+const PAIR_VERSION: u8 = 1;
+const PAIR_TYPE_OFFER: u8 = 1;
+const PAIR_TYPE_ANSWER: u8 = 2;
+const RELAY_PAIR_INTERVAL: Duration = Duration::from_secs(10);
+const RELAY_PAIR_REFRESH_MARGIN: Duration = Duration::from_secs(60);
+const DEFAULT_RELAY_KEY_ROTATION_SECS: u64 = 900;
+const RELAY_PAIR_SIGN_CONTEXT: &[u8] = b"freeq relay pair control v1";
+const RELAY_PAIR_KDF_CONTEXT: &[u8] = b"freeq relay pair key v1";
+const PAIR_CONTROL_CHUNK_SIZE: usize = 900;
 
 /// freeqd — FreeQ post-quantum overlay network daemon.
 #[derive(Parser, Debug)]
@@ -143,7 +155,8 @@ async fn main() -> Result<()> {
     )
     .await?;
     let peer_addrs = parse_peer_socket_addrs(&config)?;
-    let e2e_relay_key = load_e2e_relay_key()?;
+    let e2e_relay_keys = Arc::new(StdMutex::new(load_e2e_relay_key()?));
+    let relay_pair_rotation_secs = relay_pair_rotation_secs(&config);
     let peer_registry = Arc::new(build_peer_registry(&config)?);
     let tun = Arc::new(open_tun_interface(&config).await?);
     let (packet_ingress_tx, packet_ingress_rx) = mpsc::channel(DATAPLANE_CHANNEL_CAPACITY);
@@ -160,12 +173,17 @@ async fn main() -> Result<()> {
         peer_addrs: Arc::new(peer_addrs),
         direct_peer_hosts: Arc::new(direct_peer_hosts(&config)),
         proactive_peer_ids: Arc::new(proactive_gateway_client_peers(&config)),
+        relay_pair_peer_ids: Arc::new(relay_pair_peer_ids(&config)),
         active_sessions: Arc::new(Mutex::new(HashMap::new())),
+        node_name: config.node.name.clone(),
         identity: Arc::new(identity),
         peer_registry,
         api_state: api_state.clone(),
-        e2e_relay_key,
+        e2e_relay_keys,
         e2e_relay_counter: Arc::new(AtomicU64::new(0)),
+        relay_pair_rotation_secs,
+        relay_pair_pending: Arc::new(StdMutex::new(HashMap::new())),
+        relay_pair_chunks: Arc::new(StdMutex::new(HashMap::new())),
     };
     let _dataplane_runtime =
         spawn_dataplane_runtime(dataplane_shared, packet_ingress_rx, packet_egress_tx);
@@ -273,6 +291,7 @@ struct DataplaneRuntime {
     _accept_task: tokio::task::JoinHandle<()>,
     _outbound_task: tokio::task::JoinHandle<()>,
     _egress_task: tokio::task::JoinHandle<()>,
+    _relay_pair_task: tokio::task::JoinHandle<()>,
 }
 
 struct PacketIoRuntime {
@@ -317,6 +336,18 @@ impl ActivePeerSession {
     }
 }
 
+struct RelayKeyState {
+    key: [u8; 32],
+    generation: u64,
+    expires_at: Instant,
+    installed_at: Instant,
+}
+
+struct PendingRelayOffer {
+    secret: freeq_crypto::kem::HybridSecretKey,
+    expires_at: Instant,
+}
+
 #[derive(Clone)]
 struct DataplaneShared {
     endpoint: freeq_transport::endpoint::Endpoint,
@@ -324,21 +355,29 @@ struct DataplaneShared {
     peer_addrs: Arc<HashMap<String, SocketAddr>>,
     direct_peer_hosts: Arc<HashMap<String, IpAddr>>,
     proactive_peer_ids: Arc<HashSet<String>>,
+    relay_pair_peer_ids: Arc<HashSet<String>>,
     active_sessions: Arc<Mutex<HashMap<String, Arc<ActivePeerSession>>>>,
+    node_name: String,
     identity: Arc<freeq_crypto::sign::IdentityKeypair>,
     peer_registry: Arc<freeq_auth::registry::PeerRegistry>,
     api_state: freeq_api::ApiState,
-    e2e_relay_key: Option<[u8; 32]>,
+    e2e_relay_keys: Arc<StdMutex<Option<RelayKeyState>>>,
     e2e_relay_counter: Arc<AtomicU64>,
+    relay_pair_rotation_secs: u64,
+    relay_pair_pending: Arc<StdMutex<HashMap<u64, PendingRelayOffer>>>,
+    relay_pair_chunks: Arc<StdMutex<HashMap<PairChunkKey, PairChunkBuffer>>>,
 }
 
 #[allow(dead_code)]
 fn parse_peer_socket_addrs(config: &freeq_config::Config) -> Result<HashMap<String, SocketAddr>> {
     let mut peers = HashMap::with_capacity(config.peer.len());
     for peer in &config.peer {
-        let endpoint = peer.endpoint.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("peer '{}' is missing a transport endpoint", peer.name)
-        })?;
+        let Some(endpoint) = peer.endpoint.as_ref() else {
+            if peer.is_dialable() {
+                anyhow::bail!("peer '{}' is missing a transport endpoint", peer.name);
+            }
+            continue;
+        };
         let addr = endpoint.parse::<SocketAddr>().map_err(|_| {
             anyhow::anyhow!(
                 "peer '{}' endpoint '{}' must resolve to a concrete socket address until DNS resolution is implemented",
@@ -390,6 +429,15 @@ fn proactive_outbound_peers(config: &freeq_config::Config) -> HashSet<String> {
 /// Backward-compatible name used by existing call sites / tests.
 fn proactive_gateway_client_peers(config: &freeq_config::Config) -> HashSet<String> {
     proactive_outbound_peers(config)
+}
+
+fn relay_pair_peer_ids(config: &freeq_config::Config) -> HashSet<String> {
+    config
+        .peer
+        .iter()
+        .filter(|peer| !peer.is_dialable() && peer.name != config.node.name)
+        .map(|peer| peer.name.clone())
+        .collect()
 }
 
 fn endpoint_bind_mode(
@@ -543,12 +591,15 @@ fn spawn_dataplane_runtime(
         shared.clone(),
         packet_egress.clone(),
     ));
+    let relay_pair_shared = shared.clone();
     let egress_task = tokio::spawn(run_egress_loop(shared, packet_ingress, packet_egress));
+    let relay_pair_task = tokio::spawn(run_relay_pair_manager(relay_pair_shared));
 
     DataplaneRuntime {
         _accept_task: accept_task,
         _outbound_task: outbound_task,
         _egress_task: egress_task,
+        _relay_pair_task: relay_pair_task,
     }
 }
 
@@ -789,8 +840,58 @@ async fn run_connection_receiver(
                     }
                 };
 
+                if is_pair_chunk_packet(&plaintext) {
+                    let handled = match pair_chunk_sender(&plaintext) {
+                        Ok(sender) if sender == peer_name && sender != shared.node_name => {
+                            forward_pair_control_from_source(&shared, &peer_name, &plaintext).await
+                        }
+                        _ => match handle_pair_control_chunk(&shared, &plaintext) {
+                            Ok(Some(control_packet)) => {
+                                handle_pair_control_packet(&shared, &peer_name, &control_packet)
+                                    .await
+                            }
+                            Ok(None) => Ok(()),
+                            Err(err) => Err(err),
+                        },
+                    };
+                    if let Err(err) = handled {
+                        shared
+                            .api_state
+                            .record_error(freeq_api::ErrorKind::Crypto, err.to_string())
+                            .await;
+                        tracing::warn!(
+                            peer = %peer_name,
+                            error = %err,
+                            "relay pair handshake chunk failed"
+                        );
+                    }
+                    continue;
+                }
+
+                if is_pair_control_packet(&plaintext) {
+                    let handled = match pair_control_sender(&plaintext) {
+                        Ok(sender) if sender == peer_name && sender != shared.node_name => {
+                            forward_pair_control_from_source(&shared, &peer_name, &plaintext).await
+                        }
+                        _ => handle_pair_control_packet(&shared, &peer_name, &plaintext).await,
+                    };
+                    if let Err(err) = handled {
+                        shared
+                            .api_state
+                            .record_error(freeq_api::ErrorKind::Crypto, err.to_string())
+                            .await;
+                        tracing::warn!(
+                            peer = %peer_name,
+                            error = %err,
+                            "relay pair handshake control failed"
+                        );
+                    }
+                    continue;
+                }
+
                 if let Some(relay) = parse_relay_envelope(&plaintext) {
-                    if let Some(key) = shared.e2e_relay_key {
+                    let relay_key = current_relay_key(&shared);
+                    if let Some(key) = relay_key {
                         match decrypt_relay_payload(key, relay) {
                             Ok(inner_packet) => {
                                 if packet_egress.send(inner_packet).await.is_err() {
@@ -1027,7 +1128,7 @@ struct RelayEnvelope<'a> {
     ciphertext: &'a [u8],
 }
 
-fn load_e2e_relay_key() -> Result<Option<[u8; 32]>> {
+fn load_e2e_relay_key() -> Result<Option<RelayKeyState>> {
     let Some(value) = std::env::var_os("FREEQ_E2E_RELAY_KEY_B64") else {
         return Ok(None);
     };
@@ -1044,8 +1145,45 @@ fn load_e2e_relay_key() -> Result<Option<[u8; 32]>> {
             bytes.len()
         )
     })?;
-    tracing::info!("end-to-end opaque relay mode enabled");
-    Ok(Some(key))
+    tracing::info!("manual end-to-end opaque relay key enabled");
+    let now = Instant::now();
+    Ok(Some(RelayKeyState {
+        key,
+        generation: 0,
+        expires_at: now + Duration::from_secs(100 * 365 * 24 * 60 * 60),
+        installed_at: now,
+    }))
+}
+
+fn relay_pair_rotation_secs(config: &freeq_config::Config) -> u64 {
+    if let Ok(raw) = std::env::var("FREEQ_RELAY_KEY_ROTATION_SECS") {
+        if let Ok(parsed) = raw.parse::<u64>() {
+            if parsed > 0 {
+                return parsed;
+            }
+        }
+        tracing::warn!(
+            value = %raw,
+            "ignoring invalid FREEQ_RELAY_KEY_ROTATION_SECS; using config/default"
+        );
+    }
+    config
+        .peer
+        .iter()
+        .map(|peer| peer.key_rotation_secs)
+        .min()
+        .filter(|secs| *secs > 0)
+        .unwrap_or(DEFAULT_RELAY_KEY_ROTATION_SECS)
+        .min(DEFAULT_RELAY_KEY_ROTATION_SECS)
+}
+
+fn current_relay_key(shared: &DataplaneShared) -> Option<[u8; 32]> {
+    let guard = shared.e2e_relay_keys.lock().ok()?;
+    let state = guard.as_ref()?;
+    if Instant::now() >= state.expires_at {
+        return None;
+    }
+    Some(state.key)
 }
 
 fn maybe_wrap_e2e_relay_packet(
@@ -1053,7 +1191,7 @@ fn maybe_wrap_e2e_relay_packet(
     peer_id: &str,
     packet: Bytes,
 ) -> Result<Bytes> {
-    let Some(key) = shared.e2e_relay_key else {
+    let Some(key) = current_relay_key(shared) else {
         return Ok(packet);
     };
     if parse_relay_envelope(&packet).is_some() {
@@ -1151,6 +1289,525 @@ fn relay_aad(
     aad.extend_from_slice(&destination.octets());
     aad.extend_from_slice(&plaintext_len.to_be_bytes());
     aad
+}
+
+#[derive(Debug)]
+struct PairControlPacket {
+    msg_type: u8,
+    offer_id: u64,
+    rotation_secs: u64,
+    sender: String,
+    identity_pubkey: Vec<u8>,
+    material: Vec<u8>,
+    signature: Vec<u8>,
+    signed_body: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct PairChunkKey {
+    sender: String,
+    msg_type: u8,
+    offer_id: u64,
+}
+
+struct PairChunkBuffer {
+    chunks: Vec<Option<Vec<u8>>>,
+}
+
+fn is_pair_control_packet(packet: &[u8]) -> bool {
+    packet.len() >= 5 && &packet[0..4] == PAIR_MAGIC && packet[4] == PAIR_VERSION
+}
+
+fn is_pair_chunk_packet(packet: &[u8]) -> bool {
+    packet.len() >= 5 && &packet[0..4] == PAIR_CHUNK_MAGIC && packet[4] == PAIR_VERSION
+}
+
+async fn run_relay_pair_manager(shared: DataplaneShared) {
+    let mut tick = tokio::time::interval(RELAY_PAIR_INTERVAL);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tick.tick().await;
+        if let Err(err) = maybe_start_relay_pair_handshake(&shared).await {
+            shared
+                .api_state
+                .record_error(freeq_api::ErrorKind::Crypto, err.to_string())
+                .await;
+            tracing::warn!(error = %err, "relay pair handshake tick failed");
+        }
+    }
+}
+
+async fn maybe_start_relay_pair_handshake(shared: &DataplaneShared) -> Result<()> {
+    if !should_initiate_relay_pair(shared) {
+        return Ok(());
+    }
+    if !relay_key_needs_refresh(shared) {
+        return Ok(());
+    }
+    let sessions = shared.active_sessions.lock().await;
+    for (peer_name, session) in sessions.iter() {
+        if !session.is_usable() || !shared.proactive_peer_ids.contains(peer_name) {
+            continue;
+        }
+        let packet = build_pair_offer(shared)?;
+        transmit_control_on_session(shared, Arc::clone(session), peer_name, Bytes::from(packet))
+            .await?;
+        tracing::info!(
+            gateway = %peer_name,
+            rotation_secs = shared.relay_pair_rotation_secs,
+            "relay pair key offer sent"
+        );
+    }
+    Ok(())
+}
+
+fn should_initiate_relay_pair(shared: &DataplaneShared) -> bool {
+    shared
+        .relay_pair_peer_ids
+        .iter()
+        .any(|peer| shared.node_name.as_str() < peer.as_str())
+}
+
+fn relay_key_needs_refresh(shared: &DataplaneShared) -> bool {
+    let Ok(guard) = shared.e2e_relay_keys.lock() else {
+        return true;
+    };
+    match guard.as_ref() {
+        Some(state) => {
+            let refresh_at = state
+                .expires_at
+                .checked_sub(RELAY_PAIR_REFRESH_MARGIN)
+                .unwrap_or(state.installed_at);
+            Instant::now() >= refresh_at
+        }
+        None => true,
+    }
+}
+
+fn build_pair_offer(shared: &DataplaneShared) -> Result<Vec<u8>> {
+    let mut rng = rand::thread_rng();
+    let offer_id = rng.next_u64();
+    let (secret, public) = freeq_crypto::kem::HybridSecretKey::generate(&mut rng)?;
+    let expires_at = Instant::now() + Duration::from_secs(shared.relay_pair_rotation_secs);
+    shared
+        .relay_pair_pending
+        .lock()
+        .map_err(|_| anyhow::anyhow!("relay pair pending-offer lock poisoned"))?
+        .insert(offer_id, PendingRelayOffer { secret, expires_at });
+    encode_pair_control_packet(
+        PAIR_TYPE_OFFER,
+        offer_id,
+        shared.relay_pair_rotation_secs,
+        shared.node_name.clone(),
+        shared.identity.public_key().to_bytes(),
+        public.to_bytes(),
+        shared.identity.as_ref(),
+    )
+}
+
+async fn handle_pair_control_packet(
+    shared: &DataplaneShared,
+    transport_peer: &str,
+    packet: &[u8],
+) -> Result<()> {
+    let control = parse_pair_control_packet(packet)?;
+    if control.sender == shared.node_name {
+        return Ok(());
+    }
+    verify_pair_control_signature(shared, &control)?;
+    match control.msg_type {
+        PAIR_TYPE_OFFER => handle_pair_offer(shared, transport_peer, control).await,
+        PAIR_TYPE_ANSWER => handle_pair_answer(shared, control).await,
+        _ => anyhow::bail!(
+            "unknown relay pair control message type {}",
+            control.msg_type
+        ),
+    }
+}
+
+async fn forward_pair_control_from_source(
+    shared: &DataplaneShared,
+    source_peer: &str,
+    packet: &[u8],
+) -> Result<()> {
+    let sessions = shared.active_sessions.lock().await;
+    let mut forwarded = 0usize;
+    for (peer_name, session) in sessions.iter() {
+        if peer_name == source_peer || !session.is_usable() {
+            continue;
+        }
+        let prepared = shared
+            .tunnel_service
+            .prepare_payload_for_peer_with_session(
+                peer_name.clone(),
+                Bytes::copy_from_slice(packet),
+                &session.outbound_key,
+            )?;
+        for frame in prepared.frames {
+            session.connection.send(frame).await?;
+        }
+        forwarded += 1;
+    }
+    if forwarded == 0 {
+        anyhow::bail!("relay pair control from '{source_peer}' had no online destination peer");
+    }
+    tracing::info!(
+        peer = %source_peer,
+        destinations = forwarded,
+        "forwarded relay pair control packet"
+    );
+    Ok(())
+}
+
+async fn handle_pair_offer(
+    shared: &DataplaneShared,
+    transport_peer: &str,
+    offer: PairControlPacket,
+) -> Result<()> {
+    let public = freeq_crypto::kem::HybridPublicKey::from_bytes(&offer.material)?;
+    let session_info = relay_pair_session_info(&offer.sender, &shared.node_name, offer.offer_id);
+    let (shared_secret, ciphertext) = {
+        let mut rng = rand::thread_rng();
+        freeq_crypto::kem::hybrid_encapsulate(
+            &public.x25519_public_key(),
+            public.mlkem_public_key(),
+            &session_info,
+            &mut rng,
+        )?
+    };
+    install_relay_pair_key(
+        shared,
+        &offer.sender,
+        offer.offer_id,
+        offer.rotation_secs,
+        shared_secret.session_key,
+    )?;
+    let answer = encode_pair_control_packet(
+        PAIR_TYPE_ANSWER,
+        offer.offer_id,
+        offer.rotation_secs,
+        shared.node_name.clone(),
+        shared.identity.public_key().to_bytes(),
+        ciphertext.to_bytes(),
+        shared.identity.as_ref(),
+    )?;
+    let session = {
+        shared
+            .active_sessions
+            .lock()
+            .await
+            .get(transport_peer)
+            .cloned()
+    }
+    .ok_or_else(|| anyhow::anyhow!("missing transport session for relay pair answer"))?;
+    transmit_control_on_session(shared, session, transport_peer, Bytes::from(answer)).await?;
+    tracing::info!(
+        peer = %offer.sender,
+        gateway = %transport_peer,
+        rotation_secs = offer.rotation_secs,
+        "relay pair answer sent and key installed"
+    );
+    Ok(())
+}
+
+async fn handle_pair_answer(shared: &DataplaneShared, answer: PairControlPacket) -> Result<()> {
+    let pending = shared
+        .relay_pair_pending
+        .lock()
+        .map_err(|_| anyhow::anyhow!("relay pair pending-offer lock poisoned"))?
+        .remove(&answer.offer_id)
+        .ok_or_else(|| anyhow::anyhow!("relay pair answer had no pending offer"))?;
+    if Instant::now() >= pending.expires_at {
+        anyhow::bail!("relay pair answer arrived after pending offer expired");
+    }
+    let ciphertext = freeq_crypto::kem::HybridCiphertext::from_bytes(&answer.material)?;
+    let secret_bytes = pending.secret.to_bytes();
+    let x25519_secret: [u8; 32] = secret_bytes[..32]
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("invalid pending X25519 secret"))?;
+    let session_info = relay_pair_session_info(&shared.node_name, &answer.sender, answer.offer_id);
+    let shared_secret = freeq_crypto::kem::hybrid_decapsulate(
+        &ciphertext,
+        &x25519_secret,
+        &secret_bytes[32..],
+        &session_info,
+    )?;
+    install_relay_pair_key(
+        shared,
+        &answer.sender,
+        answer.offer_id,
+        answer.rotation_secs,
+        shared_secret.session_key,
+    )?;
+    tracing::info!(
+        peer = %answer.sender,
+        rotation_secs = answer.rotation_secs,
+        "relay pair key installed from answer"
+    );
+    Ok(())
+}
+
+fn verify_pair_control_signature(
+    shared: &DataplaneShared,
+    control: &PairControlPacket,
+) -> Result<()> {
+    let pinned_key = shared
+        .peer_registry
+        .get_peer(&control.sender)
+        .map(|peer| peer.identity_pubkey.as_slice());
+    let expected = pinned_key.unwrap_or(control.identity_pubkey.as_slice());
+    if pinned_key.is_none() {
+        anyhow::bail!(
+            "relay pair peer '{}' is not in the local registry; refusing unauthenticated pair",
+            control.sender
+        );
+    }
+    if expected != control.identity_pubkey.as_slice() {
+        anyhow::bail!("relay pair identity mismatch for '{}'", control.sender);
+    }
+    let public_key = freeq_crypto::sign::IdentityPublicKey::from_bytes(expected)?;
+    public_key.verify_message(
+        &pair_signature_message(&control.signed_body),
+        &freeq_crypto::sign::Signature(control.signature.clone()),
+    )?;
+    Ok(())
+}
+
+fn install_relay_pair_key(
+    shared: &DataplaneShared,
+    peer_name: &str,
+    offer_id: u64,
+    rotation_secs: u64,
+    session_key: [u8; 32],
+) -> Result<()> {
+    let key = freeq_crypto::kdf::hkdf_sha256(
+        Some(RELAY_PAIR_KDF_CONTEXT),
+        &session_key,
+        &relay_pair_session_info(&shared.node_name, peer_name, offer_id),
+    )?;
+    let now = Instant::now();
+    let ttl = rotation_secs
+        .max(60)
+        .min(shared.relay_pair_rotation_secs.max(60));
+    let mut guard = shared
+        .e2e_relay_keys
+        .lock()
+        .map_err(|_| anyhow::anyhow!("relay key lock poisoned"))?;
+    let generation = guard
+        .as_ref()
+        .map(|state| state.generation + 1)
+        .unwrap_or(1);
+    *guard = Some(RelayKeyState {
+        key,
+        generation,
+        expires_at: now + Duration::from_secs(ttl),
+        installed_at: now,
+    });
+    Ok(())
+}
+
+async fn transmit_control_on_session(
+    shared: &DataplaneShared,
+    session: Arc<ActivePeerSession>,
+    peer_id: &str,
+    packet: Bytes,
+) -> Result<()> {
+    for control_packet in chunk_pair_control_packet(packet.as_ref())? {
+        let prepared = shared
+            .tunnel_service
+            .prepare_payload_for_peer_with_session(
+                peer_id.to_string(),
+                control_packet,
+                &session.outbound_key,
+            )?;
+        for frame in prepared.frames {
+            session.connection.send(frame).await?;
+        }
+    }
+    Ok(())
+}
+
+fn chunk_pair_control_packet(packet: &[u8]) -> Result<Vec<Bytes>> {
+    if packet.len() <= PAIR_CONTROL_CHUNK_SIZE {
+        return Ok(vec![Bytes::copy_from_slice(packet)]);
+    }
+    let control = parse_pair_control_packet(packet)?;
+    let total = packet.len().div_ceil(PAIR_CONTROL_CHUNK_SIZE);
+    let total_u16 = u16::try_from(total).map_err(|_| anyhow::anyhow!("too many pair chunks"))?;
+    let mut chunks = Vec::with_capacity(total);
+    for (index, chunk) in packet.chunks(PAIR_CONTROL_CHUNK_SIZE).enumerate() {
+        let mut out = Vec::with_capacity(32 + control.sender.len() + chunk.len());
+        out.extend_from_slice(PAIR_CHUNK_MAGIC);
+        out.push(PAIR_VERSION);
+        out.push(control.msg_type);
+        out.extend_from_slice(&control.offer_id.to_be_bytes());
+        out.extend_from_slice(&total_u16.to_be_bytes());
+        out.extend_from_slice(
+            &u16::try_from(index)
+                .map_err(|_| anyhow::anyhow!("pair chunk index overflow"))?
+                .to_be_bytes(),
+        );
+        push_len_bytes(&mut out, control.sender.as_bytes())?;
+        out.extend_from_slice(chunk);
+        chunks.push(Bytes::from(out));
+    }
+    Ok(chunks)
+}
+
+fn handle_pair_control_chunk(shared: &DataplaneShared, packet: &[u8]) -> Result<Option<Vec<u8>>> {
+    let (key, total, index, chunk) = parse_pair_control_chunk(packet)?;
+    let mut guard = shared
+        .relay_pair_chunks
+        .lock()
+        .map_err(|_| anyhow::anyhow!("relay pair chunk lock poisoned"))?;
+    let buffer = guard.entry(key.clone()).or_insert_with(|| PairChunkBuffer {
+        chunks: vec![None; usize::from(total)],
+    });
+    if buffer.chunks.len() != usize::from(total) {
+        anyhow::bail!("relay pair chunk total changed mid-message");
+    }
+    buffer.chunks[usize::from(index)] = Some(chunk.to_vec());
+    if buffer.chunks.iter().any(Option::is_none) {
+        return Ok(None);
+    }
+    let mut full = Vec::new();
+    for chunk in &buffer.chunks {
+        let Some(chunk) = chunk.as_ref() else {
+            anyhow::bail!("relay pair chunk missing after completeness check");
+        };
+        full.extend_from_slice(chunk);
+    }
+    guard.remove(&key);
+    Ok(Some(full))
+}
+
+fn parse_pair_control_chunk(packet: &[u8]) -> Result<(PairChunkKey, u16, u16, &[u8])> {
+    if packet.len() < 20 || !is_pair_chunk_packet(packet) {
+        anyhow::bail!("invalid relay pair chunk packet");
+    }
+    let msg_type = packet[5];
+    let offer_id = u64::from_be_bytes(packet[6..14].try_into()?);
+    let total = u16::from_be_bytes(packet[14..16].try_into()?);
+    let index = u16::from_be_bytes(packet[16..18].try_into()?);
+    if total == 0 || index >= total {
+        anyhow::bail!("invalid relay pair chunk index");
+    }
+    let mut offset = 18;
+    let sender = std::str::from_utf8(take_len_bytes(packet, &mut offset)?)?.to_string();
+    Ok((
+        PairChunkKey {
+            sender,
+            msg_type,
+            offer_id,
+        },
+        total,
+        index,
+        &packet[offset..],
+    ))
+}
+
+fn encode_pair_control_packet(
+    msg_type: u8,
+    offer_id: u64,
+    rotation_secs: u64,
+    sender: String,
+    identity_pubkey: Vec<u8>,
+    material: Vec<u8>,
+    identity: &freeq_crypto::sign::IdentityKeypair,
+) -> Result<Vec<u8>> {
+    let mut body = Vec::new();
+    body.extend_from_slice(PAIR_MAGIC);
+    body.push(PAIR_VERSION);
+    body.push(msg_type);
+    body.extend_from_slice(&offer_id.to_be_bytes());
+    body.extend_from_slice(&rotation_secs.to_be_bytes());
+    push_len_bytes(&mut body, sender.as_bytes())?;
+    push_len_bytes(&mut body, &identity_pubkey)?;
+    push_len_bytes(&mut body, &material)?;
+    let signature = identity.sign_message(&pair_signature_message(&body))?.0;
+    push_len_bytes(&mut body, &signature)?;
+    Ok(body)
+}
+
+fn parse_pair_control_packet(packet: &[u8]) -> Result<PairControlPacket> {
+    if packet.len() < 22 || &packet[0..4] != PAIR_MAGIC || packet[4] != PAIR_VERSION {
+        anyhow::bail!("invalid relay pair control packet");
+    }
+    let msg_type = packet[5];
+    let offer_id = u64::from_be_bytes(packet[6..14].try_into()?);
+    let rotation_secs = u64::from_be_bytes(packet[14..22].try_into()?);
+    let mut offset = 22;
+    let sender_bytes = take_len_bytes(packet, &mut offset)?;
+    let identity_pubkey = take_len_bytes(packet, &mut offset)?.to_vec();
+    let material = take_len_bytes(packet, &mut offset)?.to_vec();
+    let signed_body = packet[..offset].to_vec();
+    let signature = take_len_bytes(packet, &mut offset)?.to_vec();
+    if offset != packet.len() {
+        anyhow::bail!("relay pair control packet had trailing bytes");
+    }
+    let sender = std::str::from_utf8(sender_bytes)?.to_string();
+    Ok(PairControlPacket {
+        msg_type,
+        offer_id,
+        rotation_secs,
+        sender,
+        identity_pubkey,
+        material,
+        signature,
+        signed_body,
+    })
+}
+
+fn pair_control_sender(packet: &[u8]) -> Result<String> {
+    let control = parse_pair_control_packet(packet)?;
+    Ok(control.sender)
+}
+
+fn pair_chunk_sender(packet: &[u8]) -> Result<String> {
+    let (key, _, _, _) = parse_pair_control_chunk(packet)?;
+    Ok(key.sender)
+}
+
+fn push_len_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Result<()> {
+    let len = u16::try_from(bytes.len()).map_err(|_| anyhow::anyhow!("field too large"))?;
+    out.extend_from_slice(&len.to_be_bytes());
+    out.extend_from_slice(bytes);
+    Ok(())
+}
+
+fn take_len_bytes<'a>(packet: &'a [u8], offset: &mut usize) -> Result<&'a [u8]> {
+    if packet.len().saturating_sub(*offset) < 2 {
+        anyhow::bail!("truncated relay pair field length");
+    }
+    let len = u16::from_be_bytes(packet[*offset..*offset + 2].try_into()?);
+    *offset += 2;
+    let end = *offset + usize::from(len);
+    if end > packet.len() {
+        anyhow::bail!("truncated relay pair field");
+    }
+    let bytes = &packet[*offset..end];
+    *offset = end;
+    Ok(bytes)
+}
+
+fn pair_signature_message(body: &[u8]) -> Vec<u8> {
+    let mut msg = Vec::with_capacity(RELAY_PAIR_SIGN_CONTEXT.len() + body.len());
+    msg.extend_from_slice(RELAY_PAIR_SIGN_CONTEXT);
+    msg.extend_from_slice(body);
+    msg
+}
+
+fn relay_pair_session_info(left: &str, right: &str, offer_id: u64) -> Vec<u8> {
+    let mut names = [left, right];
+    names.sort_unstable();
+    let mut info = Vec::with_capacity(RELAY_PAIR_KDF_CONTEXT.len() + left.len() + right.len() + 16);
+    info.extend_from_slice(RELAY_PAIR_KDF_CONTEXT);
+    info.extend_from_slice(names[0].as_bytes());
+    info.push(0);
+    info.extend_from_slice(names[1].as_bytes());
+    info.push(0);
+    info.extend_from_slice(&offer_id.to_be_bytes());
+    info
 }
 
 struct RoutedPacket {
@@ -1499,19 +2156,36 @@ fn set_private_key_permissions(path: &std::path::Path) -> Result<()> {
 mod tests {
     use super::{
         accept_inbound_session, build_api_server, build_peer_registry, collect_startup_blockers,
-        endpoint_bind_mode, get_or_create_outbound_session, init_api_state, init_identity,
-        init_tunnel_service, init_tunnel_service_with_keys, is_silent_inbound_probe,
+        current_relay_key, endpoint_bind_mode, get_or_create_outbound_session, init_api_state,
+        init_identity, init_tunnel_service, init_tunnel_service_with_keys, is_silent_inbound_probe,
         parse_listen_addr, parse_peer_socket_addrs, proactive_outbound_peers, refresh_api_state,
-        spawn_dataplane_runtime, spawn_packet_io_runtime, DataplaneShared, PacketIo,
-        BATTLEFIELD_REJOIN_BUDGET, DATAPLANE_CHANNEL_CAPACITY,
+        spawn_dataplane_runtime, spawn_packet_io_runtime, DataplaneShared, PacketIo, RelayKeyState,
+        BATTLEFIELD_REJOIN_BUDGET, DATAPLANE_CHANNEL_CAPACITY, DEFAULT_RELAY_KEY_ROTATION_SECS,
     };
     use base64::Engine as _;
     use bytes::Bytes;
+    use std::collections::HashMap;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::atomic::AtomicU64;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex as StdMutex};
     use std::time::{Duration, Instant};
     use tokio::sync::{mpsc, Mutex};
+
+    fn test_relay_key_state(key: Option<[u8; 32]>) -> Arc<StdMutex<Option<RelayKeyState>>> {
+        Arc::new(StdMutex::new(key.map(|key| {
+            let now = Instant::now();
+            RelayKeyState {
+                key,
+                generation: 1,
+                expires_at: now + Duration::from_secs(3600),
+                installed_at: now,
+            }
+        })))
+    }
+
+    fn test_pair_chunks() -> Arc<StdMutex<HashMap<super::PairChunkKey, super::PairChunkBuffer>>> {
+        Arc::new(StdMutex::new(HashMap::new()))
+    }
 
     fn sample_config() -> freeq_config::Config {
         let peer_identity = generate_identity_bytes();
@@ -1816,14 +2490,19 @@ mod tests {
                 ),
                 direct_peer_hosts: Arc::new(crate::direct_peer_hosts(&sender_config)),
                 proactive_peer_ids: Arc::new(crate::proactive_gateway_client_peers(&sender_config)),
+                relay_pair_peer_ids: Arc::new(crate::relay_pair_peer_ids(&sender_config)),
                 active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+                node_name: "sender".into(),
                 identity: Arc::new(sender_identity.keypair),
                 peer_registry: Arc::new(
                     build_peer_registry(&sender_config).expect("sender registry"),
                 ),
                 api_state: sender_state.clone(),
-                e2e_relay_key: None,
+                e2e_relay_keys: test_relay_key_state(None),
                 e2e_relay_counter: Arc::new(AtomicU64::new(0)),
+                relay_pair_rotation_secs: DEFAULT_RELAY_KEY_ROTATION_SECS,
+                relay_pair_pending: Arc::new(StdMutex::new(HashMap::new())),
+                relay_pair_chunks: test_pair_chunks(),
             },
             sender_tun_rx,
             sender_out_tx,
@@ -1839,14 +2518,19 @@ mod tests {
                 proactive_peer_ids: Arc::new(crate::proactive_gateway_client_peers(
                     &receiver_config,
                 )),
+                relay_pair_peer_ids: Arc::new(crate::relay_pair_peer_ids(&receiver_config)),
                 active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+                node_name: "receiver".into(),
                 identity: Arc::new(receiver_identity.keypair),
                 peer_registry: Arc::new(
                     build_peer_registry(&receiver_config).expect("receiver registry"),
                 ),
                 api_state: receiver_state.clone(),
-                e2e_relay_key: None,
+                e2e_relay_keys: test_relay_key_state(None),
                 e2e_relay_counter: Arc::new(AtomicU64::new(0)),
+                relay_pair_rotation_secs: DEFAULT_RELAY_KEY_ROTATION_SECS,
+                relay_pair_pending: Arc::new(StdMutex::new(HashMap::new())),
+                relay_pair_chunks: test_pair_chunks(),
             },
             receiver_in_rx,
             receiver_tun_tx,
@@ -2018,14 +2702,19 @@ mod tests {
                 proactive_peer_ids: Arc::new(crate::proactive_gateway_client_peers(
                     &patrick_config,
                 )),
+                relay_pair_peer_ids: Arc::new(crate::relay_pair_peer_ids(&patrick_config)),
                 active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+                node_name: "patrick".into(),
                 identity: Arc::new(patrick_identity.keypair),
                 peer_registry: Arc::new(
                     build_peer_registry(&patrick_config).expect("patrick registry"),
                 ),
                 api_state: patrick_state.clone(),
-                e2e_relay_key: Some(relay_key),
+                e2e_relay_keys: test_relay_key_state(Some(relay_key)),
                 e2e_relay_counter: Arc::new(AtomicU64::new(0)),
+                relay_pair_rotation_secs: DEFAULT_RELAY_KEY_ROTATION_SECS,
+                relay_pair_pending: Arc::new(StdMutex::new(HashMap::new())),
+                relay_pair_chunks: test_pair_chunks(),
             },
             patrick_tun_rx,
             patrick_out_tx,
@@ -2037,14 +2726,19 @@ mod tests {
                 peer_addrs: Arc::new(parse_peer_socket_addrs(&david_config).expect("david peers")),
                 direct_peer_hosts: Arc::new(crate::direct_peer_hosts(&david_config)),
                 proactive_peer_ids: Arc::new(crate::proactive_gateway_client_peers(&david_config)),
+                relay_pair_peer_ids: Arc::new(crate::relay_pair_peer_ids(&david_config)),
                 active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+                node_name: "david".into(),
                 identity: Arc::new(david_identity.keypair),
                 peer_registry: Arc::new(
                     build_peer_registry(&david_config).expect("david registry"),
                 ),
                 api_state: david_state.clone(),
-                e2e_relay_key: Some(relay_key),
+                e2e_relay_keys: test_relay_key_state(Some(relay_key)),
                 e2e_relay_counter: Arc::new(AtomicU64::new(0)),
+                relay_pair_rotation_secs: DEFAULT_RELAY_KEY_ROTATION_SECS,
+                relay_pair_pending: Arc::new(StdMutex::new(HashMap::new())),
+                relay_pair_chunks: test_pair_chunks(),
             },
             david_tun_rx,
             david_out_tx,
@@ -2060,14 +2754,19 @@ mod tests {
                 proactive_peer_ids: Arc::new(crate::proactive_gateway_client_peers(
                     &gateway_config,
                 )),
+                relay_pair_peer_ids: Arc::new(crate::relay_pair_peer_ids(&gateway_config)),
                 active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+                node_name: "gateway".into(),
                 identity: Arc::new(gateway_identity.keypair),
                 peer_registry: Arc::new(
                     build_peer_registry(&gateway_config).expect("gateway registry"),
                 ),
                 api_state: gateway_state.clone(),
-                e2e_relay_key: None,
+                e2e_relay_keys: test_relay_key_state(None),
                 e2e_relay_counter: Arc::new(AtomicU64::new(0)),
+                relay_pair_rotation_secs: DEFAULT_RELAY_KEY_ROTATION_SECS,
+                relay_pair_pending: Arc::new(StdMutex::new(HashMap::new())),
+                relay_pair_chunks: test_pair_chunks(),
             },
             gateway_tun_rx,
             gateway_out_tx,
@@ -2132,6 +2831,248 @@ mod tests {
         refresh_api_state(&gateway_state, gateway_service.as_ref()).await;
         let gateway_snapshot = gateway_state.snapshot().await;
         assert_eq!(gateway_snapshot.tunnel.route_misses, 0);
+
+        patrick_endpoint.close().await;
+        david_endpoint.close().await;
+        gateway_endpoint.close().await;
+    }
+
+    #[tokio::test]
+    async fn dataplane_runtime_auto_pairs_relay_key_through_gateway() {
+        let gateway_endpoint = freeq_transport::endpoint::Endpoint::bind(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+        ))
+        .await
+        .expect("bind gateway endpoint");
+        let patrick_endpoint = freeq_transport::endpoint::Endpoint::bind(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+        ))
+        .await
+        .expect("bind patrick endpoint");
+        let david_endpoint = freeq_transport::endpoint::Endpoint::bind(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+        ))
+        .await
+        .expect("bind david endpoint");
+
+        let gateway_identity = generate_identity_bytes();
+        let patrick_identity = generate_identity_bytes();
+        let david_identity = generate_identity_bytes();
+        let gateway_addr = gateway_endpoint.local_addr().expect("gateway addr");
+
+        let mut patrick_config = config_with_socket_peer_allowed_ips(
+            gateway_addr,
+            "patrick",
+            "gateway",
+            &gateway_identity.public_key_b64,
+            &gateway_identity.kem_key_b64,
+            &["10.0.0.254/32", "10.0.0.2/32"],
+        );
+        patrick_config.peer[0].mode = Some(freeq_config::PeerMode::GatewayClient);
+        patrick_config.peer[0].key_rotation_secs = 900;
+        patrick_config.peer.push(freeq_config::PeerConfig {
+            name: "david".into(),
+            public_key: david_identity.public_key_b64.clone(),
+            kem_key: david_identity.kem_key_b64.clone(),
+            endpoint: None,
+            mode: Some(freeq_config::PeerMode::RelayLeaf),
+            allowed_ips: Vec::new(),
+            key_rotation_secs: 900,
+        });
+
+        let mut david_config = config_with_socket_peer_allowed_ips(
+            gateway_addr,
+            "david",
+            "gateway",
+            &gateway_identity.public_key_b64,
+            &gateway_identity.kem_key_b64,
+            &["10.0.0.254/32", "10.0.0.1/32"],
+        );
+        david_config.peer[0].mode = Some(freeq_config::PeerMode::GatewayClient);
+        david_config.peer[0].key_rotation_secs = 900;
+        david_config.peer.push(freeq_config::PeerConfig {
+            name: "patrick".into(),
+            public_key: patrick_identity.public_key_b64.clone(),
+            kem_key: patrick_identity.kem_key_b64.clone(),
+            endpoint: None,
+            mode: Some(freeq_config::PeerMode::RelayLeaf),
+            allowed_ips: Vec::new(),
+            key_rotation_secs: 900,
+        });
+
+        let gateway_config = gateway_config_with_two_peers(
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)), 51820),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 11)), 51820),
+            &patrick_identity,
+            &david_identity,
+        );
+
+        let shared_keys =
+            freeq_crypto::FreeQKeyPair::generate_ephemeral_test_pair().expect("shared tunnel keys");
+        let patrick_service = Arc::new(
+            init_tunnel_service_with_keys(&patrick_config, shared_keys.clone())
+                .expect("patrick tunnel"),
+        );
+        let david_service = Arc::new(
+            init_tunnel_service_with_keys(&david_config, shared_keys.clone())
+                .expect("david tunnel"),
+        );
+        let gateway_service = Arc::new(
+            init_tunnel_service_with_keys(&gateway_config, shared_keys).expect("gateway tunnel"),
+        );
+
+        let patrick_state = init_api_state(&patrick_config, patrick_service.as_ref()).await;
+        let david_state = init_api_state(&david_config, david_service.as_ref()).await;
+        let gateway_state = init_api_state(&gateway_config, gateway_service.as_ref()).await;
+
+        let (patrick_tun_tx, patrick_tun_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
+        let (patrick_out_tx, mut patrick_out_rx) =
+            mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
+        let (_david_tun_tx, david_tun_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
+        let (david_out_tx, mut david_out_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
+        let (_gateway_tun_tx, gateway_tun_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
+        let (gateway_out_tx, mut gateway_out_rx) =
+            mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
+
+        let patrick_shared = DataplaneShared {
+            endpoint: patrick_endpoint.clone(),
+            tunnel_service: Arc::clone(&patrick_service),
+            peer_addrs: Arc::new(parse_peer_socket_addrs(&patrick_config).expect("patrick peers")),
+            direct_peer_hosts: Arc::new(crate::direct_peer_hosts(&patrick_config)),
+            proactive_peer_ids: Arc::new(crate::proactive_gateway_client_peers(&patrick_config)),
+            relay_pair_peer_ids: Arc::new(crate::relay_pair_peer_ids(&patrick_config)),
+            active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            node_name: "patrick".into(),
+            identity: Arc::new(patrick_identity.keypair),
+            peer_registry: Arc::new(
+                build_peer_registry(&patrick_config).expect("patrick registry"),
+            ),
+            api_state: patrick_state.clone(),
+            e2e_relay_keys: test_relay_key_state(None),
+            e2e_relay_counter: Arc::new(AtomicU64::new(0)),
+            relay_pair_rotation_secs: 900,
+            relay_pair_pending: Arc::new(StdMutex::new(HashMap::new())),
+            relay_pair_chunks: test_pair_chunks(),
+        };
+        let david_shared = DataplaneShared {
+            endpoint: david_endpoint.clone(),
+            tunnel_service: Arc::clone(&david_service),
+            peer_addrs: Arc::new(parse_peer_socket_addrs(&david_config).expect("david peers")),
+            direct_peer_hosts: Arc::new(crate::direct_peer_hosts(&david_config)),
+            proactive_peer_ids: Arc::new(crate::proactive_gateway_client_peers(&david_config)),
+            relay_pair_peer_ids: Arc::new(crate::relay_pair_peer_ids(&david_config)),
+            active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            node_name: "david".into(),
+            identity: Arc::new(david_identity.keypair),
+            peer_registry: Arc::new(build_peer_registry(&david_config).expect("david registry")),
+            api_state: david_state.clone(),
+            e2e_relay_keys: test_relay_key_state(None),
+            e2e_relay_counter: Arc::new(AtomicU64::new(0)),
+            relay_pair_rotation_secs: 900,
+            relay_pair_pending: Arc::new(StdMutex::new(HashMap::new())),
+            relay_pair_chunks: test_pair_chunks(),
+        };
+
+        let _patrick_runtime =
+            spawn_dataplane_runtime(patrick_shared.clone(), patrick_tun_rx, patrick_out_tx);
+        let _david_runtime =
+            spawn_dataplane_runtime(david_shared.clone(), david_tun_rx, david_out_tx);
+        let _gateway_runtime = spawn_dataplane_runtime(
+            DataplaneShared {
+                endpoint: gateway_endpoint.clone(),
+                tunnel_service: Arc::clone(&gateway_service),
+                peer_addrs: Arc::new(
+                    parse_peer_socket_addrs(&gateway_config).expect("gateway peers"),
+                ),
+                direct_peer_hosts: Arc::new(crate::direct_peer_hosts(&gateway_config)),
+                proactive_peer_ids: Arc::new(crate::proactive_gateway_client_peers(
+                    &gateway_config,
+                )),
+                relay_pair_peer_ids: Arc::new(crate::relay_pair_peer_ids(&gateway_config)),
+                active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+                node_name: "gateway".into(),
+                identity: Arc::new(gateway_identity.keypair),
+                peer_registry: Arc::new(
+                    build_peer_registry(&gateway_config).expect("gateway registry"),
+                ),
+                api_state: gateway_state.clone(),
+                e2e_relay_keys: test_relay_key_state(None),
+                e2e_relay_counter: Arc::new(AtomicU64::new(0)),
+                relay_pair_rotation_secs: 900,
+                relay_pair_pending: Arc::new(StdMutex::new(HashMap::new())),
+                relay_pair_chunks: test_pair_chunks(),
+            },
+            gateway_tun_rx,
+            gateway_out_tx,
+        );
+
+        let paired = tokio::time::timeout(Duration::from_secs(25), async {
+            loop {
+                match (
+                    current_relay_key(&patrick_shared),
+                    current_relay_key(&david_shared),
+                ) {
+                    (Some(left), Some(right)) if left == right => break,
+                    _ => tokio::time::sleep(Duration::from_millis(100)).await,
+                }
+            }
+        })
+        .await;
+        if paired.is_err() {
+            let patrick_snapshot = patrick_state.snapshot().await;
+            let david_snapshot = david_state.snapshot().await;
+            let gateway_snapshot = gateway_state.snapshot().await;
+            let patrick_sessions = patrick_shared.active_sessions.lock().await.len();
+            let david_sessions = david_shared.active_sessions.lock().await.len();
+            let patrick_pending = patrick_shared
+                .relay_pair_pending
+                .lock()
+                .expect("pending")
+                .len();
+            let patrick_chunks = patrick_shared
+                .relay_pair_chunks
+                .lock()
+                .expect("chunks")
+                .len();
+            let david_pending = david_shared
+                .relay_pair_pending
+                .lock()
+                .expect("pending")
+                .len();
+            let david_chunks = david_shared.relay_pair_chunks.lock().expect("chunks").len();
+            panic!(
+                "relay pair handshake did not install matching keys: patrick={:?} sessions={} pending={} chunks={}; david={:?} sessions={} pending={} chunks={}; gateway={:?}",
+                patrick_snapshot.last_error,
+                patrick_sessions,
+                patrick_pending,
+                patrick_chunks,
+                david_snapshot.last_error,
+                david_sessions,
+                david_pending,
+                david_chunks,
+                gateway_snapshot.last_error
+            );
+        }
+
+        let patrick_to_david = Bytes::from(test_ipv4_packet_with_source_dest(
+            1180,
+            [10, 0, 0, 1],
+            [10, 0, 0, 2],
+        ));
+        patrick_tun_tx
+            .send(patrick_to_david.clone())
+            .await
+            .expect("send patrick packet");
+        let david_received = tokio::time::timeout(Duration::from_secs(5), david_out_rx.recv())
+            .await
+            .expect("david receive timeout")
+            .expect("david packet");
+        assert_eq!(david_received, patrick_to_david);
+        assert!(patrick_out_rx.try_recv().is_err());
+        assert!(gateway_out_rx.try_recv().is_err());
 
         patrick_endpoint.close().await;
         david_endpoint.close().await;
@@ -2536,6 +3477,7 @@ mod tests {
             public_key = "{patrick_public_key}"
             kem_key = "{patrick_kem_key}"
             allowed_ips = ["10.0.0.1/32"]
+            mode = "relay_leaf"
             key_rotation_secs = 3600
 
             [[peer]]
@@ -2544,6 +3486,7 @@ mod tests {
             public_key = "{david_public_key}"
             kem_key = "{david_kem_key}"
             allowed_ips = ["10.0.0.2/32"]
+            mode = "relay_leaf"
             key_rotation_secs = 3600
             "#,
             patrick_public_key = patrick_identity.public_key_b64,

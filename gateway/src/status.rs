@@ -155,6 +155,10 @@ pub struct StatusCounters {
     pub relay_prepare_errors: u64,
     /// Relay payloads dropped because send to destination leaf failed.
     pub relay_send_errors: u64,
+    /// Relay pair-control packets forwarded between online leaves.
+    pub pair_control_forwarded: u64,
+    /// Relay pair-control packets dropped before forwarding.
+    pub pair_control_drops: u64,
     /// Endpoint rebind attempts after accept-path failure.
     pub rebinds: u64,
     /// Consecutive accept errors since last success (resets on success).
@@ -207,6 +211,8 @@ pub struct GatewayDiagnostics {
     remote_leaf_offline_drops: AtomicU64,
     relay_prepare_errors: AtomicU64,
     relay_send_errors: AtomicU64,
+    pair_control_forwarded: AtomicU64,
+    pair_control_drops: AtomicU64,
     rebinds: AtomicU64,
     consecutive_accept_errors: AtomicU64,
 }
@@ -256,6 +262,8 @@ impl GatewayDiagnostics {
             remote_leaf_offline_drops: AtomicU64::new(0),
             relay_prepare_errors: AtomicU64::new(0),
             relay_send_errors: AtomicU64::new(0),
+            pair_control_forwarded: AtomicU64::new(0),
+            pair_control_drops: AtomicU64::new(0),
             rebinds: AtomicU64::new(0),
             consecutive_accept_errors: AtomicU64::new(0),
         })
@@ -408,6 +416,14 @@ impl GatewayDiagnostics {
         self.relay_send_errors.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn inc_pair_control_forwarded(&self) {
+        self.pair_control_forwarded.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn inc_pair_control_drop(&self) {
+        self.pair_control_drops.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn inc_rebind(&self) {
         self.rebinds.fetch_add(1, Ordering::Relaxed);
     }
@@ -434,6 +450,8 @@ impl GatewayDiagnostics {
             remote_leaf_offline_drops: self.remote_leaf_offline_drops.load(Ordering::Relaxed),
             relay_prepare_errors: self.relay_prepare_errors.load(Ordering::Relaxed),
             relay_send_errors: self.relay_send_errors.load(Ordering::Relaxed),
+            pair_control_forwarded: self.pair_control_forwarded.load(Ordering::Relaxed),
+            pair_control_drops: self.pair_control_drops.load(Ordering::Relaxed),
             rebinds: self.rebinds.load(Ordering::Relaxed),
             consecutive_accept_errors: self.consecutive_accept_errors.load(Ordering::Relaxed),
         }
@@ -507,6 +525,8 @@ impl GatewayDiagnostics {
             remote_leaf_offline_drops = snap.counters.remote_leaf_offline_drops,
             relay_prepare_errors = snap.counters.relay_prepare_errors,
             relay_send_errors = snap.counters.relay_send_errors,
+            pair_control_forwarded = snap.counters.pair_control_forwarded,
+            pair_control_drops = snap.counters.pair_control_drops,
             rebinds = snap.counters.rebinds,
             last_error = snap.recent_errors.last().map(String::as_str).unwrap_or(""),
             last_transition = %snap.last_transition_reason,

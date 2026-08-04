@@ -355,7 +355,7 @@ endpoint = $PEER_PUBLIC_ENDPOINT_TOML
 public_key = $PEER_PUBLIC_KEY_B64_TOML
 kem_key = $PEER_KEM_KEY_B64_TOML
 allowed_ips = [$PEER_ALLOWED_IPS_TOML]
-key_rotation_secs = 3600
+key_rotation_secs = ${FREEQ_KEY_ROTATION_SECS:-900}
 EOF
 
 echo "Rendered FreeQ config:"

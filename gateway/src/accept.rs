@@ -47,6 +47,9 @@ const HANDSHAKE_CONFIRM_PACKET_ID: u64 = 3;
 const RELAY_MAGIC: &[u8; 4] = b"FQRL";
 const RELAY_VERSION: u8 = 1;
 const RELAY_HEADER_LEN: usize = 23;
+const PAIR_MAGIC: &[u8; 4] = b"FQPK";
+const PAIR_CHUNK_MAGIC: &[u8; 4] = b"FQPC";
+const PAIR_VERSION: u8 = 1;
 
 /// Bound hybrid handshake so half-open clients cannot pin tasks forever.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -495,6 +498,11 @@ async fn forward_leaf_payload(
     };
 
     let Some(envelope) = parse_relay_envelope(&relay_payload) else {
+        if is_pair_control_packet(&relay_payload) {
+            forward_pair_control_payload(runtime, source_node, source_generation, relay_payload)
+                .await;
+            return;
+        }
         runtime.diagnostics.inc_relay_envelope_drop();
         runtime
             .diagnostics
@@ -639,6 +647,154 @@ async fn forward_leaf_payload(
         destination = %envelope.destination,
         "forwarded opaque relay payload"
     );
+}
+
+async fn forward_pair_control_payload(
+    runtime: &GatewayRuntime,
+    source_node: &str,
+    source_generation: u64,
+    relay_payload: Bytes,
+) {
+    let Some(sender) = pair_control_sender(&relay_payload) else {
+        runtime.diagnostics.inc_pair_control_drop();
+        runtime
+            .diagnostics
+            .record_error(format!(
+                "invalid relay pair control packet from {}; dropped",
+                log_safe_peer(source_node)
+            ))
+            .await;
+        tracing::warn!(
+            peer = %log_safe_peer(source_node),
+            generation = source_generation,
+            "dropped invalid relay pair control packet"
+        );
+        return;
+    };
+    if sender != source_node {
+        runtime.diagnostics.inc_pair_control_drop();
+        runtime
+            .diagnostics
+            .record_error(format!(
+                "relay pair sender mismatch: authenticated {} claimed {}",
+                log_safe_peer(source_node),
+                log_safe_peer(&sender)
+            ))
+            .await;
+        tracing::warn!(
+            peer = %log_safe_peer(source_node),
+            claimed_sender = %log_safe_peer(&sender),
+            generation = source_generation,
+            "dropped relay pair control sender mismatch"
+        );
+        return;
+    }
+
+    let sessions = runtime.sessions.session_infos().await;
+    let mut forwarded = 0u64;
+    for session_snapshot in sessions {
+        if session_snapshot.node_id == source_node || !session_snapshot.alive {
+            continue;
+        }
+        let Some(destination_session) = runtime.sessions.get(&session_snapshot.node_id).await
+        else {
+            continue;
+        };
+        let prepared = match runtime.relay_tunnel.prepare_transport_payload_with_session(
+            relay_payload.as_ref(),
+            &destination_session.outbound_key,
+            runtime.relay_packet_counter.fetch_add(1, Ordering::Relaxed),
+        ) {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                runtime.diagnostics.inc_relay_prepare_error();
+                runtime
+                    .diagnostics
+                    .record_error(format!(
+                        "failed to prepare relay pair control for {}: {err}",
+                        log_safe_peer(&session_snapshot.node_id)
+                    ))
+                    .await;
+                continue;
+            }
+        };
+        let mut sent = true;
+        for frame in prepared.frames {
+            if let Err(err) = destination_session.connection.send(frame).await {
+                runtime.diagnostics.inc_relay_send_error();
+                runtime
+                    .diagnostics
+                    .record_error(format!(
+                        "failed to forward relay pair control to {}: {err}",
+                        log_safe_peer(&session_snapshot.node_id)
+                    ))
+                    .await;
+                sent = false;
+                break;
+            }
+        }
+        if sent {
+            forwarded += 1;
+        }
+    }
+
+    if forwarded == 0 {
+        runtime.diagnostics.inc_remote_leaf_offline_drop();
+        runtime
+            .diagnostics
+            .record_error(format!(
+                "relay pair control from {} had no online destination leaf",
+                log_safe_peer(source_node)
+            ))
+            .await;
+        tracing::warn!(
+            peer = %log_safe_peer(source_node),
+            "relay pair control had no online destination leaf"
+        );
+        return;
+    }
+
+    runtime.diagnostics.inc_pair_control_forwarded();
+    tracing::info!(
+        peer = %log_safe_peer(source_node),
+        destinations = forwarded,
+        "forwarded relay pair control packet"
+    );
+}
+
+fn is_pair_control_packet(packet: &[u8]) -> bool {
+    packet.len() >= 5
+        && (&packet[0..4] == PAIR_MAGIC || &packet[0..4] == PAIR_CHUNK_MAGIC)
+        && packet[4] == PAIR_VERSION
+}
+
+fn pair_control_sender(packet: &[u8]) -> Option<String> {
+    if packet.len() < 6 || !is_pair_control_packet(packet) {
+        return None;
+    }
+    let mut offset = if &packet[0..4] == PAIR_MAGIC {
+        22
+    } else {
+        // FQPC: magic(4), version(1), type(1), offer_id(8), total(2), index(2)
+        18
+    };
+    let sender = take_len_bytes(packet, &mut offset)?;
+    std::str::from_utf8(sender).ok().map(str::to_string)
+}
+
+fn take_len_bytes<'a>(packet: &'a [u8], offset: &mut usize) -> Option<&'a [u8]> {
+    if packet.len().saturating_sub(*offset) < 2 {
+        return None;
+    }
+    let len = u16::from_be_bytes([packet[*offset], packet[*offset + 1]]);
+    *offset += 2;
+    let end = *offset + usize::from(len);
+    if end > packet.len() {
+        return None;
+    }
+    let bytes = &packet[*offset..end];
+    *offset = end;
+    Some(bytes)
 }
 
 struct RelayEnvelope {
