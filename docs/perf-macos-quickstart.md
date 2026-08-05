@@ -226,9 +226,18 @@ Gateway-path evidence run, after both sides can ping each other over overlay:
 cd ~/freeq-core
 scripts/perf/freeq-gateway-path-perf.sh \
   --remote-overlay-ip <other-mac-overlay-ip> \
-  --gateway-overlay-ip 10.66.0.254 \
-  --gateway-public-host 18.225.246.90 \
   --label "$(hostname -s)-gateway-$(date -u +%Y%m%dT%H%M%SZ)"
+```
+
+The hardened gateway is an accept-only relay. Leaf-to-leaf overlay ping and
+iperf are the success criteria. Public gateway ICMP and gateway overlay ICMP are
+optional diagnostics and may show 100% loss when host ICMP is blocked or the
+gateway does not expose an overlay echo path. Add these only when you
+intentionally want those probes:
+
+```bash
+  --gateway-public-host 18.225.246.90 \
+  --gateway-overlay-ip 10.66.0.254
 ```
 
 For UDP throughput, start an iperf3 server on the remote Mac first:

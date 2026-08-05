@@ -19,8 +19,8 @@ Usage:
     [--skip-tcp]
 
 Records:
-  - public RTT (if --gateway-public-host)
-  - overlay RTT leaf→gateway (if --gateway-overlay-ip)
+  - public RTT diagnostic (if --gateway-public-host; ICMP may be blocked)
+  - overlay RTT leaf→gateway diagnostic (if --gateway-overlay-ip)
   - overlay RTT leaf↔remote via gateway
   - UDP iperf3 ladder both directions when possible
   - TCP bulk note (may stall on relay — documented honestly)
@@ -33,6 +33,8 @@ Gateway status note:
   The hardened AWS relay runs as freeq-gateway.service and serves status at
   http://127.0.0.1:6790/status on the gateway host. The local leaf daemon still
   serves http://127.0.0.1:6789/v1/status on each Mac.
+  Leaf↔leaf overlay ping and iperf are the success criteria. Gateway public
+  and overlay ping probes are optional diagnostics and may be 100% loss.
 EOF
 }
 
@@ -143,12 +145,14 @@ RESULTS_GW_OVERLAY="{}"
 RESULTS_REMOTE="{}"
 
 if [ -n "$GATEWAY_PUBLIC_HOST" ]; then
+  echo "NOTE: public gateway ping is diagnostic only; ICMP may be blocked."
   run_ping "$GATEWAY_PUBLIC_HOST" "$OUT/raw/ping-public-gateway.txt" "$PING_COUNT"
   RESULTS_PUBLIC_RTT="$(parse_ping "$OUT/raw/ping-public-gateway.txt")"
   echo "public_gateway_rtt=$RESULTS_PUBLIC_RTT"
 fi
 
 if [ -n "$GATEWAY_OVERLAY_IP" ]; then
+  echo "NOTE: gateway overlay ping is diagnostic only; hardened relay may not expose overlay ICMP."
   run_ping "$GATEWAY_OVERLAY_IP" "$OUT/raw/ping-overlay-gateway.txt" "$PING_COUNT"
   RESULTS_GW_OVERLAY="$(parse_ping "$OUT/raw/ping-overlay-gateway.txt")"
   echo "overlay_gateway_rtt=$RESULTS_GW_OVERLAY"
