@@ -10,6 +10,7 @@ CONFIG_FILE="${FREEQ_SETUP_CONFIG:-$SETUP_DIR/freeq-setup.conf}"
 LOCAL_ENV="${FREEQ_LOCAL_ENV:-$HOME/.freeq/perf/node.env}"
 CONFIG_OUT="${FREEQ_CONFIG:-$HOME/.freeq/perf/freeq-gateway-client.toml}"
 GATEWAY_PEER_ENV="${FREEQ_GATEWAY_PEER_ENV:-$HOME/.freeq/perf/aws-gateway-peer.env}"
+GATEWAY_PEER_ENV_WAS_DEFAULT=1
 REMOTE_OVERLAYS=""
 CHECK_ONLY=0
 
@@ -23,7 +24,9 @@ Usage:
 
 Prerequisites:
   - Local FreeQ setup already run (node.env + identity exist)
-  - Gateway peer.env from the field bootstrap (public only)
+  - Gateway peer.env from the field bootstrap (public only). If the default
+    runtime copy is missing, this script auto-imports aws-gateway-peer.env from
+    the current directory or ~/Downloads.
   - Your public /32 allowed on the gateway security group
 
 Options:
@@ -42,7 +45,7 @@ EOF
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --gateway-peer-env) GATEWAY_PEER_ENV="$2"; shift 2 ;;
+    --gateway-peer-env) GATEWAY_PEER_ENV="$2"; GATEWAY_PEER_ENV_WAS_DEFAULT=0; shift 2 ;;
     --remote-overlay) REMOTE_OVERLAYS="$2"; shift 2 ;;
     --local-env) LOCAL_ENV="$2"; shift 2 ;;
     --output) CONFIG_OUT="$2"; shift 2 ;;
@@ -56,9 +59,54 @@ if [ -z "$REMOTE_OVERLAYS" ]; then
   usage >&2
   exit 1
 fi
+cd "$REPO_ROOT"
+
+auto_import_gateway_peer_env() {
+  local dest="$1"
+  local candidates=()
+  local path
+
+  for path in \
+    "$PWD/aws-gateway-peer.env" \
+    "$PWD/gateway-peer.env" \
+    "$HOME/Downloads/aws-gateway-peer.env" \
+    "$HOME/Downloads/gateway-peer.env" \
+    "$HOME/Downloads"/*aws-gateway-peer.env \
+    "$HOME/Downloads"/*gateway-peer.env
+  do
+    [ -f "$path" ] || continue
+    candidates+=("$path")
+  done
+
+  if [ "${#candidates[@]}" -eq 0 ]; then
+    return 1
+  fi
+
+  for path in "${candidates[@]}"; do
+    if "$SCRIPT_DIR/../setup/freeq-validate-peer-env.sh" "$path" >/dev/null 2>&1; then
+      mkdir -p "$(dirname "$dest")"
+      cp "$path" "$dest"
+      chmod 0644 "$dest"
+      echo "Imported gateway peer.env:"
+      echo "  from: $path"
+      echo "  to:   $dest"
+      return 0
+    fi
+  done
+
+  echo "Found gateway peer.env candidates, but none validated:" >&2
+  printf '  %s\n' "${candidates[@]}" >&2
+  return 1
+}
+
 if [ ! -f "$GATEWAY_PEER_ENV" ]; then
-  echo "Missing gateway peer.env: $GATEWAY_PEER_ENV" >&2
-  exit 1
+  if [ "$GATEWAY_PEER_ENV_WAS_DEFAULT" -eq 1 ] && auto_import_gateway_peer_env "$GATEWAY_PEER_ENV"; then
+    :
+  else
+    echo "Missing gateway peer.env: $GATEWAY_PEER_ENV" >&2
+    echo "Put aws-gateway-peer.env in the current directory or ~/Downloads, then rerun." >&2
+    exit 1
+  fi
 fi
 if [ ! -f "$LOCAL_ENV" ]; then
   echo "Missing local node.env: $LOCAL_ENV" >&2
@@ -66,7 +114,6 @@ if [ ! -f "$LOCAL_ENV" ]; then
   exit 1
 fi
 
-cd "$REPO_ROOT"
 "$SCRIPT_DIR/../setup/freeq-validate-peer-env.sh" "$GATEWAY_PEER_ENV"
 
 env_value() {

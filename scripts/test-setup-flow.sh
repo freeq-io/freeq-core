@@ -205,6 +205,17 @@ FREEQ_MODE=accept_only
 EOF
 scripts/setup/freeq-validate-peer-env.sh "$TMP_ROOT/gateway-peer.env" > "$TMP_ROOT/gateway-validate.out"
 assert_file_contains "$TMP_ROOT/gateway-validate.out" "Peer env is valid"
+mkdir -p "$TMP_ROOT/home/Downloads"
+cp "$TMP_ROOT/gateway-peer.env" "$TMP_ROOT/home/Downloads/aws-gateway-peer.env"
+HOME="$TMP_ROOT/home" \
+FREEQ_LOCAL_ENV="$TMP_ROOT/local/node.env" \
+FREEQ_CONFIG="$TMP_ROOT/gateway-client.toml" \
+scripts/field/freeq-leaf-connect-gateway-macos.sh \
+  --remote-overlay 10.66.0.21/32 \
+  --check-only > "$TMP_ROOT/gateway-leaf-check.out"
+assert_file_contains "$TMP_ROOT/gateway-leaf-check.out" "Imported gateway peer.env"
+assert_file_contains "$TMP_ROOT/gateway-leaf-check.out" "$TMP_ROOT/home/.freeq/perf/aws-gateway-peer.env"
+assert_file_contains "$TMP_ROOT/gateway-client.toml" 'name = "aws-gateway"'
 FREEQ_SETUP_DIR="$TMP_ROOT/setup" \
 FREEQ_LOCAL_ENV="$TMP_ROOT/local/node.env" \
 FREEQ_CONFIG_OUT="$TMP_ROOT/freeq.toml" \
