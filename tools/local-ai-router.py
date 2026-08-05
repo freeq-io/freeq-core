@@ -46,7 +46,9 @@ COMPLEXITY_TERMS = (
 
 
 def log_event(event: dict[str, Any]) -> None:
-    os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+    log_dir = os.path.dirname(LOG_PATH)
+    if log_dir:
+        os.makedirs(log_dir, exist_ok=True)
     event.setdefault("time_utc", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
     with open(LOG_PATH, "a", encoding="utf-8") as handle:
         handle.write(json.dumps(event, sort_keys=True) + "\n")

@@ -8,9 +8,6 @@
 [![Discord](https://img.shields.io/discord/placeholder?label=Discord&logo=discord)](https://discord.gg/freeq)
 
 > ⚠️ **Alpha — not yet audited.** FreeQ has not received an independent cryptographic audit. Do not use to protect classified or life-safety data. See [SECURITY.md](SECURITY.md).
->
-> Internal SOC 2 readiness findings are tracked in
-> [docs/soc2-readiness-audit-2026-08-04.md](docs/soc2-readiness-audit-2026-08-04.md).
 
 ---
 
