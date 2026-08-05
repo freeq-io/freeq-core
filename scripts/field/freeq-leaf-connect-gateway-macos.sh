@@ -9,7 +9,7 @@ SETUP_DIR="${FREEQ_SETUP_DIR:-$HOME/FreeQ}"
 CONFIG_FILE="${FREEQ_SETUP_CONFIG:-$SETUP_DIR/freeq-setup.conf}"
 LOCAL_ENV="${FREEQ_LOCAL_ENV:-$HOME/.freeq/perf/node.env}"
 CONFIG_OUT="${FREEQ_CONFIG:-$HOME/.freeq/perf/freeq-gateway-client.toml}"
-GATEWAY_PEER_ENV=""
+GATEWAY_PEER_ENV="${FREEQ_GATEWAY_PEER_ENV:-$HOME/.freeq/perf/aws-gateway-peer.env}"
 REMOTE_OVERLAYS=""
 CHECK_ONLY=0
 
@@ -19,7 +19,6 @@ Connect this Mac as a FreeQ leaf (gateway_client) to a public freeq-gateway.
 
 Usage:
   scripts/field/freeq-leaf-connect-gateway-macos.sh \
-    --gateway-peer-env PATH/to/aws-gateway-peer.env \
     --remote-overlay 10.66.0.2/32[,10.66.0.3/32...]
 
 Prerequisites:
@@ -28,7 +27,7 @@ Prerequisites:
   - Your public /32 allowed on the gateway security group
 
 Options:
-  --gateway-peer-env PATH   required gateway public peer.env
+  --gateway-peer-env PATH   gateway public peer.env; default ~/.freeq/perf/aws-gateway-peer.env
   --remote-overlay CIDRS    remote leaf overlay /32s routed via gateway
   --local-env PATH          default ~/.freeq/perf/node.env
   --output PATH             freeq.toml output path
@@ -53,7 +52,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if [ -z "$GATEWAY_PEER_ENV" ] || [ -z "$REMOTE_OVERLAYS" ]; then
+if [ -z "$REMOTE_OVERLAYS" ]; then
   usage >&2
   exit 1
 fi
