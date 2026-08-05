@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Thorough FreeQ gateway-path performance + evidence capture for field publish.
-# Intended for two field leaves via AWS via AWS freeq-gateway.
+# Intended for two field leaves via AWS freeq-gateway.
 set -euo pipefail
 
 usage() {
