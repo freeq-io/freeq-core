@@ -394,6 +394,9 @@ fn parse_peer_socket_addrs(config: &freeq_config::Config) -> Result<HashMap<Stri
 fn direct_peer_hosts(config: &freeq_config::Config) -> HashMap<String, IpAddr> {
     let mut hosts = HashMap::with_capacity(config.peer.len());
     for peer in &config.peer {
+        if peer.effective_mode() == freeq_config::PeerMode::GatewayClient {
+            continue;
+        }
         let Some(first_allowed_ip) = peer.allowed_ips.first() else {
             continue;
         };
@@ -2640,22 +2643,24 @@ mod tests {
 
         let gateway_addr = gateway_endpoint.local_addr().expect("gateway addr");
 
-        let patrick_config = config_with_socket_peer_allowed_ips(
+        let mut patrick_config = config_with_socket_peer_allowed_ips(
             gateway_addr,
             "patrick",
             "gateway",
             &gateway_identity.public_key_b64,
             &gateway_identity.kem_key_b64,
-            &["10.0.0.254/32", "10.0.0.2/32"],
+            &["10.0.0.2/32", "10.0.0.254/32"],
         );
-        let david_config = config_with_socket_peer_allowed_ips(
+        patrick_config.peer[0].mode = Some(freeq_config::PeerMode::GatewayClient);
+        let mut david_config = config_with_socket_peer_allowed_ips(
             gateway_addr,
             "david",
             "gateway",
             &gateway_identity.public_key_b64,
             &gateway_identity.kem_key_b64,
-            &["10.0.0.254/32", "10.0.0.1/32"],
+            &["10.0.0.1/32", "10.0.0.254/32"],
         );
+        david_config.peer[0].mode = Some(freeq_config::PeerMode::GatewayClient);
         let gateway_config = gateway_config_with_two_peers(
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)), 51820),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 11)), 51820),
