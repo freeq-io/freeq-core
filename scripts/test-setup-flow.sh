@@ -346,7 +346,8 @@ assert_file_contains "$TMP_ROOT/stop-sudo.log" "route -n delete -host 10.66.0.20
 assert_file_contains "$TMP_ROOT/stop-sudo.log" "route -n delete -host 10.66.0.21"
 assert_file_contains "$TMP_ROOT/stop-sudo.log" "networksetup -setdhcp Wi-Fi"
 assert_file_contains "$TMP_ROOT/stop-sudo.log" "ipconfig set en0 DHCP"
-[ "$(grep -Ec '^-v$' "$TMP_ROOT/stop-sudo.log")" -eq 4 ] || fail "stop helper did not check sudo access for each privileged command"
+[ "$(grep -Ec '^-v$' "$TMP_ROOT/stop-sudo.log")" -eq 1 ] || fail "stop helper did not warm sudo cache exactly once"
+[ "$(grep -Ec '^-k$' "$TMP_ROOT/stop-sudo.log")" -eq 1 ] || fail "stop helper did not expire sudo cache on exit"
 [ ! -e "$TMP_ROOT/freeq-network-state.env" ] || fail "stop helper did not remove rollback ledger"
 
 echo "== setup flow: guardrails =="

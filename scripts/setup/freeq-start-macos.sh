@@ -20,6 +20,8 @@ RESTART=0
 SETUP_URL="${FREEQ_SETUP_URL:-http://127.0.0.1:6789/}"
 STATUS_URL="${SETUP_URL%/}/v1/status"
 EXTRA_ALLOWED_IPS="${FREEQ_EXTRA_ALLOWED_IPS:-}"
+SUDO_CACHE_SECONDS="${FREEQ_SUDO_CACHE_SECONDS:-180}"
+SUDO_KEEPALIVE_PID=""
 
 usage() {
   cat <<'EOF'
@@ -363,6 +365,32 @@ rollback_on_start_error() {
   exit "$status"
 }
 
+start_sudo_cache() {
+  if ! [[ "$SUDO_CACHE_SECONDS" =~ ^[0-9]+$ ]] || [ "$SUDO_CACHE_SECONDS" -lt 1 ]; then
+    echo "Invalid FREEQ_SUDO_CACHE_SECONDS '$SUDO_CACHE_SECONDS'; expected a positive integer." >&2
+    exit 1
+  fi
+  echo "Checking sudo access once; cache expires after ${SUDO_CACHE_SECONDS}s or on script exit..."
+  sudo -v
+  (
+    end=$((SECONDS + SUDO_CACHE_SECONDS))
+    while [ "$SECONDS" -lt "$end" ]; do
+      sleep 20
+      sudo -n -v >/dev/null 2>&1 || exit 0
+    done
+  ) &
+  SUDO_KEEPALIVE_PID="$!"
+}
+
+expire_sudo_cache() {
+  if [ -n "${SUDO_KEEPALIVE_PID:-}" ]; then
+    kill "$SUDO_KEEPALIVE_PID" >/dev/null 2>&1 || true
+    wait "$SUDO_KEEPALIVE_PID" >/dev/null 2>&1 || true
+    SUDO_KEEPALIVE_PID=""
+  fi
+  sudo -k >/dev/null 2>&1 || true
+}
+
 mkdir -p "$LOG_DIR"
 
 if [ "$(uname -s)" != "Darwin" ]; then
@@ -486,8 +514,8 @@ if [ "$CONFIGURE_INTERFACE" -eq 1 ]; then
 fi
 
 : > "$LOG_FILE"
-echo "Checking sudo access..."
-sudo -v
+start_sudo_cache
+trap expire_sudo_cache EXIT
 
 echo "Starting freeqd..."
 sudo_env=()

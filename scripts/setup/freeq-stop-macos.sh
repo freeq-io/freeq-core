@@ -9,6 +9,8 @@ WIFI_DEVICE="${FREEQ_WIFI_DEVICE:-en0}"
 WIFI_SERVICE="${FREEQ_WIFI_SERVICE:-Wi-Fi}"
 RENEW_DHCP=0
 OVERLAY_IPS=()
+SUDO_CACHE_SECONDS="${FREEQ_SUDO_CACHE_SECONDS:-180}"
+SUDO_KEEPALIVE_PID=""
 
 usage() {
   cat <<'EOF'
@@ -135,14 +137,35 @@ append_overlay_ip_from_env() {
   fi
 }
 
-run_sudo() {
-  echo "Checking sudo access for: $*"
-  sudo -k
+start_sudo_cache() {
+  if ! [[ "$SUDO_CACHE_SECONDS" =~ ^[0-9]+$ ]] || [ "$SUDO_CACHE_SECONDS" -lt 1 ]; then
+    echo "Invalid FREEQ_SUDO_CACHE_SECONDS '$SUDO_CACHE_SECONDS'; expected a positive integer." >&2
+    exit 1
+  fi
+  echo "Checking sudo access once; cache expires after ${SUDO_CACHE_SECONDS}s or on script exit..."
   sudo -v
+  (
+    end=$((SECONDS + SUDO_CACHE_SECONDS))
+    while [ "$SECONDS" -lt "$end" ]; do
+      sleep 20
+      sudo -n -v >/dev/null 2>&1 || exit 0
+    done
+  ) &
+  SUDO_KEEPALIVE_PID="$!"
+}
+
+expire_sudo_cache() {
+  if [ -n "${SUDO_KEEPALIVE_PID:-}" ]; then
+    kill "$SUDO_KEEPALIVE_PID" >/dev/null 2>&1 || true
+    wait "$SUDO_KEEPALIVE_PID" >/dev/null 2>&1 || true
+    SUDO_KEEPALIVE_PID=""
+  fi
+  sudo -k >/dev/null 2>&1 || true
+}
+
+run_sudo() {
+  echo "Running with sudo: $*"
   sudo "$@"
-  local status=$?
-  sudo -k || true
-  return "$status"
 }
 
 stop_freeqd() {
@@ -260,6 +283,8 @@ renew_dhcp() {
 }
 
 apply_state_defaults
+start_sudo_cache
+trap expire_sudo_cache EXIT
 stop_freeqd
 remove_overlay_routes
 renew_dhcp
