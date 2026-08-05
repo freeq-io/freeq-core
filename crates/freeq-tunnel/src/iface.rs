@@ -183,9 +183,7 @@ fn open_linux_tun(name_hint: Option<&str>) -> Result<TunInterface> {
     if let Some(name_hint) = name_hint {
         copy_interface_name(name_hint, &mut ifreq.ifr_name)?;
     }
-    unsafe {
-        ifreq.ifr_ifru.ifru_flags = (libc::IFF_TUN | libc::IFF_NO_PI) as libc::c_short;
-    }
+    ifreq.ifr_ifru.ifru_flags = (libc::IFF_TUN | libc::IFF_NO_PI) as libc::c_short;
 
     let ioctl_result = unsafe { libc::ioctl(fd.as_raw_fd(), libc::TUNSETIFF as _, &ifreq) };
     if ioctl_result < 0 {
@@ -399,6 +397,7 @@ fn encode_write_packet(pkt: bytes::Bytes) -> Result<Vec<u8>> {
     ))
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn packet_family(packet: &[u8]) -> Result<u32> {
     let version = packet
         .first()
