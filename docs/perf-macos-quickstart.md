@@ -131,6 +131,17 @@ airport Wi-Fi, carrier-grade NAT, Starlink, cellular, or another restricted
 network, use a reachable gateway or relay peer file instead of a direct peer
 file.
 
+The current AWS field gateway is the hardened accept-only gateway binary:
+
+```text
+service: freeq-gateway.service
+listen:  UDP 51820
+status:  http://127.0.0.1:6790/status on the gateway host
+```
+
+Do not start the legacy `freeqd.service` on the gateway for this path. It uses
+the same UDP port and will fail while `freeq-gateway.service` is active.
+
 The local steps are the same:
 
 ```bash
@@ -174,6 +185,30 @@ freeq gateway connect
 Do not set `FREEQ_E2E_RELAY_KEY_B64` on the gateway. The gateway only needs
 routes for each client overlay IP.
 
+For the field helper script, place `aws-gateway-peer.env` in the repo root,
+current directory, or `~/Downloads`. The script imports it into the runtime
+location automatically.
+
+Local Mac example:
+
+```bash
+cd ~/freeq-core
+export FREEQ_E2E_RELAY_KEY_B64='<the-shared-client-key>'
+FREEQ_SUDO_CACHE_SECONDS=180 \
+scripts/field/freeq-leaf-connect-gateway-macos.sh \
+  --remote-overlay 10.66.0.165/32
+```
+
+Other Mac example:
+
+```bash
+cd ~/freeq-core
+export FREEQ_E2E_RELAY_KEY_B64='<the-shared-client-key>'
+FREEQ_SUDO_CACHE_SECONDS=180 \
+scripts/field/freeq-leaf-connect-gateway-macos.sh \
+  --remote-overlay 10.66.0.1/32
+```
+
 ## Step 5: Run Tests
 
 Open a second Terminal window.
@@ -184,6 +219,26 @@ Overlay test:
 cd ~/freeq-core
 scripts/perf/freeq-perf-run.sh --mode freeq
 ```
+
+Gateway-path evidence run, after both sides can ping each other over overlay:
+
+```bash
+cd ~/freeq-core
+scripts/perf/freeq-gateway-path-perf.sh \
+  --remote-overlay-ip <other-mac-overlay-ip> \
+  --gateway-overlay-ip 10.66.0.254 \
+  --gateway-public-host 18.225.246.90 \
+  --label "$(hostname -s)-gateway-$(date -u +%Y%m%dT%H%M%SZ)"
+```
+
+For UDP throughput, start an iperf3 server on the remote Mac first:
+
+```bash
+iperf3 -s
+```
+
+Then run the gateway-path evidence command from the local Mac. Repeat in the
+opposite direction by swapping local and remote roles.
 
 Direct baseline, after the peer endpoint is available from the peer file and
 `FREEQ_PEER_SSH_USER` and `FREEQ_PEER_SSH_PORT` are set in `freeq-setup.conf`:

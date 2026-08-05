@@ -7,6 +7,18 @@ lessons. It is not the target product workflow. The next implementation must be
 guided by the self-healing network redesign in
 [`docs/self-healing-network-redesign.md`](self-healing-network-redesign.md).
 
+Current field tests use the hardened accept-only gateway binary on AWS:
+
+```text
+systemd service: freeq-gateway.service
+public listen:   UDP 51820
+local status:    http://127.0.0.1:6790/status
+legacy daemon:   freeqd.service should remain stopped for this path
+```
+
+Leaf Macs still run `freeqd` locally and expose their local API at
+`http://127.0.0.1:6789/v1/status`.
+
 The legacy AWS gateway path proved that relay is technically possible, but it
 also proved that a manual gateway flow is too fragile for users. Do not build
 new user-facing behavior around manual relay keys, manual extra routes, raw

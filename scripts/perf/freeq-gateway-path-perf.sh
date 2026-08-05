@@ -28,6 +28,11 @@ Records:
   - RESULTS.md + results.json for flyers / website Proof section
 
 Requires: ping, iperf3 (for throughput), python3
+
+Gateway status note:
+  The hardened AWS relay runs as freeq-gateway.service and serves status at
+  http://127.0.0.1:6790/status on the gateway host. The local leaf daemon still
+  serves http://127.0.0.1:6789/v1/status on each Mac.
 EOF
 }
 
@@ -77,6 +82,9 @@ echo "STARTED_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$META"
 echo "REMOTE_OVERLAY_IP=$REMOTE_IP" >> "$META"
 echo "GATEWAY_OVERLAY_IP=${GATEWAY_OVERLAY_IP:-}" >> "$META"
 echo "GATEWAY_PUBLIC_HOST=${GATEWAY_PUBLIC_HOST:-}" >> "$META"
+echo "GATEWAY_SERVICE=freeq-gateway.service" >> "$META"
+echo "GATEWAY_STATUS_PATH=http://127.0.0.1:6790/status" >> "$META"
+echo "LOCAL_LEAF_STATUS_PATH=http://127.0.0.1:6789/v1/status" >> "$META"
 echo "HOSTNAME=$(hostname)" >> "$META"
 echo "UNAME=$(uname -a)" >> "$META"
 echo "LABEL=$LABEL" >> "$META"
@@ -274,6 +282,9 @@ lines = [
   f"- Remote overlay IP: `{data['remote_overlay_ip']}`",
   f"- Gateway overlay IP: `{data.get('gateway_overlay_ip')}`",
   f"- Gateway public host: `{data.get('gateway_public_host')}`",
+  "- Gateway service: `freeq-gateway.service`",
+  "- Gateway host status endpoint: `http://127.0.0.1:6790/status`",
+  "- Local leaf status endpoint: `http://127.0.0.1:6789/v1/status`",
   "",
   "## Latency",
   "",
