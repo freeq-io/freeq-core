@@ -118,6 +118,13 @@ while IFS= read -r line || [ -n "$line" ]; do
     printf -v "${BASH_REMATCH[1]}" '%s' "${BASH_REMATCH[2]}"
     continue
   fi
+  if [[ "$line" =~ ^(FREEQ_NODE_NAME|FREEQ_NODE_ADDRESS|FREEQ_NODE_LISTEN|FREEQ_PUBLIC_ENDPOINT|FREEQ_PUBLIC_KEY_B64|FREEQ_KEM_KEY_B64)=([^[:space:]\'\"]*)$ ]]; then
+    printf -v "${BASH_REMATCH[1]}" '%s' "${BASH_REMATCH[2]}"
+    continue
+  fi
+  if [[ "$line" =~ ^(FREEQ_ROLE|FREEQ_MODE)=([^[:space:]\'\"]*)$ ]]; then
+    continue
+  fi
   echo "Unexpected line in peer env file:" >&2
   echo "  $line" >&2
   echo "Ask the other node operator to rerun setup and resend the generated peer.env file." >&2

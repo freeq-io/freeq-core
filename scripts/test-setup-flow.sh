@@ -193,6 +193,18 @@ cp "$TMP_ROOT/peer/peer.env" "$TMP_ROOT/setup/02-put-peer-file-here/peer-mac-pee
 cp "$TMP_ROOT/local/peer.env" "$TMP_ROOT/setup/02-put-peer-file-here/local-mac-peer.env"
 scripts/setup/freeq-validate-peer-env.sh "$TMP_ROOT/setup/02-put-peer-file-here/peer-mac-peer.env" > "$TMP_ROOT/validate.out"
 assert_file_contains "$TMP_ROOT/validate.out" "Peer env is valid"
+cat > "$TMP_ROOT/gateway-peer.env" <<'EOF'
+FREEQ_NODE_NAME=aws-gateway
+FREEQ_NODE_ADDRESS=10.66.0.254/24
+FREEQ_NODE_LISTEN=0.0.0.0:51820
+FREEQ_PUBLIC_ENDPOINT=18.225.246.90:51820
+FREEQ_PUBLIC_KEY_B64=dGVzdC1wdWJsaWMta2V5LWJ5dGVz
+FREEQ_KEM_KEY_B64=dGVzdC1rZW0ta2V5LWJ5dGVz
+FREEQ_ROLE=gateway
+FREEQ_MODE=accept_only
+EOF
+scripts/setup/freeq-validate-peer-env.sh "$TMP_ROOT/gateway-peer.env" > "$TMP_ROOT/gateway-validate.out"
+assert_file_contains "$TMP_ROOT/gateway-validate.out" "Peer env is valid"
 FREEQ_SETUP_DIR="$TMP_ROOT/setup" \
 FREEQ_LOCAL_ENV="$TMP_ROOT/local/node.env" \
 FREEQ_CONFIG_OUT="$TMP_ROOT/freeq.toml" \
