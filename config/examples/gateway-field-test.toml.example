@@ -1,0 +1,28 @@
+# Example freeq-gateway field config (accept-only; never dials leaves).
+# Prefer tools/render_gateway_field_configs.py from freeQ-cloud for real keys.
+
+[node]
+name = "aws-gateway"
+listen = "0.0.0.0:51820"
+address = "10.66.0.254/24"
+key_path = "/etc/freeq/identity.key"
+algorithm = "ml-kem-768"
+sign = "ml-dsa-65"
+api_enabled = true
+api_addr = "127.0.0.1:6789"
+
+[[peer]]
+name = "leaf-a"
+mode = "relay_leaf"
+public_key = "BASE64_ML_DSA_PUBLIC"
+kem_key = "BASE64_ML_KEM_PUBLIC"
+allowed_ips = ["10.66.0.1/32"]
+key_rotation_secs = 3600
+
+[[peer]]
+name = "leaf-b"
+mode = "relay_leaf"
+public_key = "BASE64_ML_DSA_PUBLIC"
+kem_key = "BASE64_ML_KEM_PUBLIC"
+allowed_ips = ["10.66.0.2/32"]
+key_rotation_secs = 3600
