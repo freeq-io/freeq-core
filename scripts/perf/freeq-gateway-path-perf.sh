@@ -15,6 +15,7 @@ Usage:
     [--label LABEL] \
     [--results-dir DIR] \
     [--udp-rates 0.5M,1M,2M,4M] \
+    [--udp-length 1000] \
     [--ping-count 50] \
     [--skip-tcp]
 
@@ -44,6 +45,7 @@ GATEWAY_PUBLIC_HOST=""
 LABEL="$(date -u +%Y%m%dT%H%M%SZ)-gateway-path"
 RESULTS_ROOT="${FREEQ_PERF_RESULT_ROOT:-$HOME/FreeQ/03-perf-results}"
 UDP_RATES="0.5M,1M,2M,4M"
+UDP_LENGTH="${FREEQ_IPERF_UDP_LENGTH:-1000}"
 PING_COUNT=50
 IPERF_SECONDS="${FREEQ_IPERF_SECONDS:-20}"
 SKIP_TCP=0
@@ -56,6 +58,7 @@ while [ "$#" -gt 0 ]; do
     --label) LABEL="$2"; shift 2 ;;
     --results-dir) RESULTS_ROOT="$2"; shift 2 ;;
     --udp-rates) UDP_RATES="$2"; shift 2 ;;
+    --udp-length) UDP_LENGTH="$2"; shift 2 ;;
     --ping-count) PING_COUNT="$2"; shift 2 ;;
     --iperf-seconds) IPERF_SECONDS="$2"; shift 2 ;;
     --skip-tcp) SKIP_TCP=1; shift ;;
@@ -90,6 +93,7 @@ echo "LOCAL_LEAF_STATUS_PATH=http://127.0.0.1:6789/v1/status" >> "$META"
 echo "HOSTNAME=$(hostname)" >> "$META"
 echo "UNAME=$(uname -a)" >> "$META"
 echo "LABEL=$LABEL" >> "$META"
+echo "UDP_LENGTH=$UDP_LENGTH" >> "$META"
 
 # Never scoop private keys into evidence
 if [ -d "$HOME/.freeq" ]; then
@@ -169,14 +173,15 @@ if ! command -v iperf3 >/dev/null 2>&1; then
 else
   # Remote must run: iperf3 -s
   echo "NOTE: remote leaf should be running: iperf3 -s" | tee -a "$OUT/logs/notes.txt"
+  echo "NOTE: using iperf3 UDP payload length $UDP_LENGTH bytes to fit the FreeQ tunnel MTU safely" | tee -a "$OUT/logs/notes.txt"
   UDP_JSON_PARTS=()
   IFS=',' read -r -a RATES <<< "$UDP_RATES"
   for rate in "${RATES[@]}"; do
     rate="$(echo "$rate" | tr -d ' ')"
     safe="$(echo "$rate" | tr './' '__')"
     raw="$OUT/raw/iperf-udp-${safe}-to-remote.json"
-    echo "UDP $rate -> $REMOTE_IP (${IPERF_SECONDS}s)"
-    if iperf3 -c "$REMOTE_IP" -u -b "$rate" -t "$IPERF_SECONDS" -J >"$raw" 2>"$OUT/raw/iperf-udp-${safe}.err"; then
+    echo "UDP $rate -> $REMOTE_IP (${IPERF_SECONDS}s, payload=${UDP_LENGTH}B)"
+    if iperf3 -c "$REMOTE_IP" -u -b "$rate" -l "$UDP_LENGTH" -t "$IPERF_SECONDS" -J >"$raw" 2>"$OUT/raw/iperf-udp-${safe}.err"; then
       part="$(python3 - "$raw" "$rate" <<'PY'
 import json,sys
 path, rate = sys.argv[1], sys.argv[2]
@@ -244,6 +249,7 @@ out = {
   "remote_overlay_ip": "$REMOTE_IP",
   "gateway_overlay_ip": "$GATEWAY_OVERLAY_IP" or None,
   "gateway_public_host": "$GATEWAY_PUBLIC_HOST" or None,
+  "udp_length_bytes": int("$UDP_LENGTH"),
   "ping": {
     "public_gateway": json.loads('''$RESULTS_PUBLIC_RTT''' or "{}"),
     "overlay_gateway": json.loads('''$RESULTS_GW_OVERLAY''' or "{}"),

@@ -183,7 +183,10 @@ freeq gateway connect
 ```
 
 Do not set `FREEQ_E2E_RELAY_KEY_B64` on the gateway. The gateway only needs
-routes for each client overlay IP.
+routes for each client overlay IP. The gateway-client helper caches the relay
+key in the local FreeQ state directory with mode `0600` so a rebooted shell
+does not silently lose it. If you intentionally rotate keys, export the new
+key before reconnecting.
 
 For the field helper script, place `aws-gateway-peer.env` in the repo root,
 current directory, or `~/Downloads`. The script imports it into the runtime
@@ -248,6 +251,10 @@ iperf3 -s
 
 Then run the gateway-path evidence command from the local Mac. Repeat in the
 opposite direction by swapping local and remote roles.
+
+The gateway path harness now uses an `iperf3` UDP payload length of `1000`
+bytes by default because the FreeQ tunnel MTU is `1200`. Do not raise the UDP
+payload casually in future harness edits unless the path MTU budget is reviewed.
 
 Direct baseline, after the peer endpoint is available from the peer file and
 `FREEQ_PEER_SSH_USER` and `FREEQ_PEER_SSH_PORT` are set in `freeq-setup.conf`:

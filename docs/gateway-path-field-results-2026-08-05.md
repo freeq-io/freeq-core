@@ -49,3 +49,10 @@ steady through 4 Mbps, and TCP also moved successfully.
 - Treat gateway ICMP response as optional evidence only.
 - Use the improved report generator so future `RESULTS.md` output explains this
   distinction automatically.
+- Keep the gateway path harness on a conservative `iperf3` UDP payload length
+  of `1000` bytes unless the tunnel MTU budget is deliberately reworked. The
+  tunnel MTU is `1200`, and larger default datagrams can create false-negative
+  throughput failures even when relay forwarding is healthy.
+- Keep the relay key persistent on endpoint Macs. Rebooted shells must not
+  silently drop `FREEQ_E2E_RELAY_KEY_B64` and leave operators debugging a live
+  path with the wrong state.
