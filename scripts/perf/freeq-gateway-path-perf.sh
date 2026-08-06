@@ -269,10 +269,48 @@ from pathlib import Path
 data = json.loads(Path(sys.argv[1]).read_text())
 md_path, pub_path = Path(sys.argv[2]), Path(sys.argv[3])
 
+def display_value(value, suffix=""):
+    if value in (None, ""):
+        return "n/a"
+    if isinstance(value, float):
+        return f"{value:.2f}{suffix}"
+    return f"{value}{suffix}"
+
+def display_optional(value):
+    if value in (None, "", "None"):
+        return "n/a"
+    return value
+
+def throughput_mbps(bits_per_second):
+    if bits_per_second in (None, ""):
+        return "n/a"
+    return f"{bits_per_second / 1_000_000:.2f}"
+
 def ping_row(name, p):
     if not p or p.get("avg_ms") is None:
         return f"| {name} | n/a | n/a | n/a |"
-    return f"| {name} | {p.get('avg_ms')} | {p.get('loss_pct')} | {p.get('min_ms')}/{p.get('max_ms')} |"
+    return (
+        f"| {name} | {display_value(p.get('avg_ms'))} | "
+        f"{display_value(p.get('loss_pct'))} | "
+        f"{display_value(p.get('min_ms'))}/{display_value(p.get('max_ms'))} |"
+    )
+
+notes = []
+public_ping = data["ping"].get("public_gateway") or {}
+overlay_gateway_ping = data["ping"].get("overlay_gateway") or {}
+remote_ping = data["ping"].get("overlay_remote_via_gateway") or {}
+
+if remote_ping.get("ok") and public_ping.get("loss_pct") == 100.0:
+    notes.append(
+        "The gateway public host did not answer ICMP during this run, but the "
+        "leaf-to-leaf overlay path through the gateway remained healthy."
+    )
+if remote_ping.get("ok") and overlay_gateway_ping.get("loss_pct") == 100.0:
+    notes.append(
+        "The gateway overlay address did not answer ICMP during this run. That "
+        "does not invalidate the relay result because the end-to-end overlay "
+        "probe to the remote leaf succeeded."
+    )
 
 lines = [
   f"# FreeQ gateway path performance — {data['label']}",
@@ -284,28 +322,42 @@ lines = [
   "```",
   "",
   f"- Remote overlay IP: `{data['remote_overlay_ip']}`",
-  f"- Gateway overlay IP: `{data.get('gateway_overlay_ip')}`",
-  f"- Gateway public host: `{data.get('gateway_public_host')}`",
+  f"- Gateway overlay IP: `{display_optional(data.get('gateway_overlay_ip'))}`",
+  f"- Gateway public host: `{display_optional(data.get('gateway_public_host'))}`",
   "- Gateway service: `freeq-gateway.service`",
   "- Gateway host status endpoint: `http://127.0.0.1:6790/status`",
   "- Local leaf status endpoint: `http://127.0.0.1:6789/v1/status`",
   "",
   "## Latency",
   "",
-  "| Path | Median/avg RTT (ms) | Loss % | min/max |",
-  "|------|---------------------|--------|---------|",
+  "| Path | Avg RTT (ms) | Loss % | min/max |",
+  "|------|--------------|--------|---------|",
   ping_row("Public leaf→AWS host", data["ping"].get("public_gateway")),
   ping_row("Overlay leaf→gateway", data["ping"].get("overlay_gateway")),
   ping_row("Overlay leaf↔remote via GW", data["ping"].get("overlay_remote_via_gateway")),
   "",
+]
+if notes:
+    lines += [
+      "## Interpretation",
+      "",
+    ]
+    for note in notes:
+        lines.append(f"- {note}")
+    lines.append("")
+
+lines += [
   "## UDP throughput",
   "",
-  "| Direction | Target | Bitrate (bps) | Loss % | Jitter ms | OK |",
+  "| Direction | Target | Measured Mbps | Loss % | Jitter ms | OK |",
   "|-----------|--------|---------------|--------|-----------|----|",
 ]
 for u in data.get("udp_iperf") or []:
     lines.append(
-        f"| {u.get('direction')} | {u.get('target_bitrate')} | {u.get('bits_per_second')} | {u.get('lost_percent')} | {u.get('jitter_ms')} | {u.get('ok')} |"
+        f"| {u.get('direction')} | {u.get('target_bitrate')} | "
+        f"{throughput_mbps(u.get('bits_per_second'))} | "
+        f"{display_value(u.get('lost_percent'))} | "
+        f"{display_value(u.get('jitter_ms'))} | {u.get('ok')} |"
     )
 if not data.get("udp_iperf"):
     lines.append("| — | — | — | — | — | no data |")
@@ -317,7 +369,7 @@ lines += [
   "",
   f"- Attempted: {tcp.get('attempted')}",
   f"- OK: {tcp.get('ok')}",
-  f"- Bitrate bps: {tcp.get('bits_per_second')}",
+  f"- Measured Mbps: {throughput_mbps(tcp.get('bits_per_second'))}",
   f"- Note: {tcp.get('note')}",
   "",
   "## Claims boundary (do not oversell)",
