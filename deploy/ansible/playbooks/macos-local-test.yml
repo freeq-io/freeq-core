@@ -3,7 +3,7 @@
   hosts: local_nodes
   gather_facts: true
   vars:
-    freeq_source_dir: "{{ ansible_facts['user_dir'] }}/Documents/FreeQ/freeq-core"
+    freeq_source_dir: "{{ ansible_facts['user_dir'] }}/freeq-core"
     freeq_test_root: "/private/tmp/freeq-ansible-local"
     freeq_daemon_config_path: "{{ freeq_test_root }}/freeq.toml"
     freeq_daemon_key_path: "{{ freeq_test_root }}/identity.key"

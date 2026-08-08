@@ -2621,13 +2621,13 @@ mod tests {
         ))
         .await
         .expect("bind gateway endpoint");
-        let patrick_endpoint = freeq_transport::endpoint::Endpoint::bind(SocketAddr::new(
+        let node_a_endpoint = freeq_transport::endpoint::Endpoint::bind(SocketAddr::new(
             IpAddr::V4(Ipv4Addr::LOCALHOST),
             0,
         ))
         .await
-        .expect("bind patrick endpoint");
-        let david_endpoint = freeq_transport::endpoint::Endpoint::bind(SocketAddr::new(
+        .expect("bind node-a endpoint");
+        let node_b_endpoint = freeq_transport::endpoint::Endpoint::bind(SocketAddr::new(
             IpAddr::V4(Ipv4Addr::LOCALHOST),
             0,
         ))
@@ -2635,22 +2635,22 @@ mod tests {
         .expect("bind david endpoint");
 
         let gateway_identity = generate_identity_bytes();
-        let patrick_identity = generate_identity_bytes();
-        let david_identity = generate_identity_bytes();
+        let node_a_identity = generate_identity_bytes();
+        let node_b_identity = generate_identity_bytes();
 
         let gateway_addr = gateway_endpoint.local_addr().expect("gateway addr");
 
-        let patrick_config = config_with_socket_peer_allowed_ips(
+        let node_a_config = config_with_socket_peer_allowed_ips(
             gateway_addr,
-            "patrick",
+            "node-a",
             "gateway",
             &gateway_identity.public_key_b64,
             &gateway_identity.kem_key_b64,
             &["10.0.0.254/32", "10.0.0.2/32"],
         );
-        let david_config = config_with_socket_peer_allowed_ips(
+        let node_b_config = config_with_socket_peer_allowed_ips(
             gateway_addr,
-            "david",
+            "node-b",
             "gateway",
             &gateway_identity.public_key_b64,
             &gateway_identity.kem_key_b64,
@@ -2659,89 +2659,89 @@ mod tests {
         let gateway_config = gateway_config_with_two_peers(
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)), 51820),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 11)), 51820),
-            &patrick_identity,
-            &david_identity,
+            &node_a_identity,
+            &node_b_identity,
         );
 
         let shared_keys =
             freeq_crypto::FreeQKeyPair::generate_ephemeral_test_pair().expect("shared tunnel keys");
         let relay_key = [9u8; 32];
-        let patrick_service = Arc::new(
-            init_tunnel_service_with_keys(&patrick_config, shared_keys.clone())
-                .expect("patrick tunnel"),
+        let node_a_service = Arc::new(
+            init_tunnel_service_with_keys(&node_a_config, shared_keys.clone())
+                .expect("node-a tunnel"),
         );
-        let david_service = Arc::new(
-            init_tunnel_service_with_keys(&david_config, shared_keys.clone())
-                .expect("david tunnel"),
+        let node_b_service = Arc::new(
+            init_tunnel_service_with_keys(&node_b_config, shared_keys.clone())
+                .expect("node-b tunnel"),
         );
         let gateway_service = Arc::new(
             init_tunnel_service_with_keys(&gateway_config, shared_keys).expect("gateway tunnel"),
         );
 
-        let patrick_state = init_api_state(&patrick_config, patrick_service.as_ref()).await;
-        let david_state = init_api_state(&david_config, david_service.as_ref()).await;
+        let node_a_state = init_api_state(&node_a_config, node_a_service.as_ref()).await;
+        let node_b_state = init_api_state(&node_b_config, node_b_service.as_ref()).await;
         let gateway_state = init_api_state(&gateway_config, gateway_service.as_ref()).await;
 
-        let (patrick_tun_tx, patrick_tun_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
-        let (patrick_out_tx, mut patrick_out_rx) =
+        let (node_a_tun_tx, node_a_tun_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
+        let (node_a_out_tx, mut node_a_out_rx) =
             mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
-        let (david_tun_tx, david_tun_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
-        let (david_out_tx, mut david_out_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
+        let (node_b_tun_tx, node_b_tun_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
+        let (node_b_out_tx, mut node_b_out_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
         let (_gateway_tun_tx, gateway_tun_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
         let (gateway_out_tx, mut gateway_out_rx) =
             mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
 
         let _patrick_runtime = spawn_dataplane_runtime(
             DataplaneShared {
-                endpoint: patrick_endpoint.clone(),
-                tunnel_service: Arc::clone(&patrick_service),
+                endpoint: node_a_endpoint.clone(),
+                tunnel_service: Arc::clone(&node_a_service),
                 peer_addrs: Arc::new(
-                    parse_peer_socket_addrs(&patrick_config).expect("patrick peers"),
+                    parse_peer_socket_addrs(&node_a_config).expect("node-a peers"),
                 ),
-                direct_peer_hosts: Arc::new(crate::direct_peer_hosts(&patrick_config)),
+                direct_peer_hosts: Arc::new(crate::direct_peer_hosts(&node_a_config)),
                 proactive_peer_ids: Arc::new(crate::proactive_gateway_client_peers(
-                    &patrick_config,
+                    &node_a_config,
                 )),
-                relay_pair_peer_ids: Arc::new(crate::relay_pair_peer_ids(&patrick_config)),
+                relay_pair_peer_ids: Arc::new(crate::relay_pair_peer_ids(&node_a_config)),
                 active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
-                node_name: "patrick".into(),
-                identity: Arc::new(patrick_identity.keypair),
+                node_name: "node-a".into(),
+                identity: Arc::new(node_a_identity.keypair),
                 peer_registry: Arc::new(
-                    build_peer_registry(&patrick_config).expect("patrick registry"),
+                    build_peer_registry(&node_a_config).expect("patrick registry"),
                 ),
-                api_state: patrick_state.clone(),
+                api_state: node_a_state.clone(),
                 e2e_relay_keys: test_relay_key_state(Some(relay_key)),
                 e2e_relay_counter: Arc::new(AtomicU64::new(0)),
                 relay_pair_rotation_secs: DEFAULT_RELAY_KEY_ROTATION_SECS,
                 relay_pair_pending: Arc::new(StdMutex::new(HashMap::new())),
                 relay_pair_chunks: test_pair_chunks(),
             },
-            patrick_tun_rx,
-            patrick_out_tx,
+            node_a_tun_rx,
+            node_a_out_tx,
         );
         let _david_runtime = spawn_dataplane_runtime(
             DataplaneShared {
-                endpoint: david_endpoint.clone(),
-                tunnel_service: Arc::clone(&david_service),
-                peer_addrs: Arc::new(parse_peer_socket_addrs(&david_config).expect("david peers")),
-                direct_peer_hosts: Arc::new(crate::direct_peer_hosts(&david_config)),
-                proactive_peer_ids: Arc::new(crate::proactive_gateway_client_peers(&david_config)),
-                relay_pair_peer_ids: Arc::new(crate::relay_pair_peer_ids(&david_config)),
+                endpoint: node_b_endpoint.clone(),
+                tunnel_service: Arc::clone(&node_b_service),
+                peer_addrs: Arc::new(parse_peer_socket_addrs(&node_b_config).expect("node-b peers")),
+                direct_peer_hosts: Arc::new(crate::direct_peer_hosts(&node_b_config)),
+                proactive_peer_ids: Arc::new(crate::proactive_gateway_client_peers(&node_b_config)),
+                relay_pair_peer_ids: Arc::new(crate::relay_pair_peer_ids(&node_b_config)),
                 active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
-                node_name: "david".into(),
-                identity: Arc::new(david_identity.keypair),
+                node_name: "node-b".into(),
+                identity: Arc::new(node_b_identity.keypair),
                 peer_registry: Arc::new(
-                    build_peer_registry(&david_config).expect("david registry"),
+                    build_peer_registry(&node_b_config).expect("david registry"),
                 ),
-                api_state: david_state.clone(),
+                api_state: node_b_state.clone(),
                 e2e_relay_keys: test_relay_key_state(Some(relay_key)),
                 e2e_relay_counter: Arc::new(AtomicU64::new(0)),
                 relay_pair_rotation_secs: DEFAULT_RELAY_KEY_ROTATION_SECS,
                 relay_pair_pending: Arc::new(StdMutex::new(HashMap::new())),
                 relay_pair_chunks: test_pair_chunks(),
             },
-            david_tun_rx,
-            david_out_tx,
+            node_b_tun_rx,
+            node_b_out_tx,
         );
         let _gateway_runtime = spawn_dataplane_runtime(
             DataplaneShared {
@@ -2779,11 +2779,11 @@ mod tests {
             [10, 0, 0, 1],
             [10, 0, 0, 2],
         ));
-        patrick_tun_tx
+        node_a_tun_tx
             .send(patrick_to_david.clone())
             .await
             .expect("send patrick packet");
-        let david_received = tokio::time::timeout(Duration::from_secs(5), david_out_rx.recv())
+        let david_received = tokio::time::timeout(Duration::from_secs(5), node_b_out_rx.recv())
             .await
             .expect("david receive timeout")
             .expect("david packet");
@@ -2794,24 +2794,24 @@ mod tests {
             [10, 0, 0, 2],
             [10, 0, 0, 1],
         ));
-        david_tun_tx
+        node_b_tun_tx
             .send(david_to_patrick.clone())
             .await
             .expect("send david packet");
         let patrick_received = match tokio::time::timeout(
             Duration::from_secs(5),
-            patrick_out_rx.recv(),
+            node_a_out_rx.recv(),
         )
         .await
         {
             Ok(Some(packet)) => packet,
             Ok(None) => panic!("patrick packet channel closed"),
             Err(err) => {
-                refresh_api_state(&patrick_state, patrick_service.as_ref()).await;
-                refresh_api_state(&david_state, david_service.as_ref()).await;
+                refresh_api_state(&node_a_state, node_a_service.as_ref()).await;
+                refresh_api_state(&node_b_state, node_b_service.as_ref()).await;
                 refresh_api_state(&gateway_state, gateway_service.as_ref()).await;
-                let patrick_snapshot = patrick_state.snapshot().await;
-                let david_snapshot = david_state.snapshot().await;
+                let patrick_snapshot = node_a_state.snapshot().await;
+                let david_snapshot = node_b_state.snapshot().await;
                 let gateway_snapshot = gateway_state.snapshot().await;
                 panic!(
                         "patrick receive timeout: {err}; patrick={:?}/{:?}; david={:?}/{:?}; gateway={:?}/{:?}",
@@ -2832,8 +2832,8 @@ mod tests {
         let gateway_snapshot = gateway_state.snapshot().await;
         assert_eq!(gateway_snapshot.tunnel.route_misses, 0);
 
-        patrick_endpoint.close().await;
-        david_endpoint.close().await;
+        node_a_endpoint.close().await;
+        node_b_endpoint.close().await;
         gateway_endpoint.close().await;
     }
 
@@ -2845,13 +2845,13 @@ mod tests {
         ))
         .await
         .expect("bind gateway endpoint");
-        let patrick_endpoint = freeq_transport::endpoint::Endpoint::bind(SocketAddr::new(
+        let node_a_endpoint = freeq_transport::endpoint::Endpoint::bind(SocketAddr::new(
             IpAddr::V4(Ipv4Addr::LOCALHOST),
             0,
         ))
         .await
-        .expect("bind patrick endpoint");
-        let david_endpoint = freeq_transport::endpoint::Endpoint::bind(SocketAddr::new(
+        .expect("bind node-a endpoint");
+        let node_b_endpoint = freeq_transport::endpoint::Endpoint::bind(SocketAddr::new(
             IpAddr::V4(Ipv4Addr::LOCALHOST),
             0,
         ))
@@ -2859,44 +2859,44 @@ mod tests {
         .expect("bind david endpoint");
 
         let gateway_identity = generate_identity_bytes();
-        let patrick_identity = generate_identity_bytes();
-        let david_identity = generate_identity_bytes();
+        let node_a_identity = generate_identity_bytes();
+        let node_b_identity = generate_identity_bytes();
         let gateway_addr = gateway_endpoint.local_addr().expect("gateway addr");
 
-        let mut patrick_config = config_with_socket_peer_allowed_ips(
+        let mut node_a_config = config_with_socket_peer_allowed_ips(
             gateway_addr,
-            "patrick",
+            "node-a",
             "gateway",
             &gateway_identity.public_key_b64,
             &gateway_identity.kem_key_b64,
             &["10.0.0.254/32", "10.0.0.2/32"],
         );
-        patrick_config.peer[0].mode = Some(freeq_config::PeerMode::GatewayClient);
-        patrick_config.peer[0].key_rotation_secs = 900;
-        patrick_config.peer.push(freeq_config::PeerConfig {
-            name: "david".into(),
-            public_key: david_identity.public_key_b64.clone(),
-            kem_key: david_identity.kem_key_b64.clone(),
+        node_a_config.peer[0].mode = Some(freeq_config::PeerMode::GatewayClient);
+        node_a_config.peer[0].key_rotation_secs = 900;
+        node_a_config.peer.push(freeq_config::PeerConfig {
+            name: "node-b".into(),
+            public_key: node_b_identity.public_key_b64.clone(),
+            kem_key: node_b_identity.kem_key_b64.clone(),
             endpoint: None,
             mode: Some(freeq_config::PeerMode::RelayLeaf),
             allowed_ips: Vec::new(),
             key_rotation_secs: 900,
         });
 
-        let mut david_config = config_with_socket_peer_allowed_ips(
+        let mut node_b_config = config_with_socket_peer_allowed_ips(
             gateway_addr,
-            "david",
+            "node-b",
             "gateway",
             &gateway_identity.public_key_b64,
             &gateway_identity.kem_key_b64,
             &["10.0.0.254/32", "10.0.0.1/32"],
         );
-        david_config.peer[0].mode = Some(freeq_config::PeerMode::GatewayClient);
-        david_config.peer[0].key_rotation_secs = 900;
-        david_config.peer.push(freeq_config::PeerConfig {
-            name: "patrick".into(),
-            public_key: patrick_identity.public_key_b64.clone(),
-            kem_key: patrick_identity.kem_key_b64.clone(),
+        node_b_config.peer[0].mode = Some(freeq_config::PeerMode::GatewayClient);
+        node_b_config.peer[0].key_rotation_secs = 900;
+        node_b_config.peer.push(freeq_config::PeerConfig {
+            name: "node-a".into(),
+            public_key: node_a_identity.public_key_b64.clone(),
+            kem_key: node_a_identity.kem_key_b64.clone(),
             endpoint: None,
             mode: Some(freeq_config::PeerMode::RelayLeaf),
             allowed_ips: Vec::new(),
@@ -2906,51 +2906,51 @@ mod tests {
         let gateway_config = gateway_config_with_two_peers(
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)), 51820),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 11)), 51820),
-            &patrick_identity,
-            &david_identity,
+            &node_a_identity,
+            &node_b_identity,
         );
 
         let shared_keys =
             freeq_crypto::FreeQKeyPair::generate_ephemeral_test_pair().expect("shared tunnel keys");
-        let patrick_service = Arc::new(
-            init_tunnel_service_with_keys(&patrick_config, shared_keys.clone())
-                .expect("patrick tunnel"),
+        let node_a_service = Arc::new(
+            init_tunnel_service_with_keys(&node_a_config, shared_keys.clone())
+                .expect("node-a tunnel"),
         );
-        let david_service = Arc::new(
-            init_tunnel_service_with_keys(&david_config, shared_keys.clone())
-                .expect("david tunnel"),
+        let node_b_service = Arc::new(
+            init_tunnel_service_with_keys(&node_b_config, shared_keys.clone())
+                .expect("node-b tunnel"),
         );
         let gateway_service = Arc::new(
             init_tunnel_service_with_keys(&gateway_config, shared_keys).expect("gateway tunnel"),
         );
 
-        let patrick_state = init_api_state(&patrick_config, patrick_service.as_ref()).await;
-        let david_state = init_api_state(&david_config, david_service.as_ref()).await;
+        let node_a_state = init_api_state(&node_a_config, node_a_service.as_ref()).await;
+        let node_b_state = init_api_state(&node_b_config, node_b_service.as_ref()).await;
         let gateway_state = init_api_state(&gateway_config, gateway_service.as_ref()).await;
 
-        let (patrick_tun_tx, patrick_tun_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
-        let (patrick_out_tx, mut patrick_out_rx) =
+        let (node_a_tun_tx, node_a_tun_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
+        let (node_a_out_tx, mut node_a_out_rx) =
             mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
-        let (_david_tun_tx, david_tun_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
-        let (david_out_tx, mut david_out_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
+        let (_david_tun_tx, node_b_tun_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
+        let (node_b_out_tx, mut node_b_out_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
         let (_gateway_tun_tx, gateway_tun_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
         let (gateway_out_tx, mut gateway_out_rx) =
             mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
 
         let patrick_shared = DataplaneShared {
-            endpoint: patrick_endpoint.clone(),
-            tunnel_service: Arc::clone(&patrick_service),
-            peer_addrs: Arc::new(parse_peer_socket_addrs(&patrick_config).expect("patrick peers")),
-            direct_peer_hosts: Arc::new(crate::direct_peer_hosts(&patrick_config)),
-            proactive_peer_ids: Arc::new(crate::proactive_gateway_client_peers(&patrick_config)),
-            relay_pair_peer_ids: Arc::new(crate::relay_pair_peer_ids(&patrick_config)),
+            endpoint: node_a_endpoint.clone(),
+            tunnel_service: Arc::clone(&node_a_service),
+            peer_addrs: Arc::new(parse_peer_socket_addrs(&node_a_config).expect("node-a peers")),
+            direct_peer_hosts: Arc::new(crate::direct_peer_hosts(&node_a_config)),
+            proactive_peer_ids: Arc::new(crate::proactive_gateway_client_peers(&node_a_config)),
+            relay_pair_peer_ids: Arc::new(crate::relay_pair_peer_ids(&node_a_config)),
             active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
-            node_name: "patrick".into(),
-            identity: Arc::new(patrick_identity.keypair),
+            node_name: "node-a".into(),
+            identity: Arc::new(node_a_identity.keypair),
             peer_registry: Arc::new(
-                build_peer_registry(&patrick_config).expect("patrick registry"),
+                build_peer_registry(&node_a_config).expect("patrick registry"),
             ),
-            api_state: patrick_state.clone(),
+            api_state: node_a_state.clone(),
             e2e_relay_keys: test_relay_key_state(None),
             e2e_relay_counter: Arc::new(AtomicU64::new(0)),
             relay_pair_rotation_secs: 900,
@@ -2958,17 +2958,17 @@ mod tests {
             relay_pair_chunks: test_pair_chunks(),
         };
         let david_shared = DataplaneShared {
-            endpoint: david_endpoint.clone(),
-            tunnel_service: Arc::clone(&david_service),
-            peer_addrs: Arc::new(parse_peer_socket_addrs(&david_config).expect("david peers")),
-            direct_peer_hosts: Arc::new(crate::direct_peer_hosts(&david_config)),
-            proactive_peer_ids: Arc::new(crate::proactive_gateway_client_peers(&david_config)),
-            relay_pair_peer_ids: Arc::new(crate::relay_pair_peer_ids(&david_config)),
+            endpoint: node_b_endpoint.clone(),
+            tunnel_service: Arc::clone(&node_b_service),
+            peer_addrs: Arc::new(parse_peer_socket_addrs(&node_b_config).expect("node-b peers")),
+            direct_peer_hosts: Arc::new(crate::direct_peer_hosts(&node_b_config)),
+            proactive_peer_ids: Arc::new(crate::proactive_gateway_client_peers(&node_b_config)),
+            relay_pair_peer_ids: Arc::new(crate::relay_pair_peer_ids(&node_b_config)),
             active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
-            node_name: "david".into(),
-            identity: Arc::new(david_identity.keypair),
-            peer_registry: Arc::new(build_peer_registry(&david_config).expect("david registry")),
-            api_state: david_state.clone(),
+            node_name: "node-b".into(),
+            identity: Arc::new(node_b_identity.keypair),
+            peer_registry: Arc::new(build_peer_registry(&node_b_config).expect("david registry")),
+            api_state: node_b_state.clone(),
             e2e_relay_keys: test_relay_key_state(None),
             e2e_relay_counter: Arc::new(AtomicU64::new(0)),
             relay_pair_rotation_secs: 900,
@@ -2977,9 +2977,9 @@ mod tests {
         };
 
         let _patrick_runtime =
-            spawn_dataplane_runtime(patrick_shared.clone(), patrick_tun_rx, patrick_out_tx);
+            spawn_dataplane_runtime(patrick_shared.clone(), node_a_tun_rx, node_a_out_tx);
         let _david_runtime =
-            spawn_dataplane_runtime(david_shared.clone(), david_tun_rx, david_out_tx);
+            spawn_dataplane_runtime(david_shared.clone(), node_b_tun_rx, node_b_out_tx);
         let _gateway_runtime = spawn_dataplane_runtime(
             DataplaneShared {
                 endpoint: gateway_endpoint.clone(),
@@ -3022,8 +3022,8 @@ mod tests {
         })
         .await;
         if paired.is_err() {
-            let patrick_snapshot = patrick_state.snapshot().await;
-            let david_snapshot = david_state.snapshot().await;
+            let patrick_snapshot = node_a_state.snapshot().await;
+            let david_snapshot = node_b_state.snapshot().await;
             let gateway_snapshot = gateway_state.snapshot().await;
             let patrick_sessions = patrick_shared.active_sessions.lock().await.len();
             let david_sessions = david_shared.active_sessions.lock().await.len();
@@ -3062,20 +3062,20 @@ mod tests {
             [10, 0, 0, 1],
             [10, 0, 0, 2],
         ));
-        patrick_tun_tx
+        node_a_tun_tx
             .send(patrick_to_david.clone())
             .await
             .expect("send patrick packet");
-        let david_received = tokio::time::timeout(Duration::from_secs(5), david_out_rx.recv())
+        let david_received = tokio::time::timeout(Duration::from_secs(5), node_b_out_rx.recv())
             .await
             .expect("david receive timeout")
             .expect("david packet");
         assert_eq!(david_received, patrick_to_david);
-        assert!(patrick_out_rx.try_recv().is_err());
+        assert!(node_a_out_rx.try_recv().is_err());
         assert!(gateway_out_rx.try_recv().is_err());
 
-        patrick_endpoint.close().await;
-        david_endpoint.close().await;
+        node_a_endpoint.close().await;
+        node_b_endpoint.close().await;
         gateway_endpoint.close().await;
     }
 
@@ -3456,8 +3456,8 @@ mod tests {
     fn gateway_config_with_two_peers(
         patrick_addr: SocketAddr,
         david_addr: SocketAddr,
-        patrick_identity: &GeneratedIdentity,
-        david_identity: &GeneratedIdentity,
+        node_a_identity: &GeneratedIdentity,
+        node_b_identity: &GeneratedIdentity,
     ) -> freeq_config::Config {
         toml::from_str(&format!(
             r#"
@@ -3472,7 +3472,7 @@ mod tests {
             api_addr = "127.0.0.1:6789"
 
             [[peer]]
-            name = "patrick"
+            name = "node-a"
             endpoint = "{patrick_addr}"
             public_key = "{patrick_public_key}"
             kem_key = "{patrick_kem_key}"
@@ -3481,7 +3481,7 @@ mod tests {
             key_rotation_secs = 3600
 
             [[peer]]
-            name = "david"
+            name = "node-b"
             endpoint = "{david_addr}"
             public_key = "{david_public_key}"
             kem_key = "{david_kem_key}"
@@ -3489,10 +3489,10 @@ mod tests {
             mode = "relay_leaf"
             key_rotation_secs = 3600
             "#,
-            patrick_public_key = patrick_identity.public_key_b64,
-            patrick_kem_key = patrick_identity.kem_key_b64,
-            david_public_key = david_identity.public_key_b64,
-            david_kem_key = david_identity.kem_key_b64,
+            patrick_public_key = node_a_identity.public_key_b64,
+            patrick_kem_key = node_a_identity.kem_key_b64,
+            david_public_key = node_b_identity.public_key_b64,
+            david_kem_key = node_b_identity.kem_key_b64,
         ))
         .expect("gateway config should deserialize")
     }

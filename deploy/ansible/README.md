@@ -59,7 +59,7 @@ cd deploy/ansible
 ```
 
 Edit the example inventory in
-[inventories/example/hosts.yml](/Users/patrickmccormick/Documents/FreeQ/freeq-core/deploy/ansible/inventories/example/hosts.yml)
+[inventories/example/hosts.yml](./deploy/ansible/inventories/example/hosts.yml)
 with real hosts, node addresses, and peer keys.
 
 Dry-run:
