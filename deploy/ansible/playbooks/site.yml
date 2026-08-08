@@ -1,0 +1,6 @@
+---
+- name: Deploy FreeQ daemon
+  hosts: freeq_nodes
+  become: true
+  roles:
+    - role: freeqd

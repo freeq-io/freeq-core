@@ -1,0 +1,12 @@
+# CODEOWNERS — auto-request reviews for security-sensitive paths.
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything
+* @freeq-io/maintainers
+
+# Crypto and auth require two maintainer approvals
+/crates/freeq-crypto/  @freeq-io/crypto-reviewers
+/crates/freeq-auth/    @freeq-io/crypto-reviewers
+
+# CI changes require maintainer sign-off
+/.github/              @freeq-io/maintainers

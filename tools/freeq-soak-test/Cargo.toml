@@ -1,0 +1,21 @@
+[package]
+name = "freeq-soak-test"
+description = "High-concurrency telemetry soak harness for FreeQ"
+
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "freeq-soak-test"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }
+sysinfo = { workspace = true }
+rand = { workspace = true }
+freeq-crypto = { path = "../../crates/freeq-crypto" }
+freeq-tunnel = { path = "../../crates/freeq-tunnel" }
