@@ -2,31 +2,29 @@
 
 ## Audit Status
 
-FreeQ has **not yet received an independent cryptographic audit**. We are fundraising for an NCC Group or Cure53 engagement. Until then, treat FreeQ as beta software — do not use it to protect classified or life-safety data.
+FreeQ has **not yet received an independent cryptographic audit**. Treat FreeQ
+as alpha/beta software — do not use it to protect classified or life-safety
+data.
 
-An internal July 2026 node security review identified concrete hardening work
-for the local API, invite pairing flow, pre-QUIC cloaking boundary, identity key
-permissions, setup scripts, systemd service policy, and TUN driver boundary.
-The findings are tracked in `docs/engineering-hardening-log.md` and
-`docs/threat-model.md`. The first application pass fixed invite pairing-code
-derivation, status error redaction, and existing identity key permission checks.
-The second pass added local API loopback enforcement and fail-closed strict
-cloaking mode selection. Remaining fixes continue through proposal-only local
-SLM packets before Codex/human review and repository application.
+For protocol design assumptions, see [`docs/threat-model.md`](docs/threat-model.md)
+and [`docs/crypto-design.md`](docs/crypto-design.md).
 
 ## Reporting Vulnerabilities
 
-Email **security@getfreeq.com** with a PGP-encrypted report. Our public key is published at `getfreeq.io/security-pgp.asc`.
+Email **security@getfreeq.com** with a clear report (PGP optional if published on
+the FreeQ website).
 
-We observe a **90-day disclosure window**. We will:
+We aim to:
 1. Acknowledge receipt within 48 hours
 2. Provide a fix timeline within 7 days
-3. Issue a CVE and publish a post-mortem after the fix is deployed
+3. Coordinate disclosure after a fix is available
 
-Responsible reporters are credited in our Hall of Fame unless they prefer anonymity.
+Responsible reporters are credited unless they prefer anonymity.
 
 ## Scope
 
-In scope: `freeq-crypto`, `freeq-auth`, `freeq-transport`, `freeq-tunnel`, and the handshake protocol.
+In scope: `freeq-crypto`, `freeq-auth`, `freeq-transport`, `freeq-tunnel`,
+gateway relay behavior, and the handshake protocol.
 
-Out of scope: denial-of-service via resource exhaustion, issues in upstream crates (report to RustCrypto / quinn directly).
+Out of scope: denial-of-service via resource exhaustion, issues in upstream
+crates (report to those projects directly).
