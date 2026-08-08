@@ -27,7 +27,7 @@ Environment:
   FREEQ_PODMAN_RUST_IMAGE    Rust image for relay runtime tests.
 
 Notes:
-  - This lab does not require David's machine.
+  - This lab does not require Leaf B's machine.
   - The relay-runtime tier proves gateway forwarding semantics without TUN.
   - Full kernel TUN/routing acceptance remains a separate privileged Linux lab.
 EOF

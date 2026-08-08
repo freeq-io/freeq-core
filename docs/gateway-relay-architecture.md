@@ -42,7 +42,7 @@ traffic. Common examples include Starlink residential, LTE, hotels, airports,
 coffee shops, enterprise guest Wi-Fi, and carrier-grade NAT.
 
 ```text
-Patrick leaf  --outbound only-->  public gateway  <--outbound only--  David leaf
+Leaf A  --outbound only-->  public gateway  <--outbound only--  Leaf B
 ```
 
 Gateway relay properties:
@@ -62,34 +62,34 @@ Starlink CGNAT, LTE, airport Wi-Fi, or a guest network, that design is wrong.
 The gateway must maintain a table keyed by authenticated node identity:
 
 ```text
-patrick-mac          -> active inbound session from Patrick
-davids-macbook-pro  -> active inbound session from David
+leaf-a          -> active inbound session from Leaf A
+leaf-b  -> active inbound session from Leaf B
 ```
 
-When Patrick sends a packet to David:
+When Leaf A sends a packet to Leaf B:
 
 ```text
-1. Patrick routes 10.66.0.165 to the gateway session.
-2. Gateway authenticates the source session as patrick-mac.
-3. Gateway resolves destination 10.66.0.165 -> davids-macbook-pro.
-4. Gateway forwards over David's existing inbound session.
-5. David writes the packet to its local TUN interface.
+1. Leaf A routes 10.66.0.165 to the gateway session.
+2. Gateway authenticates the source session as leaf-a.
+3. Gateway resolves destination 10.66.0.165 -> leaf-b.
+4. Gateway forwards over Leaf B's existing inbound session.
+5. Leaf B writes the packet to its local TUN interface.
 ```
 
-When David replies, the same process runs in reverse.
+When Leaf B replies, the same process runs in reverse.
 
-The gateway must not treat `davids-macbook-pro` as a dialable public endpoint in
-gateway relay mode. If David has no active inbound session, the correct result
+The gateway must not treat `leaf-b` as a dialable public endpoint in
+gateway relay mode. If Leaf B has no active inbound session, the correct result
 is:
 
 ```text
-remote leaf offline: no active inbound session for davids-macbook-pro
+remote leaf offline: no active inbound session for leaf-b
 ```
 
 not:
 
 ```text
-attempting outbound connection to davids-public-ip:51820
+attempting outbound connection to leaf-b-public-ip:51820
 ```
 
 ## Rendezvous Metadata vs Relay Data Plane
@@ -159,7 +159,7 @@ Do implement:
 The acceptance test for gateway relay is:
 
 ```text
-Patrick behind unknown network -> AWS gateway <- David behind Starlink/CGNAT
+Leaf A behind unknown network -> AWS gateway <- Leaf B behind Starlink/CGNAT
 ```
 
 Both leaves must connect outbound to the gateway, and leaf-to-leaf packets must

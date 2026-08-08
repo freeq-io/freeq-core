@@ -21,7 +21,7 @@ Tier 2 runs the in-memory gateway relay runtime test inside a Linux Rust
 container. It proves the important relay rule:
 
 ```text
-Patrick leaf --outbound only--> gateway relay <--outbound only-- David leaf
+Leaf A --outbound only--> gateway relay <--outbound only-- Leaf B
 ```
 
 The gateway must forward between authenticated active sessions. It must not
@@ -79,7 +79,7 @@ Do not ask a remote field-test partner to rerun gateway tests until this local
 lab passes and the privileged Linux lab either passes or has a clearly scoped
 known limitation.
 
-David-style field testing should be reserved for final validation:
+remote field field testing should be reserved for final validation:
 
 ```text
 Spain unknown network -> AWS gateway <- Florida Starlink/CGNAT

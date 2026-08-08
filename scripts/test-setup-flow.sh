@@ -340,7 +340,7 @@ assert_file_contains "$TMP_ROOT/stop-sudo.log" "ipconfig set en0 DHCP"
 echo "== setup flow: guardrails =="
 assert_no_match "FREEQ_PEER_ENDPOINT|PEER_ENDPOINT|--peer-endpoint" \
   scripts/setup scripts/perf docs/perf-macos-quickstart.md docs/perf-harness.md tools/freeq-perf-identity/src/main.rs
-assert_no_match "patrick|david|Patrick|David" \
+assert_no_match "node_a|node_b|Leaf A|Leaf B" \
   scripts/setup scripts/perf docs/perf-macos-quickstart.md docs/perf-harness.md tools/freeq-perf-identity/src/main.rs
 assert_no_match "~/.freeq|cd .*\\.freeq|open .*\\.freeq" docs/perf-macos-quickstart.md docs/perf-harness.md
 assert_no_match "localStorage|sessionStorage|document.cookie|https://|http://[^1]" dashboard/index.html

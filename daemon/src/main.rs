@@ -2632,7 +2632,7 @@ mod tests {
             0,
         ))
         .await
-        .expect("bind david endpoint");
+        .expect("bind node-b endpoint");
 
         let gateway_identity = generate_identity_bytes();
         let node_a_identity = generate_identity_bytes();
@@ -2691,7 +2691,7 @@ mod tests {
         let (gateway_out_tx, mut gateway_out_rx) =
             mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
 
-        let _patrick_runtime = spawn_dataplane_runtime(
+        let _a_runtime = spawn_dataplane_runtime(
             DataplaneShared {
                 endpoint: node_a_endpoint.clone(),
                 tunnel_service: Arc::clone(&node_a_service),
@@ -2707,7 +2707,7 @@ mod tests {
                 node_name: "node-a".into(),
                 identity: Arc::new(node_a_identity.keypair),
                 peer_registry: Arc::new(
-                    build_peer_registry(&node_a_config).expect("patrick registry"),
+                    build_peer_registry(&node_a_config).expect("node-a registry"),
                 ),
                 api_state: node_a_state.clone(),
                 e2e_relay_keys: test_relay_key_state(Some(relay_key)),
@@ -2719,7 +2719,7 @@ mod tests {
             node_a_tun_rx,
             node_a_out_tx,
         );
-        let _david_runtime = spawn_dataplane_runtime(
+        let _b_runtime = spawn_dataplane_runtime(
             DataplaneShared {
                 endpoint: node_b_endpoint.clone(),
                 tunnel_service: Arc::clone(&node_b_service),
@@ -2731,7 +2731,7 @@ mod tests {
                 node_name: "node-b".into(),
                 identity: Arc::new(node_b_identity.keypair),
                 peer_registry: Arc::new(
-                    build_peer_registry(&node_b_config).expect("david registry"),
+                    build_peer_registry(&node_b_config).expect("node-b registry"),
                 ),
                 api_state: node_b_state.clone(),
                 e2e_relay_keys: test_relay_key_state(Some(relay_key)),
@@ -2774,57 +2774,57 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(300)).await;
 
-        let patrick_to_david = Bytes::from(test_ipv4_packet_with_source_dest(
+        let a_to_b = Bytes::from(test_ipv4_packet_with_source_dest(
             1180,
             [10, 0, 0, 1],
             [10, 0, 0, 2],
         ));
         node_a_tun_tx
-            .send(patrick_to_david.clone())
+            .send(a_to_b.clone())
             .await
-            .expect("send patrick packet");
-        let david_received = tokio::time::timeout(Duration::from_secs(5), node_b_out_rx.recv())
+            .expect("send node-a packet");
+        let b_received = tokio::time::timeout(Duration::from_secs(5), node_b_out_rx.recv())
             .await
-            .expect("david receive timeout")
-            .expect("david packet");
-        assert_eq!(david_received, patrick_to_david);
+            .expect("node-b receive timeout")
+            .expect("node-b packet");
+        assert_eq!(b_received, a_to_b);
 
-        let david_to_patrick = Bytes::from(test_ipv4_packet_with_source_dest(
+        let b_to_a = Bytes::from(test_ipv4_packet_with_source_dest(
             1180,
             [10, 0, 0, 2],
             [10, 0, 0, 1],
         ));
         node_b_tun_tx
-            .send(david_to_patrick.clone())
+            .send(b_to_a.clone())
             .await
-            .expect("send david packet");
-        let patrick_received = match tokio::time::timeout(
+            .expect("send node-b packet");
+        let a_received = match tokio::time::timeout(
             Duration::from_secs(5),
             node_a_out_rx.recv(),
         )
         .await
         {
             Ok(Some(packet)) => packet,
-            Ok(None) => panic!("patrick packet channel closed"),
+            Ok(None) => panic!("node-a packet channel closed"),
             Err(err) => {
                 refresh_api_state(&node_a_state, node_a_service.as_ref()).await;
                 refresh_api_state(&node_b_state, node_b_service.as_ref()).await;
                 refresh_api_state(&gateway_state, gateway_service.as_ref()).await;
-                let patrick_snapshot = node_a_state.snapshot().await;
-                let david_snapshot = node_b_state.snapshot().await;
+                let a_snapshot = node_a_state.snapshot().await;
+                let b_snapshot = node_b_state.snapshot().await;
                 let gateway_snapshot = gateway_state.snapshot().await;
                 panic!(
-                        "patrick receive timeout: {err}; patrick={:?}/{:?}; david={:?}/{:?}; gateway={:?}/{:?}",
-                        patrick_snapshot.last_error,
-                        patrick_snapshot.tunnel,
-                        david_snapshot.last_error,
-                        david_snapshot.tunnel,
+                        "node-a receive timeout: {err}; node_a={:?}/{:?}; node_b={:?}/{:?}; gateway={:?}/{:?}",
+                        a_snapshot.last_error,
+                        a_snapshot.tunnel,
+                        b_snapshot.last_error,
+                        b_snapshot.tunnel,
                         gateway_snapshot.last_error,
                         gateway_snapshot.tunnel,
                     );
             }
         };
-        assert_eq!(patrick_received, david_to_patrick);
+        assert_eq!(a_received, b_to_a);
 
         assert!(gateway_out_rx.try_recv().is_err());
 
@@ -2856,7 +2856,7 @@ mod tests {
             0,
         ))
         .await
-        .expect("bind david endpoint");
+        .expect("bind node-b endpoint");
 
         let gateway_identity = generate_identity_bytes();
         let node_a_identity = generate_identity_bytes();
@@ -2931,13 +2931,13 @@ mod tests {
         let (node_a_tun_tx, node_a_tun_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
         let (node_a_out_tx, mut node_a_out_rx) =
             mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
-        let (_david_tun_tx, node_b_tun_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
+        let (_b_tun_tx, node_b_tun_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
         let (node_b_out_tx, mut node_b_out_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
         let (_gateway_tun_tx, gateway_tun_rx) = mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
         let (gateway_out_tx, mut gateway_out_rx) =
             mpsc::channel::<Bytes>(DATAPLANE_CHANNEL_CAPACITY);
 
-        let patrick_shared = DataplaneShared {
+        let a_shared = DataplaneShared {
             endpoint: node_a_endpoint.clone(),
             tunnel_service: Arc::clone(&node_a_service),
             peer_addrs: Arc::new(parse_peer_socket_addrs(&node_a_config).expect("node-a peers")),
@@ -2948,7 +2948,7 @@ mod tests {
             node_name: "node-a".into(),
             identity: Arc::new(node_a_identity.keypair),
             peer_registry: Arc::new(
-                build_peer_registry(&node_a_config).expect("patrick registry"),
+                build_peer_registry(&node_a_config).expect("node-a registry"),
             ),
             api_state: node_a_state.clone(),
             e2e_relay_keys: test_relay_key_state(None),
@@ -2957,7 +2957,7 @@ mod tests {
             relay_pair_pending: Arc::new(StdMutex::new(HashMap::new())),
             relay_pair_chunks: test_pair_chunks(),
         };
-        let david_shared = DataplaneShared {
+        let b_shared = DataplaneShared {
             endpoint: node_b_endpoint.clone(),
             tunnel_service: Arc::clone(&node_b_service),
             peer_addrs: Arc::new(parse_peer_socket_addrs(&node_b_config).expect("node-b peers")),
@@ -2967,7 +2967,7 @@ mod tests {
             active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
             node_name: "node-b".into(),
             identity: Arc::new(node_b_identity.keypair),
-            peer_registry: Arc::new(build_peer_registry(&node_b_config).expect("david registry")),
+            peer_registry: Arc::new(build_peer_registry(&node_b_config).expect("node-b registry")),
             api_state: node_b_state.clone(),
             e2e_relay_keys: test_relay_key_state(None),
             e2e_relay_counter: Arc::new(AtomicU64::new(0)),
@@ -2976,10 +2976,10 @@ mod tests {
             relay_pair_chunks: test_pair_chunks(),
         };
 
-        let _patrick_runtime =
-            spawn_dataplane_runtime(patrick_shared.clone(), node_a_tun_rx, node_a_out_tx);
-        let _david_runtime =
-            spawn_dataplane_runtime(david_shared.clone(), node_b_tun_rx, node_b_out_tx);
+        let _a_runtime =
+            spawn_dataplane_runtime(a_shared.clone(), node_a_tun_rx, node_a_out_tx);
+        let _b_runtime =
+            spawn_dataplane_runtime(b_shared.clone(), node_b_tun_rx, node_b_out_tx);
         let _gateway_runtime = spawn_dataplane_runtime(
             DataplaneShared {
                 endpoint: gateway_endpoint.clone(),
@@ -3012,8 +3012,8 @@ mod tests {
         let paired = tokio::time::timeout(Duration::from_secs(25), async {
             loop {
                 match (
-                    current_relay_key(&patrick_shared),
-                    current_relay_key(&david_shared),
+                    current_relay_key(&a_shared),
+                    current_relay_key(&b_shared),
                 ) {
                     (Some(left), Some(right)) if left == right => break,
                     _ => tokio::time::sleep(Duration::from_millis(100)).await,
@@ -3022,55 +3022,55 @@ mod tests {
         })
         .await;
         if paired.is_err() {
-            let patrick_snapshot = node_a_state.snapshot().await;
-            let david_snapshot = node_b_state.snapshot().await;
+            let a_snapshot = node_a_state.snapshot().await;
+            let b_snapshot = node_b_state.snapshot().await;
             let gateway_snapshot = gateway_state.snapshot().await;
-            let patrick_sessions = patrick_shared.active_sessions.lock().await.len();
-            let david_sessions = david_shared.active_sessions.lock().await.len();
-            let patrick_pending = patrick_shared
+            let a_sessions = a_shared.active_sessions.lock().await.len();
+            let b_sessions = b_shared.active_sessions.lock().await.len();
+            let a_pending = a_shared
                 .relay_pair_pending
                 .lock()
                 .expect("pending")
                 .len();
-            let patrick_chunks = patrick_shared
+            let a_chunks = a_shared
                 .relay_pair_chunks
                 .lock()
                 .expect("chunks")
                 .len();
-            let david_pending = david_shared
+            let b_pending = b_shared
                 .relay_pair_pending
                 .lock()
                 .expect("pending")
                 .len();
-            let david_chunks = david_shared.relay_pair_chunks.lock().expect("chunks").len();
+            let b_chunks = b_shared.relay_pair_chunks.lock().expect("chunks").len();
             panic!(
-                "relay pair handshake did not install matching keys: patrick={:?} sessions={} pending={} chunks={}; david={:?} sessions={} pending={} chunks={}; gateway={:?}",
-                patrick_snapshot.last_error,
-                patrick_sessions,
-                patrick_pending,
-                patrick_chunks,
-                david_snapshot.last_error,
-                david_sessions,
-                david_pending,
-                david_chunks,
+                "relay pair handshake did not install matching keys: node_a={:?} sessions={} pending={} chunks={}; node_b={:?} sessions={} pending={} chunks={}; gateway={:?}",
+                a_snapshot.last_error,
+                a_sessions,
+                a_pending,
+                a_chunks,
+                b_snapshot.last_error,
+                b_sessions,
+                b_pending,
+                b_chunks,
                 gateway_snapshot.last_error
             );
         }
 
-        let patrick_to_david = Bytes::from(test_ipv4_packet_with_source_dest(
+        let a_to_b = Bytes::from(test_ipv4_packet_with_source_dest(
             1180,
             [10, 0, 0, 1],
             [10, 0, 0, 2],
         ));
         node_a_tun_tx
-            .send(patrick_to_david.clone())
+            .send(a_to_b.clone())
             .await
-            .expect("send patrick packet");
-        let david_received = tokio::time::timeout(Duration::from_secs(5), node_b_out_rx.recv())
+            .expect("send node-a packet");
+        let b_received = tokio::time::timeout(Duration::from_secs(5), node_b_out_rx.recv())
             .await
-            .expect("david receive timeout")
-            .expect("david packet");
-        assert_eq!(david_received, patrick_to_david);
+            .expect("node-b receive timeout")
+            .expect("node-b packet");
+        assert_eq!(b_received, a_to_b);
         assert!(node_a_out_rx.try_recv().is_err());
         assert!(gateway_out_rx.try_recv().is_err());
 
@@ -3454,8 +3454,8 @@ mod tests {
     }
 
     fn gateway_config_with_two_peers(
-        patrick_addr: SocketAddr,
-        david_addr: SocketAddr,
+        a_addr: SocketAddr,
+        b_addr: SocketAddr,
         node_a_identity: &GeneratedIdentity,
         node_b_identity: &GeneratedIdentity,
     ) -> freeq_config::Config {
@@ -3473,26 +3473,26 @@ mod tests {
 
             [[peer]]
             name = "node-a"
-            endpoint = "{patrick_addr}"
-            public_key = "{patrick_public_key}"
-            kem_key = "{patrick_kem_key}"
+            endpoint = "{a_addr}"
+            public_key = "{a_public_key}"
+            kem_key = "{a_kem_key}"
             allowed_ips = ["10.0.0.1/32"]
             mode = "relay_leaf"
             key_rotation_secs = 3600
 
             [[peer]]
             name = "node-b"
-            endpoint = "{david_addr}"
-            public_key = "{david_public_key}"
-            kem_key = "{david_kem_key}"
+            endpoint = "{b_addr}"
+            public_key = "{b_public_key}"
+            kem_key = "{b_kem_key}"
             allowed_ips = ["10.0.0.2/32"]
             mode = "relay_leaf"
             key_rotation_secs = 3600
             "#,
-            patrick_public_key = node_a_identity.public_key_b64,
-            patrick_kem_key = node_a_identity.kem_key_b64,
-            david_public_key = node_b_identity.public_key_b64,
-            david_kem_key = node_b_identity.kem_key_b64,
+            a_public_key = node_a_identity.public_key_b64,
+            a_kem_key = node_a_identity.kem_key_b64,
+            b_public_key = node_b_identity.public_key_b64,
+            b_kem_key = node_b_identity.kem_key_b64,
         ))
         .expect("gateway config should deserialize")
     }

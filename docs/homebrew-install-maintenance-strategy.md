@@ -82,7 +82,7 @@ brew audit --new --formula freeq
 ```
 
 7. Add bottles for Apple Silicon and Intel Macs.
-8. Use Patrick and David as early testers on clean machines and real captive
+8. Use field testers as early testers on clean machines and real captive
    Wi-Fi networks.
 9. Submit a Homebrew core pull request when the formula, release cadence,
    licensing, tests, and user contract are stable.
@@ -212,7 +212,7 @@ The Homebrew core submission is ready when:
 3. Move or copy `Formula/freeq.rb` into the tap.
 4. Cut the first tagged release suitable for tap testing.
 5. Update the formula URL and `sha256`.
-6. Test with Patrick and David using:
+6. Test with field testers using:
 
 ```bash
 brew install freeq-io/tap/freeq
