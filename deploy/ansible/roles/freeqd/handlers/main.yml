@@ -1,0 +1,9 @@
+---
+- name: daemon reload
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: restart freeqd
+  ansible.builtin.systemd:
+    name: "{{ freeq_service_name }}"
+    state: restarted

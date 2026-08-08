@@ -1,0 +1,143 @@
+name: Release
+
+# Build multi-platform binary packages and attach them to a GitHub Release.
+# Trigger by pushing a v* tag (e.g. v0.2.1) or via workflow_dispatch.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build (e.g. v0.2.1). Empty = run without creating/uploading a release."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          # Linux ARM64: native arm runner when available on the org plan.
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: Build and package
+        env:
+          FREEQ_TARGET_TRIPLE: ${{ matrix.target }}
+          FREEQ_PACKAGE_OUT: ${{ github.workspace }}/dist
+        run: |
+          set -euo pipefail
+          # Native host builds (matrix runners match targets).
+          cargo build --release --locked \
+            -p freeq -p freeqd -p freeq-gateway -p freeq-perf-identity
+          FREEQ_PACKAGE_SKIP_BUILD=1 bash scripts/packaging/freeq-package-release.sh
+          ls -la dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: freeq-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten assets
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.sha256' \) -exec cp {} release-assets/ \;
+          ls -la release-assets/
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            echo "name=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          name: FreeQ Core ${{ steps.tag.outputs.name }}
+          generate_release_notes: true
+          files: release-assets/*
+          fail_on_unmatched_files: true
+          body: |
+            ## FreeQ Core ${{ steps.tag.outputs.name }}
+
+            Prebuilt binaries — **no Rust toolchain required** for install.
+
+            ### Quick install (macOS)
+
+            ```bash
+            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/install/freeq-install-macos.sh)"
+            ```
+
+            The installer downloads the matching release asset for your Mac (Apple Silicon or Intel).
+
+            ### Manual download
+
+            Assets are named:
+
+            `freeq-core-<tag>-<target>.tar.gz`
+
+            Targets:
+            - `aarch64-apple-darwin` — macOS Apple Silicon
+            - `x86_64-apple-darwin` — macOS Intel
+            - `x86_64-unknown-linux-gnu` — Linux x86_64
+            - `aarch64-unknown-linux-gnu` — Linux ARM64
+
+            ### Contents
+
+            - `bin/freeq`, `bin/freeqd`, `bin/freeq-gateway`, `bin/freeq-perf-identity`
+            - `scripts/` install + pair + setup helpers
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

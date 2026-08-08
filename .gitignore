@@ -1,0 +1,11 @@
+.DS_Store
+.env
+.local-ai/
+*.crt
+*.key
+*.pem
+**/*.rs.bk
+/target/
+dist/
+freeq.toml
+identity.key
