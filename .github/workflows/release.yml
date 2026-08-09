@@ -29,9 +29,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Apple Silicon (default macOS pool is ARM64).
           - os: macos-14
             target: aarch64-apple-darwin
-          - os: macos-13
+          # Intel x86_64 — use macos-15-intel (macos-13 Intel pool is deprecated/closed).
+          # See: https://github.blog/changelog/2025-09-19-github-actions-macos-13-runner-image-is-closing-down/
+          - os: macos-15-intel
             target: x86_64-apple-darwin
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
