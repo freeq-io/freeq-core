@@ -2,7 +2,16 @@
 # Download a FreeQ Core release tarball (prebuilt binaries + scripts) from GitHub.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_src="${BASH_SOURCE[0]:-}"
+if [ -n "$_src" ] && [ -f "$_src" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "$_src")" && pwd)"
+else
+  SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)"
+fi
+if [ -z "${SCRIPT_DIR:-}" ] || [ ! -f "$SCRIPT_DIR/freeq-platform.sh" ]; then
+  echo "freeq-fetch-release.sh: freeq-platform.sh not found next to this script" >&2
+  exit 1
+fi
 # shellcheck source=freeq-platform.sh
 source "$SCRIPT_DIR/freeq-platform.sh"
 

@@ -3,7 +3,13 @@
 # Optional source build remains available via FREEQ_FROM_SOURCE=1.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P || true)"
+# When installed via `curl | bash`, BASH_SOURCE is unset; bootstrap has no local scripts.
+_src="${BASH_SOURCE[0]:-}"
+if [ -n "$_src" ] && [ -f "$_src" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "$_src")" >/dev/null 2>&1 && pwd -P || true)"
+else
+  SCRIPT_DIR=""
+fi
 REPO_URL="${FREEQ_REPO_URL:-https://github.com/freeq-io/freeq-core.git}"
 BRANCH="${FREEQ_BRANCH:-main}"
 # Binary dist lives under ~/.freeq/dist by default (no full git clone).

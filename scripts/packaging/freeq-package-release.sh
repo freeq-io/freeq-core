@@ -32,15 +32,32 @@ mkdir -p "$OUT_DIR"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/bin" "$STAGE/scripts" "$STAGE/docs"
 
+# Host triple vs cross target: binaries live under target/<triple>/release when
+# FREEQ_TARGET_TRIPLE differs from the host, else target/release.
+# Avoid pipefail SIGPIPE from `rustc | awk; exit` (exit 141).
+HOST_TRIPLE=""
+while IFS= read -r line; do
+  case "$line" in
+    host:*) HOST_TRIPLE="${line#host: }"; HOST_TRIPLE="${HOST_TRIPLE#"${HOST_TRIPLE%%[![:space:]]*}"}"; break ;;
+  esac
+done < <(rustc -vV 2>/dev/null || true)
+if [ -n "${FREEQ_TARGET_TRIPLE:-}" ] && [ "${FREEQ_TARGET_TRIPLE}" != "${HOST_TRIPLE:-}" ]; then
+  BIN_DIR_SRC="$ROOT/target/${FREEQ_TARGET_TRIPLE}/release"
+  CARGO_TARGET_ARGS=(--target "$FREEQ_TARGET_TRIPLE")
+else
+  BIN_DIR_SRC="$ROOT/target/release"
+  CARGO_TARGET_ARGS=()
+fi
+
 if [ "${FREEQ_PACKAGE_SKIP_BUILD:-0}" != "1" ]; then
-  say "Building release crates: $PACKAGES"
+  say "Building release crates: $PACKAGES (target=${FREEQ_TARGET_TRIPLE:-host})"
   # shellcheck disable=SC2086
-  cargo build --release --locked $(printf ' -p %s' $PACKAGES)
+  cargo build --release --locked "${CARGO_TARGET_ARGS[@]}" $(printf ' -p %s' $PACKAGES)
 fi
 
 copy_bin() {
   local name="$1"
-  local src="$ROOT/target/release/${name}"
+  local src="$BIN_DIR_SRC/${name}"
   if [ ! -x "$src" ]; then
     # Windows would use .exe; not packaged yet.
     echo "Missing built binary: $src" >&2
@@ -51,11 +68,10 @@ copy_bin() {
 }
 
 for b in freeq freeqd freeq-gateway freeq-perf-identity; do
-  if [ -x "$ROOT/target/release/$b" ] || [ "${FREEQ_PACKAGE_SKIP_BUILD:-0}" != "1" ]; then
+  if [ -x "$BIN_DIR_SRC/$b" ] || [ "${FREEQ_PACKAGE_SKIP_BUILD:-0}" != "1" ]; then
     copy_bin "$b"
   fi
 done
-
 # Ship scripts needed for install/pair/start/stop/doctor (not full repo).
 copy_tree() {
   local src="$1"
