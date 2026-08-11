@@ -12,7 +12,8 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 assert_contains() {
   local file="$1"
   local needle="$2"
-  if ! grep -Fq "$needle" "$file"; then
+  # -- so needles like --from-source are not parsed as grep options
+  if ! grep -Fq -- "$needle" "$file"; then
     echo "FAIL: $file does not contain: $needle" >&2
     exit 1
   fi
