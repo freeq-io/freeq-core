@@ -169,17 +169,19 @@ Do not send files from `~/.freeq/` identity or key paths.
 
 ## Linux Install (Ubuntu / Debian-class)
 
+### Default: portable GitHub binary (recommended for most nodes)
+
 On the Linux host (e.g. `freeq.local`):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/install/freeq-install-linux.sh | bash
 ```
 
-That downloads the matching prebuilt Linux binary package from GitHub Releases,
-installs under `~/.freeq/`, and starts `freeqd`. You may be prompted for sudo
-once (TUN / CAP_NET_ADMIN).
+That downloads the matching **portable** prebuilt package from GitHub Releases,
+installs under `~/.freeq/`, and starts `freeqd`. No Rust toolchain required.
+You may be prompted for sudo once (TUN / CAP_NET_ADMIN).
 
-Accept-only **gateway** role (server that leaves dial into):
+Accept-only **gateway** role (still uses the portable binary by default):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/install/freeq-install-linux.sh \
@@ -192,15 +194,33 @@ From your laptop over SSH (use `-t` if sudo needs a password):
 ssh -t you@freeq.local 'curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/install/freeq-install-linux.sh | bash'
 ```
 
+### Optional: native source build (high throughput or gateway)
+
+Portable release binaries are not tuned to a specific CPU. If this node will
+carry **high packet rate** or act as a **busy gateway**, you can compile on the
+machine itself with `target-cpu=native` (better crypto/PQC codegen on that
+host). Tradeoffs: needs Rust, slower install, binary is **not portable** to
+other CPUs.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/install/freeq-install-linux.sh \
+  | FREEQ_FROM_SOURCE=1 bash
+
+# Gateway + native
+curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/install/freeq-install-linux.sh \
+  | FREEQ_FROM_SOURCE=1 FREEQ_ROLE=gateway FREEQ_PUBLIC_ENDPOINT=freeq.local:51820 bash
+```
+
+`FREEQ_NATIVE=0` disables `-C target-cpu=native` while still building from source.
+
 Read-only host inspection:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/install/freeq-install-linux.sh | bash -s -- --preflight
 ```
 
-The full multi-distro acceptance matrix is tracked in
-[Linux Support Acceptance](linux-supported-acceptance.md). Binary install on
-Ubuntu is the recommended path today.
+See also [binary-releases.md](binary-releases.md). The multi-distro acceptance
+matrix is tracked in [Linux Support Acceptance](linux-supported-acceptance.md).
 
 ## Windows And Gateway Hardware
 

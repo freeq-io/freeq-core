@@ -20,6 +20,9 @@ SETUP_URL="${FREEQ_SETUP_URL:-http://127.0.0.1:6789/}"
 GATEWAY_STATUS_URL="${FREEQ_GATEWAY_STATUS_URL:-http://127.0.0.1:6790/healthz}"
 VERSION="${FREEQ_VERSION:-latest}"
 FROM_SOURCE="${FREEQ_FROM_SOURCE:-0}"
+# When building from source, optimize for this CPU by default (portable binary
+# path never uses this). Set FREEQ_NATIVE=0 to build a generic host binary.
+NATIVE="${FREEQ_NATIVE:-1}"
 ROLE="${FREEQ_ROLE:-node}" # node | gateway
 DRY_RUN=0
 ROLLBACK=0
@@ -31,30 +34,39 @@ usage() {
   cat <<'EOF'
 FreeQ Linux installer.
 
-Downloads prebuilt FreeQ binaries from GitHub Releases (no Rust/cargo required),
-creates local identity under ~/.freeq/, starts freeqd (or freeq-gateway), and
-prints one result. Re-run any time to update.
+Default: download portable prebuilt binaries from GitHub Releases (fast; no
+Rust required), create identity under ~/.freeq/, start freeqd or freeq-gateway.
+
+Optional native build: compile on this machine with CPU-specific optimization.
+Recommended only for high-throughput nodes or gateway servers. Requires Rust,
+takes longer, and the binary is not portable to other CPUs.
 
 Options:
-  --dry-run         show plan only; no download/start
-  --preflight       read-only host inspection (legacy alpha checks)
-  --rollback        stop FreeQ started by this installer
+  --dry-run            show plan only; no download/start
+  --preflight          read-only host inspection
+  --rollback           stop FreeQ started by this installer
   --role node|gateway  freeqd node (default) or accept-only freeq-gateway
-  --version TAG     release tag or latest (default latest)
-  --from-source     git clone + cargo build (developers)
+  --version TAG        release tag or latest (default latest)
+  --from-source        build from source on this host (native CPU by default)
+  --native             same as --from-source (explicit performance path)
   --help, -h
 
 Environment:
-  FREEQ_VERSION, FREEQ_ROLE, FREEQ_BIN_DIR, FREEQ_FROM_SOURCE
+  FREEQ_VERSION, FREEQ_ROLE, FREEQ_BIN_DIR
+  FREEQ_FROM_SOURCE=1  build from source instead of downloading a release
+  FREEQ_NATIVE=0       with --from-source, skip -C target-cpu=native
   FREEQ_NODE_NAME, FREEQ_OVERLAY_ADDRESS, FREEQ_LISTEN_ADDR
   FREEQ_PUBLIC_ENDPOINT   e.g. freeq.local:51820 for gateway public endpoint
 
 Examples:
-  # Ubuntu server node (leaf or LAN peer)
+  # Default: portable GitHub binary (most users)
   curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/install/freeq-install-linux.sh | bash
 
-  # Accept-only gateway on freeq.local
+  # Gateway role, still portable binary
   curl -fsSL …/freeq-install-linux.sh | FREEQ_ROLE=gateway FREEQ_PUBLIC_ENDPOINT=freeq.local:51820 bash
+
+  # High-throughput or gateway: native-optimized build on this host
+  curl -fsSL …/freeq-install-linux.sh | FREEQ_FROM_SOURCE=1 FREEQ_ROLE=gateway bash
 EOF
 }
 
@@ -65,7 +77,7 @@ while [ "$#" -gt 0 ]; do
     --rollback) ROLLBACK=1; shift ;;
     --role) ROLE="$2"; shift 2 ;;
     --version) VERSION="$2"; shift 2 ;;
-    --from-source) FROM_SOURCE=1; shift ;;
+    --from-source|--native) FROM_SOURCE=1; shift ;;
     --help|-h) usage; exit 0 ;;
     --apply)
       # Back-compat with old preflight flag: treat as real install.
@@ -146,19 +158,28 @@ print_plan() {
   cat <<EOF
 FreeQ Linux installer
 
-What this does:
-  1. Downloads prebuilt FreeQ binaries for this CPU from GitHub Releases.
-  2. Installs under ~/.freeq/dist and links ~/.freeq/bin.
-  3. Creates local identity under ~/.freeq/perf.
-  4. Starts freeqd (role=node) or freeq-gateway (role=gateway).
-  5. Checks local status HTTP.
+Default path (this run unless --from-source / FREEQ_FROM_SOURCE=1):
+  1. Download portable prebuilt binaries from GitHub Releases.
+  2. Install under ~/.freeq/dist and link ~/.freeq/bin.
+  3. Create local identity under ~/.freeq/perf.
+  4. Start freeqd (role=node) or freeq-gateway (role=gateway).
+  5. Check local status HTTP.
 
 Role:    $ROLE
 Version: $VERSION
 Bin dir: $BIN_DIR
 State:   ~/.freeq/
+Mode:    $([ "$FROM_SOURCE" = "1" ] && echo "source build (native CPU optim)" || echo "portable GitHub binary (default)")
 
-No cargo/rustc required for the normal path.
+No cargo/rustc required for the default binary path.
+
+Performance note:
+  Portable release binaries run on most Linux hosts but are not tuned to this
+  CPU. For high-throughput nodes or gateway servers, consider a native build
+  on this machine (slower install; binary not portable):
+
+    FREEQ_FROM_SOURCE=1 $0 --role $ROLE
+    # or: curl …/freeq-install-linux.sh | FREEQ_FROM_SOURCE=1 bash
 EOF
 }
 
@@ -231,7 +252,26 @@ install_from_source() {
   else
     git clone --branch "$BRANCH" "$REPO_URL" "$src"
   fi
-  (cd "$src" && cargo build --release -p freeq -p freeqd -p freeq-gateway -p freeq-perf-identity)
+
+  local rustflags="${RUSTFLAGS:-}"
+  if [ "$NATIVE" = "1" ] || [ "$NATIVE" = "yes" ] || [ "$NATIVE" = "true" ]; then
+    # Optimize for this host CPU (AVX2/AES-NI/etc.). Do not copy the binary
+    # to other machines — rebuild there instead.
+    if [[ " ${rustflags} " != *"target-cpu="* ]]; then
+      rustflags="${rustflags:+$rustflags }-C target-cpu=native"
+    fi
+    say "Native CPU optimization: RUSTFLAGS='$rustflags'"
+    say "(Set FREEQ_NATIVE=0 to build a generic host binary instead.)"
+  else
+    say "Source build without target-cpu=native (portable-ish host default)."
+  fi
+
+  (
+    cd "$src"
+    # shellcheck disable=SC2086
+    RUSTFLAGS="$rustflags" cargo build --release \
+      -p freeq -p freeqd -p freeq-gateway -p freeq-perf-identity
+  )
   mkdir -p "$BIN_DIR" "$HOME/.freeq/dist/current/bin" "$HOME/.freeq/dist/current/scripts"
   for b in freeq freeqd freeq-gateway freeq-perf-identity; do
     cp "$src/target/release/$b" "$BIN_DIR/$b"
@@ -241,7 +281,11 @@ install_from_source() {
   # Prefer scripts from source tree as install dir for render/start
   INSTALL_DIR="$src"
   ln -sfn "$src" "$HOME/.freeq/dist/current" 2>/dev/null || true
-  UPDATE_STATUS="source build"
+  if [ "$NATIVE" = "1" ] || [ "$NATIVE" = "yes" ] || [ "$NATIVE" = "true" ]; then
+    UPDATE_STATUS="source build (target-cpu=native)"
+  else
+    UPDATE_STATUS="source build"
+  fi
 }
 
 generate_identity_if_needed() {
@@ -381,6 +425,13 @@ say ""
 say "Add to PATH:"
 say "  export PATH=\"$BIN_DIR:\$PATH\""
 say ""
+if [ "$FROM_SOURCE" != "1" ]; then
+  say "Installed: portable GitHub binary (default)."
+  say "Optional: for high-throughput nodes or gateways, rebuild native on this host:"
+  say "  FREEQ_FROM_SOURCE=1 FREEQ_ROLE=$ROLE $0"
+  say "  # uses RUSTFLAGS='-C target-cpu=native' (not portable to other CPUs)"
+  say ""
+fi
 if [ "$ROLE" = "gateway" ]; then
   say "Gateway status: $GATEWAY_STATUS_URL"
   say "Publish peer material from: ~/.freeq/perf/peer.env"

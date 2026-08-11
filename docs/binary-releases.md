@@ -35,15 +35,26 @@ not optional Cargo features. One binary package is built per triple.
 
 ## User install (Linux)
 
+**Default — portable release binary** (fast; no Rust):
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/install/freeq-install-linux.sh | bash
 ```
 
-Gateway role (accept-only relay):
+Gateway role (accept-only relay), still portable by default:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/install/freeq-install-linux.sh \
   | FREEQ_ROLE=gateway FREEQ_PUBLIC_ENDPOINT=your.host:51820 bash
+```
+
+**Optional — native source build** on the host (high-throughput node or busy
+gateway). Uses `RUSTFLAGS=-C target-cpu=native`. Requires Rust; binary is not
+portable to other CPUs.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/install/freeq-install-linux.sh \
+  | FREEQ_FROM_SOURCE=1 bash
 ```
 
 Environment overrides:
@@ -51,7 +62,8 @@ Environment overrides:
 | Variable | Meaning |
 |----------|---------|
 | `FREEQ_VERSION` | `latest` (default) or `v0.2.1` |
-| `FREEQ_FROM_SOURCE` | `1` = git clone + cargo build |
+| `FREEQ_FROM_SOURCE` | `1` = git clone + cargo build on this host |
+| `FREEQ_NATIVE` | with source build: `1` (default) adds `-C target-cpu=native`; `0` skips it |
 | `FREEQ_BIN_DIR` | binary link dir (default `~/.freeq/bin`) |
 | `FREEQ_GITHUB_TOKEN` | optional, higher API rate limits |
 
