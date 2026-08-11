@@ -33,6 +33,19 @@ not optional Cargo features. One binary package is built per triple.
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/install/freeq-install-macos.sh)"
 ```
 
+## User install (Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/install/freeq-install-linux.sh | bash
+```
+
+Gateway role (accept-only relay):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/install/freeq-install-linux.sh \
+  | FREEQ_ROLE=gateway FREEQ_PUBLIC_ENDPOINT=your.host:51820 bash
+```
+
 Environment overrides:
 
 | Variable | Meaning |

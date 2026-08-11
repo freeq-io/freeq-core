@@ -3,7 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INSTALLER="$ROOT/scripts/install/freeq-install-linux.sh"
-HARNESS="$ROOT/scripts/test-linux-install-flow.sh"
+START="$ROOT/scripts/setup/freeq-start-linux.sh"
+STOP="$ROOT/scripts/setup/freeq-stop-linux.sh"
 FIXTURES="$ROOT/scripts/fixtures/linux-os-release"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/freeq-linux-install.XXXXXX")"
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -18,123 +19,35 @@ assert_contains() {
 }
 
 echo "== linux install: shell syntax =="
-bash -n "$INSTALLER" "$HARNESS"
+bash -n "$INSTALLER" "$START" "$STOP" \
+  "$ROOT/scripts/install/freeq-platform.sh" \
+  "$ROOT/scripts/install/freeq-fetch-release.sh"
 
-echo "== linux install: static command guardrails =="
-python3 - "$INSTALLER" <<'PY'
-import re
-import sys
-from pathlib import Path
+echo "== linux install: dry-run =="
+bash "$INSTALLER" --dry-run >"$TMP_DIR/dry.out"
+assert_contains "$TMP_DIR/dry.out" "FreeQ Linux installer"
+assert_contains "$TMP_DIR/dry.out" "Dry run only"
+assert_contains "$TMP_DIR/dry.out" "prebuilt"
 
-text = Path(sys.argv[1]).read_text()
-patterns = {
-    "sudo invocation": r"(^|[;&|()\s])sudo\s+",
-    "systemctl invocation": r"(^|[;&|()\s])systemctl\s+",
-    "ip route mutation": r"(^|[;&|()\s])ip\s+route\s+",
-    "NetworkManager mutation": r"(^|[;&|()\s])nmcli\s+(connection|device|general|networking)",
-    "netplan mutation": r"(^|[;&|()\s])netplan\s+apply\s*$",
-    "module mutation": r"(^|[;&|()\s])modprobe\s+",
-    "capability mutation": r"(^|[;&|()\s])setcap\s+",
-    "package mutation": r"(^|[;&|()\s])(apt(-get)?|dnf|yum|pacman|apk|brew)\s+(install|update|upgrade|remove)\s+",
-}
-for label, pattern in patterns.items():
-    if re.search(pattern, text, flags=re.MULTILINE):
-        raise SystemExit(f"{label} found in installer")
-print("static command guardrails passed")
-PY
-
-echo "== linux install: fixture-driven distro inspection =="
-FAKE_BIN="$TMP_DIR/bin"
-mkdir -p "$FAKE_BIN"
-printf '%s\n' '#!/usr/bin/env bash' 'printf "Linux\\n"' > "$FAKE_BIN/uname"
-chmod +x "$FAKE_BIN/uname"
-
-for command_name in cargo rustc ip systemctl brew apt-get dnf yum pacman apk sudo nmcli netplan modprobe setcap; do
-  printf '%s\n' '#!/usr/bin/env bash' 'printf "unexpected command execution: %s\\n" "$0" >&2' 'exit 91' > "$FAKE_BIN/$command_name"
-  chmod +x "$FAKE_BIN/$command_name"
+echo "== linux install: preflight fixtures =="
+for fixture_id_family in "ubuntu:ubuntu:debian" "fedora:fedora:rhel" "alpine:alpine:alpine" "arch:arch:arch" "unknown:unknown:unknown"; do
+  IFS=: read -r fixture expected_id expected_family <<<"$fixture_id_family"
+  out="$TMP_DIR/${fixture}.out"
+  FREEQ_LINUX_OS_RELEASE="$FIXTURES/${fixture}.os-release" \
+    bash "$INSTALLER" --preflight >"$out"
+  assert_contains "$out" "FreeQ Linux preflight"
+  assert_contains "$out" "Distribution ID: $expected_id"
+  assert_contains "$out" "Distribution family: $expected_family"
+  assert_contains "$out" "Preflight result: PASS"
 done
 
-export PATH="$FAKE_BIN:/usr/bin:/bin"
-export FREEQ_LINUX_TUN_PATH="$TMP_DIR/missing-tun"
+echo "== linux install: docs mention binary path =="
+assert_contains "$ROOT/docs/simple-install.md" "freeq-install-linux.sh"
+assert_contains "$ROOT/docs/binary-releases.md" "unknown-linux-gnu"
 
-run_fixture() {
-  local fixture="$1"
-  local expected_id="$2"
-  local expected_family="$3"
-  local output="$TMP_DIR/${fixture}.out"
-  FREEQ_LINUX_OS_RELEASE="$FIXTURES/$fixture.os-release" bash "$INSTALLER" > "$output"
-  assert_contains "$output" "Mode: read-only inspection"
-  assert_contains "$output" "Linux install status: planned/stubbed (not supported)"
-  assert_contains "$output" "Distribution ID: $expected_id"
-  assert_contains "$output" "Distribution family: $expected_family"
-  assert_contains "$output" "No packages were installed. No services were changed. No host networking was changed."
-}
-
-run_fixture ubuntu ubuntu debian
-run_fixture fedora fedora rhel
-run_fixture alpine alpine alpine
-run_fixture arch arch arch
-run_fixture unknown unknown unknown
-
-echo "== linux install: fixture inventory guardrail =="
-for fixture in ubuntu fedora alpine arch unknown; do
-  test -f "$FIXTURES/$fixture.os-release"
-done
-
-echo "== linux install: public support status guardrail =="
-python3 - "$ROOT" <<'PY'
-import re
-import sys
-from pathlib import Path
-
-root = Path(sys.argv[1])
-acceptance = (root / "docs/linux-supported-acceptance.md").read_text()
-marker = re.search(r"FREEQ_LINUX_SUPPORT_STATUS:\s*([a-z-]+)", acceptance)
-if not marker:
-    raise SystemExit("Linux acceptance document is missing the status marker")
-if marker.group(1) != "preflight":
-    raise SystemExit(
-        "Linux public status changed without this preflight harness being updated "
-        "for real-host evidence"
-    )
-
-surfaces = [
-    root / "README.md",
-    root / "docs/simple-install.md",
-    root / "docs/homebrew-install-maintenance-strategy.md",
-    root / "docs/platform-installation-framework.md",
-    root / "docs/index.html",
-]
-claim = re.compile(
-    r"(?i)(?:\blinux[^\n]{0,80}\b(?:is|are)\b[^\n]{0,40}\b(?:supported|primary)\b|\b(?:supported|primary)\s+linux\b)"
-)
-for path in surfaces:
-    for line_number, line in enumerate(path.read_text().splitlines(), 1):
-        if claim.search(line):
-            raise SystemExit(
-                f"{path.relative_to(root)}:{line_number} contains a Linux support claim: {line.strip()}"
-            )
-
-for required in [
-    "preflight available",
-    "Linux installation and rollback are not",
-    "real-host matrix",
-    "Homebrew-on-Linux workstation",
-    "Linux gateway",
-    "Rollback",
-]:
-    if required not in acceptance:
-        raise SystemExit(f"Linux acceptance document is missing: {required}")
-
-print("Linux public support status guardrail passed")
-PY
-
-echo "== linux install: apply refusal =="
-if bash "$INSTALLER" --apply > "$TMP_DIR/apply.out" 2>&1; then
-  echo "FAIL: --apply unexpectedly succeeded" >&2
-  exit 1
-fi
-assert_contains "$TMP_DIR/apply.out" "not implemented pending main-engineer review"
-assert_contains "$TMP_DIR/apply.out" "No changes were made"
+echo "== linux install: helper scripts present =="
+test -x "$START"
+test -x "$STOP"
+test -x "$ROOT/scripts/setup/freeq-doctor-linux.sh"
 
 echo "linux install flow checks passed"

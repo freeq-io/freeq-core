@@ -163,8 +163,11 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Setup => {
-            require_os("freeq setup", "macos")?;
-            run_script(&["scripts", "install", "freeq-install-macos.sh"], &[])?;
+            match env::consts::OS {
+                "macos" => run_script(&["scripts", "install", "freeq-install-macos.sh"], &[])?,
+                "linux" => run_script(&["scripts", "install", "freeq-install-linux.sh"], &[])?,
+                other => bail!("freeq setup is currently implemented for macos and linux (got {other})"),
+            }
         }
         Commands::Gateway { action } => match action.unwrap_or(GatewayAction::Connect) {
             GatewayAction::Connect => {

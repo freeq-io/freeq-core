@@ -1,9 +1,10 @@
 # Linux Support Acceptance
 
-<!-- FREEQ_LINUX_SUPPORT_STATUS: preflight -->
+<!-- FREEQ_LINUX_SUPPORT_STATUS: binary-install -->
 
-Current status: **preflight available; Linux installation and rollback are not
-supported yet**.
+Current status: **binary install available** (GitHub Releases +
+`freeq-install-linux.sh`, same idea as macOS). Full multi-distro acceptance
+matrix below is still incomplete; treat production fleet claims carefully.
 
 This document is the release gate for changing the public Linux status. A
 fixture-driven shell test is useful for preventing regressions, but it is not

@@ -167,12 +167,41 @@ helping you.
 Do not send private keys.
 Do not send files from `~/.freeq/` identity or key paths.
 
-## Linux, Windows, And Gateway Hardware
+## Linux Install (Ubuntu / Debian-class)
 
-Mac install is first.
+On the Linux host (e.g. `freeq.local`):
 
-Linux has a read-only preflight, but Linux installation and rollback are still
-in progress and are not supported yet. See
-[Linux Support Acceptance](linux-supported-acceptance.md) for the release gate.
+```bash
+curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/install/freeq-install-linux.sh | bash
+```
 
-Windows and gateway hardware installers are planned, but they are not ready yet.
+That downloads the matching prebuilt Linux binary package from GitHub Releases,
+installs under `~/.freeq/`, and starts `freeqd`. You may be prompted for sudo
+once (TUN / CAP_NET_ADMIN).
+
+Accept-only **gateway** role (server that leaves dial into):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/install/freeq-install-linux.sh \
+  | FREEQ_ROLE=gateway FREEQ_PUBLIC_ENDPOINT=freeq.local:51820 bash
+```
+
+From your laptop over SSH (use `-t` if sudo needs a password):
+
+```bash
+ssh -t you@freeq.local 'curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/install/freeq-install-linux.sh | bash'
+```
+
+Read-only host inspection:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/install/freeq-install-linux.sh | bash -s -- --preflight
+```
+
+The full multi-distro acceptance matrix is tracked in
+[Linux Support Acceptance](linux-supported-acceptance.md). Binary install on
+Ubuntu is the recommended path today.
+
+## Windows And Gateway Hardware
+
+Windows installers are planned, but they are not ready yet.
