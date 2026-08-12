@@ -125,9 +125,51 @@ cleanup() { rm -f "$TMP_TAR"; }
 trap cleanup EXIT
 
 say "Downloading..."
-if ! curl -fL --retry 3 --retry-delay 1 -o "$TMP_TAR" "$URL"; then
+download_ok=0
+# Prefer a pre-copied tarball (e.g. scp from a machine that can reach GitHub).
+if [ -n "${FREEQ_RELEASE_TARBALL:-}" ] && [ -f "${FREEQ_RELEASE_TARBALL}" ]; then
+  say "Using local tarball: $FREEQ_RELEASE_TARBALL"
+  cp -f "$FREEQ_RELEASE_TARBALL" "$TMP_TAR"
+  download_ok=1
+elif command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+  say "Trying gh release download…"
+  if (
+    cd "$(dirname "$TMP_TAR")" \
+      && gh release download "$TAG" -R "$REPO" -p "$ASSET" -O "$(basename "$TMP_TAR")" --clobber
+  ); then
+    download_ok=1
+  fi
+fi
+if [ "$download_ok" -eq 0 ]; then
+  # GitHub release CDN sometimes returns 503 / drops connections; retry hard.
+  if curl -fL \
+    --connect-timeout 30 \
+    --max-time 600 \
+    --retry 10 \
+    --retry-delay 2 \
+    --retry-all-errors \
+    -o "$TMP_TAR" \
+    "$URL"; then
+    download_ok=1
+  fi
+fi
+if [ "$download_ok" -eq 0 ]; then
   echo "Download failed: $URL" >&2
-  echo "This platform may not have a published binary yet, or the tag is wrong." >&2
+  echo "" >&2
+  echo "The release asset is published; this is usually a GitHub CDN / network glitch" >&2
+  echo "or blocked outbound HTTPS from this host. Try:" >&2
+  echo "  1) Re-run the installer in a minute" >&2
+  echo "  2) On a Mac that can reach GitHub:" >&2
+  echo "       curl -fL -o /tmp/$ASSET \\" >&2
+  echo "         $URL" >&2
+  echo "       scp /tmp/$ASSET user@this-host:/tmp/" >&2
+  echo "       FREEQ_RELEASE_TARBALL=/tmp/$ASSET curl … | bash" >&2
+  echo "  3) Or native build: FREEQ_FROM_SOURCE=1 …" >&2
+  exit 1
+fi
+# Sanity: refuse tiny error HTML bodies (e.g. 503 page saved as file)
+if [ ! -s "$TMP_TAR" ] || [ "$(wc -c <"$TMP_TAR" | tr -d ' ')" -lt 100000 ]; then
+  echo "Downloaded file is too small to be a FreeQ release tarball." >&2
   exit 1
 fi
 
