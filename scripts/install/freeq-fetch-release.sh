@@ -36,6 +36,7 @@ Environment:
   FREEQ_BIN_DIR          symlink bin dir (default: ~/.freeq/bin)
   FREEQ_GITHUB_REPO      owner/name (default: freeq-io/freeq-core)
   FREEQ_GITHUB_TOKEN     optional token for higher API rate limits
+  FREEQ_RELEASE_TARBALL  path to a pre-downloaded .tar.gz (skip network)
 EOF
 }
 
@@ -126,12 +127,52 @@ trap cleanup EXIT
 
 say "Downloading..."
 download_ok=0
-# Prefer a pre-copied tarball (e.g. scp from a machine that can reach GitHub).
+
+# Prefer a pre-copied tarball (e.g. scp when GitHub CDN is flaky).
 if [ -n "${FREEQ_RELEASE_TARBALL:-}" ] && [ -f "${FREEQ_RELEASE_TARBALL}" ]; then
   say "Using local tarball: $FREEQ_RELEASE_TARBALL"
   cp -f "$FREEQ_RELEASE_TARBALL" "$TMP_TAR"
   download_ok=1
-elif command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+fi
+
+# GitHub API asset download (often works when browser CDN returns 503).
+if [ "$download_ok" -eq 0 ]; then
+  say "Trying GitHub API asset download…"
+  asset_id="$(
+    api_curl "${API_BASE}/repos/${REPO}/releases/tags/${TAG}" 2>/dev/null \
+      | python3 -c '
+import json,sys
+name=sys.argv[1]
+try:
+    data=json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for a in data.get("assets") or []:
+    if a.get("name")==name:
+        print(a.get("id") or "")
+        break
+' "$ASSET" 2>/dev/null || true
+  )"
+  if [ -n "${asset_id:-}" ]; then
+    api_headers=(-H "Accept: application/octet-stream")
+    if [ -n "${FREEQ_GITHUB_TOKEN:-}" ]; then
+      api_headers+=(-H "Authorization: Bearer ${FREEQ_GITHUB_TOKEN}")
+    fi
+    if curl -fL \
+      --connect-timeout 30 \
+      --max-time 600 \
+      --retry 5 \
+      --retry-delay 2 \
+      --retry-all-errors \
+      "${api_headers[@]}" \
+      -o "$TMP_TAR" \
+      "${API_BASE}/repos/${REPO}/releases/assets/${asset_id}"; then
+      download_ok=1
+    fi
+  fi
+fi
+
+if [ "$download_ok" -eq 0 ] && command -v gh >/dev/null 2>&1; then
   say "Trying gh release download…"
   if (
     cd "$(dirname "$TMP_TAR")" \
@@ -140,8 +181,10 @@ elif command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
     download_ok=1
   fi
 fi
+
 if [ "$download_ok" -eq 0 ]; then
-  # GitHub release CDN sometimes returns 503 / drops connections; retry hard.
+  # Browser CDN (github.com/…/releases/download/…) — can 503 intermittently.
+  say "Trying browser CDN download…"
   if curl -fL \
     --connect-timeout 30 \
     --max-time 600 \
@@ -153,20 +196,21 @@ if [ "$download_ok" -eq 0 ]; then
     download_ok=1
   fi
 fi
+
 if [ "$download_ok" -eq 0 ]; then
-  echo "Download failed: $URL" >&2
+  echo "Download failed for asset: $ASSET" >&2
+  echo "CDN URL: $URL" >&2
   echo "" >&2
-  echo "The release asset is published; this is usually a GitHub CDN / network glitch" >&2
-  echo "or blocked outbound HTTPS from this host. Try:" >&2
-  echo "  1) Re-run the installer in a minute" >&2
-  echo "  2) On a Mac that can reach GitHub:" >&2
-  echo "       curl -fL -o /tmp/$ASSET \\" >&2
-  echo "         $URL" >&2
-  echo "       scp /tmp/$ASSET user@this-host:/tmp/" >&2
-  echo "       FREEQ_RELEASE_TARBALL=/tmp/$ASSET curl … | bash" >&2
-  echo "  3) Or native build: FREEQ_FROM_SOURCE=1 …" >&2
+  echo "Workarounds:" >&2
+  echo "  1) Re-run installer (GitHub CDN sometimes 503s)" >&2
+  echo "  2) On a Mac that works:" >&2
+  echo "       gh release download $TAG -R $REPO -p $ASSET -D /tmp" >&2
+  echo "       scp /tmp/$ASSET pwmfreeq@freeq.local:/tmp/" >&2
+  echo "       ssh freeq.local 'FREEQ_RELEASE_TARBALL=/tmp/$ASSET curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/install/freeq-install-linux.sh | bash'" >&2
+  echo "  3) FREEQ_FROM_SOURCE=1 if Rust is installed on the host" >&2
   exit 1
 fi
+
 # Sanity: refuse tiny error HTML bodies (e.g. 503 page saved as file)
 if [ ! -s "$TMP_TAR" ] || [ "$(wc -c <"$TMP_TAR" | tr -d ' ')" -lt 100000 ]; then
   echo "Downloaded file is too small to be a FreeQ release tarball." >&2
