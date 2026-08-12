@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# FreeQ automatic peer exchange — no ~/FreeQ folder drop required.
+# FreeQ automatic peer exchange — zero human trading of .env files.
 #
 # Modes:
-#   invite              Create invite via local freeqd API (bundle + code)
-#   join                Join invite (bundle file/url + code) → installs peer under ~/.freeq
-#   host                Mutual HTTP pair host (reachable node; auto exchange)
-#   join-host           Mutual HTTP pair guest (calls host; auto exchange)
-#   gateway             Configure gateway_client from gateway peer bundle (URL or file)
-#   show                Print local public peer path and received peers
+#   invite / join       API invite (public bundle + one-time code)
+#   host / join-host    Mutual HTTP exchange of PUBLIC peer.env only
+#   gateway             Leaf joins gateway via PUBLIC peer URL/path only
+#   publish             Serve this node's PUBLIC peer.env over HTTP (for leaves)
+#   bootstrap           Fully env-driven auto pair (cloud-init / installers)
+#   show / connect      Inspect / start with received public peer
 #
 # Private keys never leave the machine. Only public peer material is exchanged.
 set -euo pipefail
@@ -21,38 +21,34 @@ shift || true
 
 usage() {
   cat <<'EOF'
-FreeQ pair — automatic public peer exchange (no folder drop).
+FreeQ pair — zero human .env trading (public peer material only).
 
-Direct node↔node (one side reachable on a TCP port):
-  # On node A (invite host, reachable):
-  freeq pair host --code SECRET --port 8791
+Direct node↔node (one reachable TCP pair port; no file copy):
+  freeq pair host --auto-start
+  # prints a one-liner for the other node:
+  freeq pair join-host --url http://HOST:8791 --code CODE --auto-start
 
-  # On node B:
-  freeq pair join-host --url http://A_PUBLIC_IP:8791 --code SECRET
-
-  Optional: --auto-start to render config and start freeqd after exchange.
-
-Direct via API invite (bundle can be piped/curl'd; code out-of-band or same channel):
-  freeq pair invite [--endpoint HOST:51820]
-  freeq pair join --invite-file invite.json --code CODE
-  freeq pair join --invite-url https://.../invite.json --code CODE
-
-Gateway leaf (no leaf↔leaf peer.env needed; only gateway public material):
+Gateway leaf (only needs gateway PUBLIC peer URL + endpoint):
   freeq pair gateway \
-    --gateway-endpoint 18.x.x.x:51820 \
-    --gateway-peer-env /path/or/url \
+    --gateway-endpoint freeq.example:51820 \
+    --gateway-peer-env https://freeq.example:8792/v1/public-peer.env \
     --remote-overlay 10.66.0.2/32 \
     --auto-start
 
-Show state:
-  freeq pair show
+Gateway publishes its public peer.env (run on gateway host):
+  freeq pair publish --port 8792
+  # Leaves fetch: http://GATEWAY_IP:8792/v1/public-peer.env
 
-Orchestrated SSH (zero human file trade when you have SSH to both):
-  scripts/setup/freeq-orchestrate-macos.sh --mode direct --remote user@host
-  scripts/setup/freeq-orchestrate-macos.sh --mode gateway --remote user@leaf --gateway user@gw \
-    --gateway-endpoint IP:51820
+Fully automated bootstrap from environment (installers / cloud-init):
+  FREEQ_GATEWAY_ENDPOINT=gw:51820 \
+  FREEQ_GATEWAY_PEER_URL=http://gw:8792/v1/public-peer.env \
+  FREEQ_REMOTE_OVERLAY=10.66.0.2/32 \
+  freeq pair bootstrap --auto-start
 
-State lives under ~/.freeq/ (not ~/FreeQ drop folders).
+  # Or direct:
+  FREEQ_PAIR_URL=http://host:8791 FREEQ_PAIR_CODE=ABCD freeq pair bootstrap --auto-start
+
+Private keys never leave the node. Prefer short-lived pair codes.
 EOF
 }
 
@@ -82,6 +78,63 @@ install_peer_env_content() {
   # Legacy mirror (optional compatibility)
   printf '%s\n' "$content" >"$FREEQ_LEGACY_RECEIVE/${name}-peer.env" 2>/dev/null || true
   echo "$dest"
+}
+
+detect_lan_ip() {
+  local ip=""
+  if command -v ipconfig >/dev/null 2>&1; then
+    ip="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)"
+  fi
+  if [ -z "$ip" ] && command -v ip >/dev/null 2>&1; then
+    ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true)"
+  fi
+  if [ -z "$ip" ] && command -v hostname >/dev/null 2>&1; then
+    ip="$(hostname -I 2>/dev/null | awk '{print $1; exit}' || true)"
+  fi
+  printf '%s\n' "${ip:-THIS_HOST_IP}"
+}
+
+platform_start() {
+  local config="${1:-$FREEQ_CONFIG}"
+  local peer_env="${2:-}"
+  case "$(uname -s)" in
+    Darwin)
+      if [ -x "$SCRIPT_DIR/freeq-start-macos.sh" ]; then
+        if [ -n "$peer_env" ]; then
+          FREEQ_PEER_ENV="$peer_env" "$SCRIPT_DIR/freeq-start-macos.sh" --restart --config "$config" --peer-env "$peer_env"
+        else
+          "$SCRIPT_DIR/freeq-start-macos.sh" --restart --config "$config"
+        fi
+        return 0
+      fi
+      if [ -x "$SCRIPT_DIR/freeq-connect-macos.sh" ] && [ -n "$peer_env" ]; then
+        "$SCRIPT_DIR/freeq-connect-macos.sh" --restart --peer-env "$peer_env"
+        return 0
+      fi
+      ;;
+    Linux)
+      if [ -x "$SCRIPT_DIR/freeq-start-linux.sh" ]; then
+        FREEQ_CONFIG="$config" "$SCRIPT_DIR/freeq-start-linux.sh" --restart --config "$config"
+        return 0
+      fi
+      ;;
+  esac
+  echo "No platform start helper found; config is ready at $config" >&2
+  return 1
+}
+
+render_and_start_peer() {
+  local peer_env="$1"
+  local mode="${2:-direct}"
+  local extra="${3:-}"
+  freeq_ensure_dirs
+  local out="${FREEQ_CONFIG:-$FREEQ_PERF_DIR/freeq.toml}"
+  local args=(--peer-env "$peer_env" --output "$out" --mode "$mode")
+  if [ -n "$extra" ]; then
+    args+=(--extra-allowed-ips "$extra")
+  fi
+  "$SCRIPT_DIR/freeq-render-config.sh" "${args[@]}"
+  platform_start "$out" "$peer_env"
 }
 
 cmd_show() {
@@ -235,16 +288,20 @@ cmd_host() {
     esac
   done
   if [ -z "$code" ]; then
-    code="$(python3 -c 'import secrets; print(secrets.token_hex(4).upper())')"
+    code="$(python3 -c 'import secrets; print(secrets.token_urlsafe(12))')"
   fi
-  local host_peer
+  local host_peer lan_ip
   host_peer="$(read_local_public_peer_env)"
+  lan_ip="$(detect_lan_ip)"
   local guest_out="$FREEQ_PAIR_DIR/guest-peer.env"
   echo "FreeQ pair host listening on ${bind}:${port}"
   echo "  Pair code: $code"
+  echo "  Detected LAN IP: $lan_ip"
   echo "  Waiting for one guest (Ctrl+C to cancel)..."
-  echo "On the other node:"
-  echo "  freeq pair join-host --url http://THIS_HOST_IP:${port} --code $code --auto-start"
+  echo ""
+  echo "=== Other node (no .env files to copy) ==="
+  echo "  freeq pair join-host --url http://${lan_ip}:${port} --code ${code} --auto-start"
+  echo "========================================="
 
   FREEQ_PAIR_CODE="$code" \
   FREEQ_PAIR_HOST_PEER="$host_peer" \
@@ -308,10 +365,9 @@ PY
   echo "Installed guest peer: $installed"
   export FREEQ_PEER_ENV="$installed"
   if [ "$auto_start" -eq 1 ]; then
-    "$SCRIPT_DIR/freeq-connect-macos.sh" --restart --peer-env "$installed"
+    render_and_start_peer "$installed" direct
   else
     echo "Next: freeq pair connect --peer-env $installed"
-    echo "  or: freeq gateway   # if using connect helper"
   fi
 }
 
@@ -353,7 +409,7 @@ cmd_join_host() {
   echo "Installed host peer: $installed"
   export FREEQ_PEER_ENV="$installed"
   if [ "$auto_start" -eq 1 ]; then
-    "$SCRIPT_DIR/freeq-connect-macos.sh" --restart --peer-env "$installed"
+    render_and_start_peer "$installed" direct
   else
     echo "Next: freeq pair connect --peer-env $installed"
   fi
@@ -361,7 +417,7 @@ cmd_join_host() {
 
 cmd_gateway() {
   freeq_ensure_dirs
-  local gw_endpoint="" gw_peer="" gw_url="" remote_overlays="" auto_start=0 mode="gateway_client"
+  local gw_endpoint="" gw_peer="" gw_url="" remote_overlays="" auto_start=0
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --gateway-endpoint) gw_endpoint="$2"; shift 2 ;;
@@ -373,8 +429,14 @@ cmd_gateway() {
       *) echo "unknown: $1" >&2; exit 1 ;;
     esac
   done
+  # Env fallbacks for fully automated installers (no CLI flags required).
+  gw_endpoint="${gw_endpoint:-${FREEQ_GATEWAY_ENDPOINT:-}}"
+  gw_url="${gw_url:-${FREEQ_GATEWAY_PEER_URL:-}}"
+  gw_peer="${gw_peer:-${FREEQ_GATEWAY_PEER_ENV:-}}"
+  remote_overlays="${remote_overlays:-${FREEQ_REMOTE_OVERLAY:-${FREEQ_REMOTE_OVERLAYS:-}}}"
+
   if [ -z "$gw_endpoint" ]; then
-    echo "--gateway-endpoint HOST:PORT is required" >&2
+    echo "--gateway-endpoint HOST:PORT is required (or FREEQ_GATEWAY_ENDPOINT)" >&2
     exit 1
   fi
   local content=""
@@ -389,7 +451,7 @@ cmd_gateway() {
       content="$(cat "$gw_peer")"
     fi
   else
-    echo "need --gateway-peer-env PATH|URL or --gateway-peer-url URL" >&2
+    echo "need --gateway-peer-env PATH|URL or --gateway-peer-url URL (or FREEQ_GATEWAY_PEER_URL)" >&2
     exit 1
   fi
   # Normalize endpoint into env content
@@ -410,7 +472,7 @@ for line in sys.stdin:
   fi
   local gw_name
   gw_name="$(printf '%s\n' "$content" | awk -F= '/^FREEQ_NODE_NAME=/{gsub(/['\''"]/,"",$2); print $2; exit}')"
-  gw_name="${gw_name:-aws-gateway}"
+  gw_name="${gw_name:-gateway}"
   local installed
   installed="$(install_peer_env_content "$gw_name" "$content")"
   echo "Installed gateway peer: $installed"
@@ -418,48 +480,155 @@ for line in sys.stdin:
   echo "  remote overlays: ${remote_overlays:-none}"
 
   if [ "$auto_start" -eq 1 ]; then
-    if [ -x "$SCRIPT_DIR/../field/freeq-leaf-connect-gateway-macos.sh" ]; then
-      if [ -z "$remote_overlays" ]; then
-        echo "--remote-overlay is required with --auto-start for gateway mode" >&2
-        exit 1
-      fi
-      "$SCRIPT_DIR/../field/freeq-leaf-connect-gateway-macos.sh" \
-        --gateway-peer-env "$installed" \
-        --remote-overlay "$remote_overlays"
-    else
-      # Fallback: connect helper treats peer as direct; set EXTRA allowed
-      export FREEQ_PEER_ENV="$installed"
-      export FREEQ_EXTRA_ALLOWED_IPS="$remote_overlays"
-      # Prefer render with gateway_client — freeq-leaf-connect is better; try pair-render
-      if [ -x "$SCRIPT_DIR/freeq-render-gateway-client.sh" ]; then
-        "$SCRIPT_DIR/freeq-render-gateway-client.sh" \
-          --gateway-peer-env "$installed" \
-          --remote-overlay "$remote_overlays" \
-          --output "$FREEQ_CONFIG"
-        "$SCRIPT_DIR/freeq-start-macos.sh" --restart --config "$FREEQ_CONFIG" --peer-env "$installed"
-      else
-        "$SCRIPT_DIR/freeq-connect-macos.sh" --restart --peer-env "$installed"
-      fi
+    if [ -z "$remote_overlays" ]; then
+      echo "WARN: no --remote-overlay; leaf can reach gateway but not remote /32 peers yet." >&2
     fi
+    render_and_start_peer "$installed" gateway_client "$remote_overlays"
   else
-    echo "Next (gateway leaf):"
-    echo "  freeq pair gateway --gateway-endpoint $gw_endpoint --gateway-peer-env $installed \\"
-    echo "    --remote-overlay OTHER_LEAF/32 --auto-start"
+    echo "Next (zero file trade):"
+    echo "  freeq pair gateway --gateway-endpoint $gw_endpoint \\"
+    echo "    --gateway-peer-env $installed --remote-overlay OTHER/32 --auto-start"
   fi
 }
 
+# Publish this node's PUBLIC peer.env for leaves (gateway or hub).
+# Never serves private keys / node.env / identity.key.
+cmd_publish() {
+  need python3
+  freeq_ensure_dirs
+  local port=8792 bind="0.0.0.0" code=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --port) port="$2"; shift 2 ;;
+      --bind) bind="$2"; shift 2 ;;
+      --code) code="$2"; shift 2 ;;
+      --help|-h)
+        echo "Usage: freeq pair publish [--port 8792] [--code OPTIONAL_BEARER]"
+        exit 0
+        ;;
+      *) echo "unknown: $1" >&2; exit 1 ;;
+    esac
+  done
+  local peer
+  peer="$(read_local_public_peer_env)"
+  # Refuse if content looks like a private identity
+  if printf '%s\n' "$peer" | grep -qiE 'PRIVATE|identity\.key|SECRET_KEY'; then
+    echo "Refusing to publish peer material that looks private." >&2
+    exit 1
+  fi
+  local lan_ip
+  lan_ip="$(detect_lan_ip)"
+  echo "Publishing PUBLIC peer.env only (no private keys)"
+  echo "  Listen: ${bind}:${port}"
+  echo "  Fetch:  http://${lan_ip}:${port}/v1/public-peer.env"
+  if [ -n "$code" ]; then
+    echo "  Auth:   Bearer $code"
+  else
+    echo "  Auth:   open on this port (bind to LAN/VPN only in production)"
+  fi
+  FREEQ_PUBLISH_PEER="$peer" \
+  FREEQ_PUBLISH_CODE="$code" \
+  FREEQ_PUBLISH_BIND="$bind" \
+  FREEQ_PUBLISH_PORT="$port" \
+  python3 <<'PY'
+import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+PEER = os.environ["FREEQ_PUBLISH_PEER"].encode()
+if not PEER.endswith(b"\n"):
+    PEER += b"\n"
+CODE = os.environ.get("FREEQ_PUBLISH_CODE") or ""
+BIND = os.environ.get("FREEQ_PUBLISH_BIND", "0.0.0.0")
+PORT = int(os.environ.get("FREEQ_PUBLISH_PORT", "8792"))
+
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        return
+    def _auth(self):
+        if not CODE:
+            return True
+        auth = self.headers.get("Authorization", "")
+        return auth == f"Bearer {CODE}" or self.headers.get("X-FreeQ-Pair-Code") == CODE
+    def do_GET(self):
+        path = self.path.split("?", 1)[0].rstrip("/")
+        if path not in ("/v1/public-peer.env", "/v1/pair/public-peer", "/peer.env"):
+            self.send_error(404)
+            return
+        if not self._auth():
+            self.send_error(401)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("X-FreeQ-Material", "public-peer-only")
+        self.end_headers()
+        self.wfile.write(PEER)
+
+print(f"publish server on {BIND}:{PORT}", flush=True)
+HTTPServer((BIND, PORT), H).serve_forever()
+PY
+}
+
+# Env-driven auto pair for installers (no human CLI args).
+cmd_bootstrap() {
+  local auto_start=1
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --auto-start) auto_start=1; shift ;;
+      --no-start) auto_start=0; shift ;;
+      --help|-h) usage; exit 0 ;;
+      *) echo "unknown: $1" >&2; exit 1 ;;
+    esac
+  done
+  # Prefer gateway leaf automation when gateway vars present.
+  if [ -n "${FREEQ_GATEWAY_ENDPOINT:-}" ] && {
+       [ -n "${FREEQ_GATEWAY_PEER_URL:-}" ] || [ -n "${FREEQ_GATEWAY_PEER_ENV:-}" ]
+     }; then
+    local args=(--gateway-endpoint "$FREEQ_GATEWAY_ENDPOINT")
+    if [ -n "${FREEQ_GATEWAY_PEER_URL:-}" ]; then
+      args+=(--gateway-peer-url "$FREEQ_GATEWAY_PEER_URL")
+    else
+      args+=(--gateway-peer-env "$FREEQ_GATEWAY_PEER_ENV")
+    fi
+    if [ -n "${FREEQ_REMOTE_OVERLAY:-}" ]; then
+      # support comma-separated list
+      local o
+      IFS=',' read -ra _ovs <<<"$FREEQ_REMOTE_OVERLAY"
+      for o in "${_ovs[@]}"; do
+        o="$(echo "$o" | tr -d ' ')"
+        [ -n "$o" ] && args+=(--remote-overlay "$o")
+      done
+    fi
+    [ "$auto_start" -eq 1 ] && args+=(--auto-start)
+    echo "bootstrap: gateway leaf (zero .env file trade)"
+    cmd_gateway "${args[@]}"
+    return 0
+  fi
+  if [ -n "${FREEQ_PAIR_URL:-}" ] && [ -n "${FREEQ_PAIR_CODE:-}" ]; then
+    local args=(--url "$FREEQ_PAIR_URL" --code "$FREEQ_PAIR_CODE")
+    [ "$auto_start" -eq 1 ] && args+=(--auto-start)
+    echo "bootstrap: join-host (zero .env file trade)"
+    cmd_join_host "${args[@]}"
+    return 0
+  fi
+  echo "bootstrap: nothing to do — set either:" >&2
+  echo "  FREEQ_GATEWAY_ENDPOINT + FREEQ_GATEWAY_PEER_URL [+ FREEQ_REMOTE_OVERLAY]" >&2
+  echo "  or FREEQ_PAIR_URL + FREEQ_PAIR_CODE" >&2
+  exit 2
+}
+
 cmd_connect() {
-  local peer_env=""
+  local peer_env="" mode="direct" extra=""
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --peer-env) peer_env="$2"; shift 2 ;;
+      --mode) mode="$2"; shift 2 ;;
+      --extra-allowed-ips) extra="$2"; shift 2 ;;
       *) echo "unknown: $1" >&2; exit 1 ;;
     esac
   done
   if [ -z "$peer_env" ]; then
-    # pick single received peer if unambiguous
     peers=()
-  while IFS= read -r _p; do peers+=("$_p"); done < <(freeq_find_peer_envs || true)
+    while IFS= read -r _p; do peers+=("$_p"); done < <(freeq_find_peer_envs || true)
     if [ "${#peers[@]}" -eq 1 ]; then
       peer_env="${peers[0]}"
     else
@@ -468,7 +637,7 @@ cmd_connect() {
       exit 1
     fi
   fi
-  "$SCRIPT_DIR/freeq-connect-macos.sh" --restart --peer-env "$peer_env"
+  render_and_start_peer "$peer_env" "$mode" "$extra"
 }
 
 case "$CMD" in
@@ -478,6 +647,8 @@ case "$CMD" in
   host) cmd_host "$@" ;;
   join-host) cmd_join_host "$@" ;;
   gateway) cmd_gateway "$@" ;;
+  publish) cmd_publish "$@" ;;
+  bootstrap|auto) cmd_bootstrap "$@" ;;
   connect) cmd_connect "$@" ;;
   help|-h|--help) usage ;;
   *) echo "Unknown command: $CMD" >&2; usage >&2; exit 1 ;;

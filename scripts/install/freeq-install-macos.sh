@@ -370,9 +370,39 @@ if ! check_status; then
   fail "FreeQ started, but the local status check did not respond yet."
 fi
 
+# Keep pair helpers current (zero .env trading tooling).
+if [ -n "$INSTALL_DIR" ] && command -v curl >/dev/null 2>&1; then
+  base="${FREEQ_SCRIPTS_BASE:-https://raw.githubusercontent.com/freeq-io/freeq-core/main}"
+  for rel in scripts/setup/freeq-pair.sh scripts/setup/freeq-render-config.sh scripts/setup/freeq-paths.sh; do
+    mkdir -p "$INSTALL_DIR/$(dirname "$rel")"
+    curl -fsSL "$base/$rel" -o "$INSTALL_DIR/$rel" 2>/dev/null && chmod +x "$INSTALL_DIR/$rel" || true
+  done
+fi
+
+# Zero human .env trading: env-driven auto pair after install.
+if [ -x "$INSTALL_DIR/scripts/setup/freeq-pair.sh" ]; then
+  if [ -n "${FREEQ_GATEWAY_ENDPOINT:-}" ] && {
+       [ -n "${FREEQ_GATEWAY_PEER_URL:-}" ] || [ -n "${FREEQ_GATEWAY_PEER_ENV:-}" ]
+     }; then
+    say ""
+    say "Auto-pair (gateway leaf) — public peer URL only..."
+    FREEQ_GATEWAY_ENDPOINT="$FREEQ_GATEWAY_ENDPOINT" \
+    FREEQ_GATEWAY_PEER_URL="${FREEQ_GATEWAY_PEER_URL:-}" \
+    FREEQ_GATEWAY_PEER_ENV="${FREEQ_GATEWAY_PEER_ENV:-}" \
+    FREEQ_REMOTE_OVERLAY="${FREEQ_REMOTE_OVERLAY:-}" \
+      "$INSTALL_DIR/scripts/setup/freeq-pair.sh" bootstrap --auto-start \
+      || say "WARN: auto-pair failed; run freeq pair bootstrap manually."
+  elif [ -n "${FREEQ_PAIR_URL:-}" ] && [ -n "${FREEQ_PAIR_CODE:-}" ]; then
+    say ""
+    say "Auto-pair (join-host)..."
+    FREEQ_PAIR_URL="$FREEQ_PAIR_URL" FREEQ_PAIR_CODE="$FREEQ_PAIR_CODE" \
+      "$INSTALL_DIR/scripts/setup/freeq-pair.sh" bootstrap --auto-start \
+      || say "WARN: auto-pair failed; run freeq pair join-host manually."
+  fi
+fi
+
 open "$SETUP_URL" >/dev/null 2>&1 || true
 
-# Ensure freeq CLI is preferred from bin dir
 if [ -x "$BIN_DIR/freeq" ]; then
   say ""
   say "CLI: $BIN_DIR/freeq"
@@ -390,12 +420,13 @@ say ""
 say "Add to PATH if needed:"
 say "  export PATH=\"$BIN_DIR:\$PATH\""
 say ""
-say "Connect (automatic peer exchange — no folder drop):"
-say "  freeq pair show"
-say "  freeq pair host --code SECRET --port 8791 --auto-start"
-say "  freeq pair join-host --url http://OTHER_IP:8791 --code SECRET --auto-start"
-say "  freeq pair gateway --gateway-endpoint IP:51820 --gateway-peer-env URL_OR_PATH \\"
+say "Connect WITHOUT trading .env files:"
+say "  freeq pair host --auto-start"
+say "  freeq pair join-host --url http://HOST:8791 --code CODE --auto-start"
+say "  freeq pair publish   # gateway: serve public peer.env over HTTP"
+say "  freeq pair gateway --gateway-endpoint IP:51820 --gateway-peer-env http://GW:8792/v1/public-peer.env \\"
 say "    --remote-overlay 10.66.0.2/32 --auto-start"
+say "  # or env bootstrap: FREEQ_GATEWAY_ENDPOINT + FREEQ_GATEWAY_PEER_URL + freeq pair bootstrap"
 say ""
 say "Rollback:"
 say "  freeq stop"

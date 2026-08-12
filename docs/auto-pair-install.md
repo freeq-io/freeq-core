@@ -1,119 +1,88 @@
-# FreeQ automatic pairing (no folder drop)
+# FreeQ automatic pairing (zero human `.env` trading)
 
-**Status:** preferred install/connect path  
-**Goal:** node↔node or node↔gateway↔node without trading `~/FreeQ/01-send` / `02-put` peer files by hand.
-
-Private keys never leave a node. Only **public** peer material is exchanged.
+**Status:** preferred install/connect path for FreeQ Core  
+**Rule:** private keys never leave a node. Only **public** peer material is exchanged, and that exchange is automated (HTTP pair, invite API, or URL fetch)—operators do not email or Airdrop `.env` files.
 
 ## State locations
 
 | Path | Purpose |
 |------|---------|
-| `~/.freeq/perf/node.env` | Local identity env (private path ref) |
+| `~/.freeq/perf/node.env` | Local identity refs (private key path) |
 | `~/.freeq/perf/peer.env` | Local **public** peer material |
-| `~/.freeq/peers/received/` | Peers installed by pair/invite |
-| `~/.freeq/pair/` | Latest invite bundle/code |
+| `~/.freeq/peers/received/` | Public peers installed by pair/bootstrap |
+| `~/.freeq/pair/` | Invite / guest exchange scratch |
 
-Legacy `~/FreeQ/01-send-this-file` and `02-put-peer-file-here` remain optional mirrors only.
+## Fully automated patterns
 
-## Install
+### A) Gateway leaf (Starlink / CGNAT / site edge) — recommended
 
-One-line installer (same as getfreeq.com; re-run anytime to update). Downloads
-**prebuilt** macOS binaries from GitHub Releases (no cargo build):
+**On the gateway host** (after install, identity exists):
 
 ```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/install/freeq-install-macos.sh)"
+# Serve PUBLIC peer.env only (never private keys)
+freeq pair publish --port 8792
+# Leaves use: http://GATEWAY_IP:8792/v1/public-peer.env
 ```
 
-See [binary-releases.md](binary-releases.md). Or from a checkout / source build:
+**On each leaf** (one command / cloud-init — no file handoff):
 
 ```bash
-scripts/install/freeq-install-macos.sh
-FREEQ_FROM_SOURCE=1 scripts/install/freeq-install-macos.sh
+# During install:
+curl -fsSL …/freeq-install-linux.sh | \
+  FREEQ_GATEWAY_ENDPOINT=gw.example:51820 \
+  FREEQ_GATEWAY_PEER_URL=http://gw.example:8792/v1/public-peer.env \
+  FREEQ_REMOTE_OVERLAY=10.66.0.2/32 \
+  bash
+
+# Or after install:
+FREEQ_GATEWAY_ENDPOINT=gw.example:51820 \
+FREEQ_GATEWAY_PEER_URL=http://gw.example:8792/v1/public-peer.env \
+FREEQ_REMOTE_OVERLAY=10.66.0.2/32 \
+freeq pair bootstrap --auto-start
 ```
 
-State lives under `~/.freeq/`. Binaries link to `~/.freeq/bin`. The installer
-starts the local node and prints `freeq pair` next steps.
+Optional: protect publish with `--code SECRET` and pass the same secret as HTTP Bearer on fetch (still not a private key).
 
-## Direct node → node (automatic exchange)
-
-One side must accept a short-lived TCP pair port (8791 by default). Overlay UDP is separate (51820).
+### B) Direct node ↔ node (LAN / one side reachable)
 
 ```bash
-# Node A (reachable):
-freeq pair host --code MYSECRET --port 8791 --auto-start
+# Node A
+freeq pair host --auto-start
+# prints: freeq pair join-host --url http://A_IP:8791 --code … --auto-start
 
-# Node B:
-freeq pair join-host --url http://A_PUBLIC_IP:8791 --code MYSECRET --auto-start
+# Node B (paste the one-liner, or inject via env)
+FREEQ_PAIR_URL=http://A_IP:8791 FREEQ_PAIR_CODE=… freeq pair bootstrap --auto-start
 ```
 
-What happens:
+No peer.env files are copied by hand.
 
-1. Nodes exchange **public** `peer.env` only (Bearer pair code).  
-2. Material is written under `~/.freeq/peers/received/`.  
-3. `--auto-start` renders config and starts freeqd (no drop folders).
-
-### Alternate: API invite (bundle + code)
+### C) API invite (bundle URL + code)
 
 ```bash
-# A (freeqd must be running):
 freeq pair invite --endpoint A_PUBLIC:51820
-# → ~/.freeq/pair/invite-latest.json + code
-
-# B (after receiving the JSON somehow — still no FreeQ folders):
-freeq pair join --invite-file invite-latest.json --code CODE --auto-start
+# publish invite-latest.json to HTTPS if desired
+freeq pair join --invite-url https://…/invite.json --code CODE --auto-start
 ```
 
-### Zero file trade when you have SSH
+## What Cloud adds later
 
-```bash
-scripts/setup/freeq-orchestrate-macos.sh \
-  --mode direct \
-  --remote user@OTHER_HOST
-```
-
-## Gateway path: leaf → gateway → leaf
-
-Leaves only need the **gateway** public peer material + remote overlay `/32`s.  
-They do **not** need each other's peer.env for the basic gateway_client path.
-
-```bash
-# On each leaf (same gateway public bundle):
-freeq pair gateway \
-  --gateway-endpoint 18.225.246.90:51820 \
-  --gateway-peer-env /path/or/https://url/to/aws-gateway-peer.env \
-  --remote-overlay 10.66.0.2/32 \
-  --auto-start
-```
-
-Publish the gateway public peer.env once (S3, HTTPS, or operator channel).  
-Do not publish identity keys.
-
-SSH orchestrator for leaf + gateway when SSH is available:
-
-```bash
-scripts/setup/freeq-orchestrate-macos.sh \
-  --mode gateway \
-  --remote user@leaf2 \
-  --gateway ubuntu@gateway \
-  --gateway-endpoint 18.225.246.90:51820
-```
-
-## Inspect
-
-```bash
-freeq pair show
-freeq gateway status   # or freeq pair show
-```
-
-## What we deliberately stopped requiring
-
-- Manually copying files into `~/FreeQ/02-put-peer-file-here`  
-- Guessing which of several peer.env files in Downloads is correct  
-- Treating “daemon running” as connected (pair + connect still need healthy sessions)
+Core automation removes **human file trade**. FreeQ Cloud adds **provisioning, approval, payment, IdP/MDM hooks, fleet rekey, and policy**—same dataplane, stronger control plane.
 
 ## Security notes
 
-- Pair host is **short-lived** and single-guest; use a strong `--code`.  
-- Prefer pairing on a trusted network or with a fresh code per session.  
-- Gateway never dials leaves; leaves remain outbound-only in gateway mode.  
+- Pair codes authorize **public peer exchange**, not bulk tunnel keys.
+- Prefer short-lived codes; do not reuse forever.
+- Pin gateway peer URLs to HTTPS or a trusted LAN when possible.
+- Private keys stay on-box; never publish `identity.key` or private fields.
+- Peer key rotation API is still evolving; session crypto is separate from pair codes.
+
+## Commands quick ref
+
+| Command | Use |
+|---------|-----|
+| `freeq pair show` | Local pair state |
+| `freeq pair host --auto-start` | Direct pair host |
+| `freeq pair join-host …` | Direct pair guest |
+| `freeq pair publish` | HTTP publish public peer.env |
+| `freeq pair gateway …` | Leaf → gateway |
+| `freeq pair bootstrap` | Env-driven auto pair |

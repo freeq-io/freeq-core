@@ -56,7 +56,10 @@ Environment:
   FREEQ_FROM_SOURCE=1  build from source instead of downloading a release
   FREEQ_NATIVE=0       with --from-source, skip -C target-cpu=native
   FREEQ_NODE_NAME, FREEQ_OVERLAY_ADDRESS, FREEQ_LISTEN_ADDR
-  FREEQ_PUBLIC_ENDPOINT   e.g. freeq.local:51820 for gateway public endpoint
+  FREEQ_PUBLIC_ENDPOINT     e.g. freeq.local:51820 for this node's public UDP
+  Zero-touch pair after install (no human .env files):
+  FREEQ_GATEWAY_ENDPOINT + FREEQ_GATEWAY_PEER_URL [+ FREEQ_REMOTE_OVERLAY]
+  FREEQ_PAIR_URL + FREEQ_PAIR_CODE   (direct join-host)
 
 Examples:
   # Default: portable GitHub binary (most users)
@@ -412,6 +415,28 @@ if [ "$ROLE" = "gateway" ]; then
   check_status "$GATEWAY_STATUS_URL" || fail "Gateway status check failed at $GATEWAY_STATUS_URL"
 else
   check_status "${SETUP_URL%/}/v1/status" || fail "Node status check failed"
+fi
+
+# Zero human .env trading: optional env-driven auto pair after install.
+if [ -x "$INSTALL_DIR/scripts/setup/freeq-pair.sh" ]; then
+  if [ -n "${FREEQ_GATEWAY_ENDPOINT:-}" ] && {
+       [ -n "${FREEQ_GATEWAY_PEER_URL:-}" ] || [ -n "${FREEQ_GATEWAY_PEER_ENV:-}" ]
+     }; then
+    say ""
+    say "Auto-pair (gateway leaf) — public peer URL only, no .env file handoff..."
+    FREEQ_GATEWAY_ENDPOINT="$FREEQ_GATEWAY_ENDPOINT" \
+    FREEQ_GATEWAY_PEER_URL="${FREEQ_GATEWAY_PEER_URL:-}" \
+    FREEQ_GATEWAY_PEER_ENV="${FREEQ_GATEWAY_PEER_ENV:-}" \
+    FREEQ_REMOTE_OVERLAY="${FREEQ_REMOTE_OVERLAY:-}" \
+      "$INSTALL_DIR/scripts/setup/freeq-pair.sh" bootstrap --auto-start \
+      || say "WARN: auto-pair bootstrap failed; run freeq pair bootstrap manually."
+  elif [ -n "${FREEQ_PAIR_URL:-}" ] && [ -n "${FREEQ_PAIR_CODE:-}" ]; then
+    say ""
+    say "Auto-pair (join-host) — no .env file handoff..."
+    FREEQ_PAIR_URL="$FREEQ_PAIR_URL" FREEQ_PAIR_CODE="$FREEQ_PAIR_CODE" \
+      "$INSTALL_DIR/scripts/setup/freeq-pair.sh" bootstrap --auto-start \
+      || say "WARN: auto-pair bootstrap failed; run freeq pair join-host manually."
+  fi
 fi
 
 say ""

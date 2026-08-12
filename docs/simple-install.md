@@ -194,6 +194,24 @@ From your laptop over SSH (use `-t` if sudo needs a password):
 ssh -t you@freeq.local 'curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/install/freeq-install-linux.sh | bash'
 ```
 
+### Zero human `.env` trading (gateway leaf)
+
+After the gateway publishes public peer material:
+
+```bash
+# On gateway
+freeq pair publish --port 8792
+
+# On leaf (install + join in one shot — no files to copy)
+curl -fsSL https://raw.githubusercontent.com/freeq-io/freeq-core/main/scripts/install/freeq-install-linux.sh \
+  | FREEQ_GATEWAY_ENDPOINT=freeq.local:51820 \
+    FREEQ_GATEWAY_PEER_URL=http://freeq.local:8792/v1/public-peer.env \
+    FREEQ_REMOTE_OVERLAY=10.66.0.2/32 \
+    bash
+```
+
+See [auto-pair-install.md](auto-pair-install.md).
+
 ### Optional: native source build (high throughput or gateway)
 
 Portable release binaries are not tuned to a specific CPU. If this node will

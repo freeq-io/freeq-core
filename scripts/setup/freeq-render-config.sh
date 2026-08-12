@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 LOCAL_ENV="${FREEQ_LOCAL_ENV:-$HOME/.freeq/perf/node.env}"
 PEER_ENV="${FREEQ_PEER_ENV:-}"
 OUTPUT_CONFIG="${FREEQ_CONFIG_OUT:-$HOME/.freeq/perf/freeq.toml}"
@@ -8,19 +9,23 @@ SETUP_DIR="${FREEQ_SETUP_DIR:-$HOME/FreeQ}"
 CONFIG_FILE="${FREEQ_SETUP_CONFIG:-$SETUP_DIR/freeq-setup.conf}"
 RECEIVE_DIR="$SETUP_DIR/02-put-peer-file-here"
 LISTEN_ONLY=0
+# direct | gateway_client  (toml peer mode)
+PEER_MODE="${FREEQ_PEER_MODE:-direct}"
 
 usage() {
   cat <<'EOF'
-Render a two-node freeq.toml from local node.env and peer peer.env files.
+Render freeq.toml from local node.env and a public peer.env (no private keys).
 
 Example:
-  scripts/setup/freeq-render-config.sh
+  scripts/setup/freeq-render-config.sh --peer-env ~/.freeq/peers/received/gw-peer.env
 
 Options:
-  --local-env PATH       internal local identity file; normally omit
-  --peer-env PATH        peer.env from the other tester; auto-detected from ~/FreeQ if omitted
+  --local-env PATH       local identity env
+  --peer-env PATH        public peer.env for the remote/gateway
   --output PATH          output freeq.toml path
-  --listen-only          render a valid local listener config with no peer blocks
+  --listen-only          local listener only (no peer blocks)
+  --mode MODE            peer mode: direct (default) | gateway_client
+  --extra-allowed-ips S  extra CIDRs for peer allowed_ips (comma/space)
 EOF
 }
 
@@ -30,10 +35,20 @@ while [ "$#" -gt 0 ]; do
     --peer-env) PEER_ENV="$2"; shift 2 ;;
     --output) OUTPUT_CONFIG="$2"; shift 2 ;;
     --listen-only) LISTEN_ONLY=1; shift ;;
+    --mode) PEER_MODE="$2"; shift 2 ;;
+    --extra-allowed-ips) FREEQ_EXTRA_ALLOWED_IPS="$2"; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
   esac
 done
+
+case "$PEER_MODE" in
+  direct|gateway_client) ;;
+  *)
+    echo "Invalid --mode '$PEER_MODE' (use direct or gateway_client)" >&2
+    exit 1
+    ;;
+esac
 
 validate_endpoint() {
   local endpoint="$1"
@@ -245,7 +260,11 @@ if [ "$LISTEN_ONLY" -eq 0 ] && [ ! -f "$PEER_ENV" ]; then
   exit 1
 fi
 if [ "$LISTEN_ONLY" -eq 0 ]; then
-  scripts/setup/freeq-validate-peer-env.sh "$PEER_ENV" >/dev/null
+  if [ -x "$SCRIPT_DIR/freeq-validate-peer-env.sh" ]; then
+    "$SCRIPT_DIR/freeq-validate-peer-env.sh" "$PEER_ENV" >/dev/null
+  elif [ -x "scripts/setup/freeq-validate-peer-env.sh" ]; then
+    scripts/setup/freeq-validate-peer-env.sh "$PEER_ENV" >/dev/null
+  fi
 fi
 
 LOCAL_NODE_NAME="$(required_env_value "$LOCAL_ENV" FREEQ_NODE_NAME)"
@@ -291,11 +310,8 @@ if [ "$LISTEN_ONLY" -eq 1 ]; then
 Rendered listen-only FreeQ config:
   $OUTPUT_CONFIG
 
-Start freeqd with:
-  sudo target/release/freeqd --config "$OUTPUT_CONFIG" --foreground
-
-This config contains no peer blocks yet. Rerender without --listen-only after
-the other node operator sends their peer.env file.
+No peer blocks yet. Use freeq pair (host/join-host, gateway, or bootstrap)
+to install public peers automatically — no human .env trading.
 EOF
   exit 0
 fi
@@ -347,6 +363,8 @@ PEER_PUBLIC_KEY_B64_TOML="$(toml_string "$PEER_PUBLIC_KEY_B64")"
 PEER_KEM_KEY_B64_TOML="$(toml_string "$PEER_KEM_KEY_B64")"
 PEER_ALLOWED_IPS_TOML="$(toml_string_array "${PEER_ALLOWED_IPS[@]}")"
 
+PEER_MODE_TOML="$(toml_string "$PEER_MODE")"
+
 cat >> "$OUTPUT_CONFIG" <<EOF
 
 [[peer]]
@@ -354,12 +372,13 @@ name = $PEER_NODE_NAME_TOML
 endpoint = $PEER_PUBLIC_ENDPOINT_TOML
 public_key = $PEER_PUBLIC_KEY_B64_TOML
 kem_key = $PEER_KEM_KEY_B64_TOML
+mode = $PEER_MODE_TOML
 allowed_ips = [$PEER_ALLOWED_IPS_TOML]
 key_rotation_secs = ${FREEQ_KEY_ROTATION_SECS:-900}
 EOF
 
 echo "Rendered FreeQ config:"
 echo "  $OUTPUT_CONFIG"
+echo "  peer mode: $PEER_MODE"
 echo
-echo "Start freeqd with:"
-echo "  sudo target/release/freeqd --config \"$OUTPUT_CONFIG\" --foreground"
+echo "Start freeqd with freeq-start-macos.sh / freeq-start-linux.sh or freeq pair --auto-start."
